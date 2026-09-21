@@ -348,34 +348,37 @@ def feature(post_id: int, on: bool = True, sponsor: Optional[str] = None, days: 
 @app.get("/api/cig")
 def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optional[str] = None,
         state: Optional[str] = None, sponsor: Optional[str] = None):
-    where, params = [], []
-    if phase:
-        where.append("phase=%s"); params.append(phase)
-    if mode:
-        where.append("mode=%s"); params.append(mode)
-    if rating:
-        where.append("rating=%s"); params.append(rating)
-    if state:
-        where.append("state=%s"); params.append(state)
-    if sponsor:
-        where.append("sponsor ILIKE %s"); params.append(f"%{sponsor}%")
-    wsql = (" WHERE " + " AND ".join(where)) if where else ""
-    out, summary = [], {}
+    """The latest snapshot of the CIG pipeline (older snapshots are history, see /api/cig/history)."""
+    import cig as cigmod
+    empty = {"summary": {"snapshot": None, "projects": 0, "total_cig_musd": 0.0, "by_phase": {},
+                         "snapshots": 0}, "projects": []}
+    out = []
     try:
         with _db() as c, c.cursor() as cur:
             cur.execute("SELECT to_regclass('cig_projects') IS NOT NULL")
             if not cur.fetchone()[0]:  # nothing loaded yet: an empty pipeline, not an error
-                return {"summary": {"snapshot": None, "projects": 0, "total_cig_musd": 0.0, "by_phase": {}},
-                        "projects": []}
-            cur.execute("SELECT to_char(max(snapshot_date),'YYYY-MM-DD'), count(*), "
-                        "COALESCE(sum(cig_request_musd),0) FROM cig_projects")
-            snap, total_projects, total_cig = cur.fetchone()
-            cur.execute("SELECT phase, count(*) FROM cig_projects GROUP BY phase")
+                return empty
+            cigmod.create_table(c)  # adds milestone columns to a table created before they existed
+            cur.execute("SELECT max(snapshot_date), count(DISTINCT snapshot_date) FROM cig_projects")
+            snap, n_snaps = cur.fetchone()
+            if not snap:
+                return empty
+            where, params = ["snapshot_date=%s"], [snap]
+            for col, val in (("phase", phase), ("mode", mode), ("rating", rating), ("state", state)):
+                if val:
+                    where.append(f"{col}=%s"); params.append(val)
+            if sponsor:
+                where.append("sponsor ILIKE %s"); params.append(f"%{sponsor}%")
+            cur.execute("SELECT count(*), COALESCE(sum(cig_request_musd),0) FROM cig_projects WHERE snapshot_date=%s",
+                        (snap,))
+            total_projects, total_cig = cur.fetchone()
+            cur.execute("SELECT phase, count(*) FROM cig_projects WHERE snapshot_date=%s GROUP BY phase", (snap,))
             by_phase = {ph: n for ph, n in cur.fetchall()}
             cur.execute("SELECT id, project_name, sponsor, city, state, mode, phase, cost_musd, cost_raw, "
-                        "cig_request_musd, cig_request_raw, cig_share, rating, noncig_status, est_grant "
-                        "FROM cig_projects" + wsql +
-                        " ORDER BY cig_request_musd DESC NULLS LAST, project_name")
+                        "cig_request_musd, cig_request_raw, cig_share, rating, noncig_status, est_grant, "
+                        "nepa, pd_entry, eng_entry, lonp_req, lonp_dec, lonp_action, req_rating_date, "
+                        "proj_rating_date FROM cig_projects WHERE " + " AND ".join(where) +
+                        " ORDER BY cig_request_musd DESC NULLS LAST, project_name", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 pr = dict(zip(names, row))
@@ -383,11 +386,37 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
                     if pr.get(k) is not None:
                         pr[k] = float(pr[k])
                 out.append(pr)
-        summary = {"snapshot": snap, "projects": total_projects,
-                   "total_cig_musd": float(total_cig), "by_phase": by_phase}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
-    return {"summary": summary, "projects": out}
+    return {"summary": {"snapshot": snap.isoformat(), "projects": total_projects, "total_cig_musd": float(total_cig),
+                        "by_phase": by_phase, "snapshots": n_snaps}, "projects": out}
+
+
+@app.get("/api/cig/history")
+def cig_history(name: str, sponsor: Optional[str] = None):
+    """One project across every loaded snapshot, oldest first."""
+    where, params = ["project_name=%s"], [name]
+    if sponsor:
+        where.append("sponsor=%s"); params.append(sponsor)
+    out = []
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT to_regclass('cig_projects') IS NOT NULL")
+            if not cur.fetchone()[0]:
+                return {"name": name, "history": []}
+            cur.execute("SELECT to_char(snapshot_date,'YYYY-MM-DD'), phase, rating, cost_musd, cig_request_musd, "
+                        "est_grant, noncig_status FROM cig_projects WHERE " + " AND ".join(where) +
+                        " ORDER BY snapshot_date", params)
+            for d_, ph, rt, cost, cigm, est, nc in cur.fetchall():
+                out.append({"snapshot_date": d_, "phase": ph, "rating": rt,
+                            "cost_musd": float(cost) if cost is not None else None,
+                            "cig_request_musd": float(cigm) if cigm is not None else None,
+                            "est_grant": est, "noncig_status": nc})
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"name": name, "history": out}
 
 
 MAX_CIG_PDF = 25 * 1024 * 1024
@@ -415,8 +444,8 @@ async def cig_upload(request: Request, filename: str = ""):
             rows = cig.parse_pdf(f.name)
         snap = cig.date_in(filename)
         with _db() as c:
-            cig.load(c, rows, snap or cig.snapshot_date(""))
-        return len(rows), snap
+            n = cig.load(c, rows, snap or cig.snapshot_date(""))
+        return n, snap
 
     try:
         n, snap = await asyncio.to_thread(parse_and_load)  # parsing takes a few seconds; keep the server responsive
@@ -552,7 +581,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="pPosts"></div>
   </div>
   <div class="panel" id="p-grants">
-    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. FTA updates it about monthly: download the PDF at <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a>, then upload it here.</p></div>
+    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. Click a project for its milestone dates and month-by-month history. FTA updates it about monthly: download the PDF at <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a>, then upload it here.</p></div>
       <div style="display:flex;gap:8px"><button class="go" style="padding:9px 16px" id="gUploadBtn" type="button">Upload dashboard</button><button class="newq" id="gRefresh" type="button">Refresh</button></div></div>
     <input type="file" id="gFile" accept="application/pdf,.pdf" hidden>
     <div id="gMsg"></div>
@@ -838,19 +867,45 @@ async function loadCIG(){
       +(()=>{const age=s.snapshot?Math.floor((Date.now()-new Date(s.snapshot+"T12:00:00"))/864e5):null;const stale=age!=null&&age>45;
         return '<div style="font-family:Archivo,sans-serif;font-size:11px;margin-left:auto;color:'+(stale?"var(--accent)":"var(--muted)")+'"'
           +(stale?' title="Download the newest dashboard at transit.dot.gov/CIG and upload it"':'')+'>snapshot '+esc(s.snapshot||"-")
-          +(stale?' &middot; '+age+' days old - time to upload a new one':'')+'</div>';})()+'</div>';
-    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.</div></div>';return;}
+          +(stale?' &middot; '+age+' days old - time to upload a new one':'')
+          +(s.snapshots>1?' &middot; '+s.snapshots+' months of history':'')+'</div>';})()+'</div>';
+    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">'+(s.projects?'No projects in this phase.':'No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.')+'</div></div>';return;}
     out.innerHTML='<div class="rcard" style="padding:0"><div class="twrap" style="padding:10px 18px">'
       +'<table><thead><tr><th>Project</th><th>Sponsor</th><th>Location</th><th>Mode</th><th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th></tr></thead><tbody>'
       +d.projects.map(gRow).join("")+'</tbody></table></div></div>';
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load the pipeline.</div></div>';}
 }
-function gRow(p){
-  const rt=p.rating?('<span title="'+(RATING[p.rating]||"")+'">'+esc(p.rating)+'</span>'):'-';
-  return '<tr><td style="font-weight:600">'+esc(p.project_name)+'</td><td>'+esc(p.sponsor)+'</td>'
+// Click a project row for its milestone dates; "Show snapshot history" lists it across loaded months.
+function gRow(p,i){
+  const rt=p.rating?('<span title="'+esc(RATING[p.rating]||"")+'">'+esc(p.rating)+'</span>'):'-';
+  const main='<tr class="gmain" data-i="'+i+'" style="cursor:pointer" title="Show milestone dates"><td style="font-weight:600">'+esc(p.project_name)+'</td><td>'+esc(p.sponsor)+'</td>'
     +'<td>'+esc(p.city||"")+', '+esc(p.state||"")+'</td><td>'+esc(p.mode||"-")+'</td><td>'+esc(p.phase)+'</td>'
     +'<td class="num">'+gAmt(p.cost_musd,p.cost_raw)+'</td><td class="num">'+gAmt(p.cig_request_musd,p.cig_request_raw)+'</td>'
     +'<td class="num">'+esc(p.cig_share||"-")+'</td><td>'+rt+'</td><td>'+esc(p.est_grant||"-")+'</td></tr>';
+  return main+'<tr id="gd'+i+'" style="display:none"><td colspan="10" style="background:var(--panel);padding:12px 18px;white-space:normal">'+gDetail(p)+'</td></tr>';
 }
+function gDetail(p){
+  const items=[["PD entry",p.pd_entry],["NEPA complete",p.nepa],["Engineering entry",p.eng_entry],["LONP request",p.lonp_req],["LONP decision",p.lonp_dec],["LONP action",p.lonp_action],["Rating requested",p.req_rating_date],["Project rated",p.proj_rating_date],["Overall rating",p.rating?(p.rating+(RATING[p.rating]?" ("+RATING[p.rating]+")":"")):null],["Local match",p.noncig_status]];
+  const chips=items.filter(x=>x[1]).map(x=>'<span style="display:inline-block;margin:0 16px 8px 0"><span style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">'+x[0]+'</span><br><span style="font-family:Archivo,sans-serif;font-weight:700">'+esc(x[1])+'</span></span>').join("");
+  return '<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:8px">Milestones</div>'+(chips||'<span style="color:var(--muted)">No dates recorded.</span>')
+    +'<div style="margin-top:8px"><button class="ex" type="button" data-hist="'+esc(p.project_name)+'" data-sp="'+esc(p.sponsor||"")+'">Show snapshot history</button><div class="ghist" style="margin-top:8px"></div></div>';
+}
+function gMoney(v){return v!=null?"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:1})+"M":"-";}
+document.getElementById("gOut").addEventListener("click",async e=>{
+  const hb=e.target.closest("[data-hist]");
+  if(hb){
+    const box=hb.parentElement.querySelector(".ghist"),note=t=>'<span style="color:var(--muted);font-family:Archivo,sans-serif;font-size:12px">'+t+'</span>';
+    box.innerHTML=note("Loading...");
+    try{
+      const r=await fetch("/api/cig/history?name="+encodeURIComponent(hb.dataset.hist)+"&sponsor="+encodeURIComponent(hb.dataset.sp));
+      const d=await r.json();const h=(r.ok&&d.history)||[];
+      box.innerHTML=h.length>1?h.map(x=>'<div style="font-family:Archivo,sans-serif;font-size:12px;margin-top:4px">'+esc(x.snapshot_date)+' &middot; '+esc(x.phase||"")+' &middot; rating '+esc(x.rating||"-")+' &middot; cost '+gMoney(x.cost_musd)+' &middot; CIG '+gMoney(x.cig_request_musd)+' &middot; est. grant '+esc(x.est_grant||"-")+'</div>').join("")
+        :note("Only one snapshot so far - history builds as each month's dashboard is uploaded.");
+    }catch(err){box.innerHTML='<span style="color:var(--accent);font-family:Archivo,sans-serif;font-size:12px">Could not load history.</span>';}
+    return;
+  }
+  const row=e.target.closest(".gmain");
+  if(row){const dd=document.getElementById("gd"+row.dataset.i);if(dd)dd.style.display=dd.style.display==="none"?"":"none";}
+});
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""

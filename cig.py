@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Transit411 CIG pipeline ingester.
+Transit411 CIG pipeline ingester (versioned history).
 
 Loads the FTA Capital Investment Grants (CIG) Dashboard into Postgres (cig_projects).
-Source: the monthly PDF at transit.dot.gov/CIG. Parser validated against the
-2026-09-11 dashboard.
+Each monthly snapshot is KEPT (keyed by snapshot_date), so the table becomes a time
+series: phase advances, rating changes, cost drift and slipping grant dates are all
+recoverable by comparing snapshots. Source: the monthly PDF at transit.dot.gov/CIG
+(which blocks automated downloads, so usually loaded via the Grants tab's Upload
+dashboard). Parser validated against the 2026-09-11 dashboard.
 
-  python cig.py --latest          # find & download the newest dashboard PDF, load it
-  python cig.py --file dash.pdf   # load a PDF you already have
+  python cig.py --latest              # find & download the newest dashboard (403 from transit.dot.gov today)
+  python cig.py --file dash.pdf       # load a local PDF (snapshot date from its filename)
+  python cig.py --url https://...pdf  # download & load a specific (e.g. archived) dashboard
 """
 import argparse
 import os
@@ -130,9 +134,15 @@ def find_latest_pdf():
 def download(url, dest="/tmp/cig.pdf"):
     import requests
     r = requests.get(url, timeout=60, headers={"User-Agent": "Transit411/1.0"})
+    if r.status_code == 403:
+        raise SystemExit(f"{url} refused the request (HTTP 403 - the site blocks automated access). "
+                         "Download it in a browser and use Upload dashboard on the Grants tab.")
     r.raise_for_status()
     open(dest, "wb").write(r.content)
     return dest
+
+
+MILESTONE_COLS = ["lonp_req", "lonp_dec", "lonp_action", "req_rating_date", "proj_rating_date"]
 
 
 def create_table(conn):
@@ -142,7 +152,13 @@ def create_table(conn):
             city TEXT, state TEXT, mode TEXT, phase TEXT, length_mi TEXT, stations TEXT,
             cost_musd NUMERIC, cost_raw TEXT, cig_request_musd NUMERIC, cig_request_raw TEXT,
             cig_share TEXT, rating TEXT, noncig_status TEXT, est_grant TEXT, nepa TEXT,
-            pd_entry TEXT, eng_entry TEXT, fetched_at TIMESTAMPTZ DEFAULT now())""")
+            pd_entry TEXT, eng_entry TEXT, lonp_req TEXT, lonp_dec TEXT, lonp_action TEXT,
+            req_rating_date TEXT, proj_rating_date TEXT, fetched_at TIMESTAMPTZ DEFAULT now())""")
+        # Tables created before milestone dates existed get the new columns.
+        for col in MILESTONE_COLS:
+            cur.execute(f"ALTER TABLE cig_projects ADD COLUMN IF NOT EXISTS {col} TEXT")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS cig_uniq ON cig_projects (snapshot_date, project_name, sponsor)")
+        cur.execute("CREATE INDEX IF NOT EXISTS cig_proj_idx ON cig_projects (project_name)")
     conn.commit()
 
 
@@ -154,45 +170,59 @@ def load(conn, rows, snap):
     if len(rows) < MIN_ROWS:
         raise SystemExit(f"Only {len(rows)} projects parsed (expected {MIN_ROWS}+); the dashboard layout may have "
                          "changed. Existing cig_projects data was left unchanged.")
+    # One row per project per snapshot (the unique key); keep the first if the PDF repeats one.
+    seen, unique = set(), []
+    for r in rows:
+        k = (r["name"], r["sponsor"])
+        if k not in seen:
+            seen.add(k)
+            unique.append(r)
     with conn.cursor() as cur:
-        # The dashboard is a point-in-time snapshot; replace it in one transaction so a failure
-        # part-way leaves the previous snapshot in place.
-        cur.execute("DELETE FROM cig_projects")
-        for r in rows:
+        # Versioned: replace only this snapshot's rows and keep every other month, in one transaction
+        # so a failure part-way leaves this snapshot as it was.
+        cur.execute("DELETE FROM cig_projects WHERE snapshot_date=%s", (snap,))
+        for r in unique:
             cur.execute(
                 "INSERT INTO cig_projects (snapshot_date, project_name, sponsor, city, state, mode, phase, "
                 "length_mi, stations, cost_musd, cost_raw, cig_request_musd, cig_request_raw, cig_share, "
-                "rating, noncig_status, est_grant, nepa, pd_entry, eng_entry) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "rating, noncig_status, est_grant, nepa, pd_entry, eng_entry, lonp_req, lonp_dec, "
+                "lonp_action, req_rating_date, proj_rating_date) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (snap, r["name"], r["sponsor"], r["city"], r["state"], derive_mode(r), r["phase"],
                  r["length"], r["stations"], clean_num(r["cost"]), r["cost"] or None,
                  clean_num(r["cig_request"]), r["cig_request"] or None, r["cig_share"] or None,
                  r["rating"] or None, r["noncig_status"] or None, r["est_grant"] or None,
-                 r["nepa"] or None, r["pd_entry"] or None, r["eng_entry"] or None))
+                 r["nepa"] or None, r["pd_entry"] or None, r["eng_entry"] or None,
+                 r["lonp_req"] or None, r["lonp_dec"] or None, r["lonp_action"] or None,
+                 r["req_rating_date"] or None, r["proj_rating_date"] or None))
     conn.commit()
+    return len(unique)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file")
+    ap.add_argument("--url")
     ap.add_argument("--latest", action="store_true")
     a = ap.parse_args()
     if a.file:
         path, src = a.file, a.file
+    elif a.url:
+        path, src = download(a.url), a.url
     elif a.latest:
         url = find_latest_pdf()
         print("Latest dashboard:", url)
         path, src = download(url), url
     else:
-        raise SystemExit("Use --latest or --file PATH")
+        raise SystemExit("Use --latest, --url URL, or --file PATH")
     rows = parse_pdf(path)
     snap = snapshot_date(src)
     print(f"Parsed {len(rows)} projects (snapshot {snap}).")
     import psycopg
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
     with psycopg.connect(dsn) as conn:
-        load(conn, rows, snap)
-    print("Loaded into cig_projects.")
+        n = load(conn, rows, snap)
+    print(f"Loaded {n} projects as snapshot {snap} (other snapshots preserved).")
 
 
 if __name__ == "__main__":

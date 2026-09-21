@@ -82,5 +82,9 @@ CREATE TABLE IF NOT EXISTS cig_projects (
   city TEXT, state TEXT, mode TEXT, phase TEXT, length_mi TEXT, stations TEXT,
   cost_musd NUMERIC, cost_raw TEXT, cig_request_musd NUMERIC, cig_request_raw TEXT,
   cig_share TEXT, rating TEXT, noncig_status TEXT, est_grant TEXT, nepa TEXT,
-  pd_entry TEXT, eng_entry TEXT, fetched_at TIMESTAMPTZ DEFAULT now()
+  pd_entry TEXT, eng_entry TEXT, lonp_req TEXT, lonp_dec TEXT, lonp_action TEXT,
+  req_rating_date TEXT, proj_rating_date TEXT, fetched_at TIMESTAMPTZ DEFAULT now()
 );
+-- Versioned: one row per project per monthly snapshot.
+CREATE UNIQUE INDEX IF NOT EXISTS cig_uniq ON cig_projects (snapshot_date, project_name, sponsor);
+CREATE INDEX IF NOT EXISTS cig_proj_idx ON cig_projects (project_name);

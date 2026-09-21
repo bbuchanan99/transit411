@@ -88,7 +88,10 @@ services:
     entrypoint: ["python", "collection.py", "--schedule"]
 
   # CIG pipeline: load the FTA Capital Investment Grants dashboard into Postgres.
-  #   docker compose run --rm cig --latest
+  #   docker compose run --rm cig --latest          # newest dashboard (transit.dot.gov currently blocks this)
+  #   docker compose run --rm cig --url https://...  # a specific / archived month (backfill history)
+  # Usually loaded with Upload dashboard on the Command Center's Grants tab instead.
+  # Each snapshot is kept, so the table builds month-by-month history.
   cig:
     build: .
     profiles: ["tools"]
