@@ -61,13 +61,17 @@ SOURCES = [
 
 
 def seed_sources(conn):
+    """Add registry sources not already present (matched by URL), so re-running --seed is safe."""
+    added = 0
     with conn.cursor() as cur:
         for name, url, pillar, typ, method, trust in SOURCES:
             cur.execute(
-                "INSERT INTO sources (name, url, pillar, type, method, trust) VALUES (%s,%s,%s,%s,%s,%s) "
-                "ON CONFLICT DO NOTHING", (name, url, pillar, typ, method, trust))
+                "INSERT INTO sources (name, url, pillar, type, method, trust) "
+                "SELECT %s,%s,%s,%s,%s,%s WHERE NOT EXISTS (SELECT 1 FROM sources WHERE url = %s)",
+                (name, url, pillar, typ, method, trust, url))
+            added += cur.rowcount
     conn.commit()
-    return len(SOURCES)
+    return added
 
 
 def classify(entry):
@@ -128,14 +132,13 @@ def insert_item(conn, pillar, headline, summary, source_name, source_url, publis
 
 def run(conn, limit_sources=None):
     with conn.cursor() as cur:
-        cur.execute("SELECT name, url, method FROM sources ORDER BY id")
+        # Only RSS sources are fetched for now; --limit counts those, not skipped API/Scrape ones.
+        cur.execute("SELECT name, url FROM sources WHERE method = 'RSS' ORDER BY id")
         sources = cur.fetchall()
     if limit_sources:
         sources = sources[:limit_sources]
     added = 0
-    for name, url, method in sources:
-        if method != "RSS":
-            continue
+    for name, url in sources:
         try:
             entries = fetch_source(url)
         except Exception as e:
@@ -165,7 +168,7 @@ def main():
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
     with psycopg.connect(dsn) as conn:
         if a.seed:
-            print(f"Seeded {seed_sources(conn)} sources.")
+            print(f"Seeded {seed_sources(conn)} new sources ({len(SOURCES)} in the registry).")
         if a.run:
             run(conn, a.limit)
         if not (a.seed or a.run):

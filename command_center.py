@@ -299,7 +299,9 @@ const cChips=document.getElementById("cChips");
 document.getElementById("cRefresh").onclick=loadCollection;
 document.querySelector('.tab[data-t="collect"]').addEventListener("click",loadCollection);
 const FCOLOR={Live:"#C0341F",Fresh:"#1F6B4A",Recent:"#1F6B7A",Aging:"#B07A1E",Stale:"#6A6458",Developing:"#3D5C8F",Expired:"#6A6458"};
-function esc(s){return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+// Uses the page's esc() above (it also escapes quotes, which attributes need). Feed links are
+// untrusted: only http(s) URLs become links, so a "javascript:" link can't run on click.
+function safeUrl(u){try{const x=new URL(String(u));return (x.protocol==="http:"||x.protocol==="https:")?x.href:null;}catch(_){return null;}}
 async function loadCollection(){
   const out=document.getElementById("cOut");
   out.innerHTML='<div class="rcard"><div class="loading">Loading the queue...</div></div>';
@@ -322,7 +324,7 @@ function cCard(it){
     +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
     +'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
     +'<b style="color:var(--ink)">'+esc(it.source_name)+'</b>'+(it.published?'<span>'+esc(it.published)+'</span>':'')
-    +(it.source_url?'<a href="'+esc(it.source_url)+'" target="_blank" rel="noopener">source</a>':'')+'</div>'
+    +(safeUrl(it.source_url)?'<a href="'+esc(safeUrl(it.source_url))+'" target="_blank" rel="noopener noreferrer">source</a>':'')+'</div>'
     +'<div style="display:flex;gap:8px;margin-top:12px">'
     +(acted?'<button class="ex" data-id="'+it.id+'" data-act="reset">Return to pending</button>'
            :'<button class="go" style="padding:9px 18px" data-id="'+it.id+'" data-act="approve">Approve</button><button class="ex" data-id="'+it.id+'" data-act="skip">Skip</button>')
