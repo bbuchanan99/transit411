@@ -5,10 +5,11 @@ Transit411 collection engine - populates the review queue.
   python collection.py --seed        # load the source registry into Postgres (once)
   python collection.py --run         # fetch sources, summarize, score, insert pending items
   python collection.py --run --limit 5   # only the first 5 sources (testing)
+  python collection.py --schedule    # stay running; collect daily at COLLECT_AT (the scheduler service)
 
 Writes to `collected_items` and `sources`. The Command Center's Collection tab
-reviews what this produces. Meant to run on a schedule (docker compose run --rm collect),
-not inside a web request.
+reviews what this produces. The daily run can be switched off from the Command Center's
+Auto-collect toggle (stored in app_settings) to save model tokens during development.
 """
 import argparse
 import math
@@ -205,7 +206,78 @@ def run(conn, limit_sources=None):
               + (f", {errors} not classified" if errors else ""))
     print(f"Added {added} pending items from {len(sources) - len(failed)} of {len(sources)} sources."
           + (f" Failed: {', '.join(failed)}." if failed else ""))
-    return added
+    return {"added": added, "sources": len(sources), "failed": failed}
+
+
+# ---- Settings + daily schedule -------------------------------------------------------------
+# app_settings holds small JSON values shared with the Command Center:
+#   auto_collect      {"enabled": bool}            - the header toggle; checked right before each run
+#   collect_schedule  {"at", "tz", "next_run"}     - written by the scheduler for display
+#   collect_last_run  {"at", "added", "failed", "skipped", "error"}
+SETTINGS_DDL = ("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL, "
+                "updated_at TIMESTAMPTZ DEFAULT now())")
+
+
+def get_setting(conn, key, default=None):
+    with conn.cursor() as cur:
+        cur.execute(SETTINGS_DDL)
+        cur.execute("SELECT value FROM app_settings WHERE key=%s", (key,))
+        row = cur.fetchone()
+    conn.commit()
+    return row[0] if row else default
+
+
+def set_setting(conn, key, value):
+    from psycopg.types.json import Jsonb
+    with conn.cursor() as cur:
+        cur.execute(SETTINGS_DDL)
+        cur.execute("INSERT INTO app_settings (key, value, updated_at) VALUES (%s, %s, now()) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                    (key, Jsonb(value)))
+    conn.commit()
+
+
+def auto_collect_enabled(conn):
+    return bool(get_setting(conn, "auto_collect", {"enabled": True}).get("enabled", True))
+
+
+def schedule_loop(dsn):
+    """Run the collector once a day at COLLECT_AT (HH:MM) in COLLECT_TZ. The Auto-collect toggle is
+    checked at run time, so turning it off skips the run and spends no model tokens."""
+    import time
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    import psycopg
+    at = os.environ.get("COLLECT_AT", "06:00")
+    tz = ZoneInfo(os.environ.get("COLLECT_TZ", "America/New_York"))
+    hh, mm = (int(x) for x in at.split(":"))
+    print(f"Scheduler: daily collection at {at} {tz.key}", flush=True)
+    while True:
+        try:
+            now = datetime.now(tz)
+            nxt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if nxt <= now:
+                nxt += timedelta(days=1)
+            with psycopg.connect(dsn) as conn:
+                set_setting(conn, "collect_schedule", {"at": at, "tz": tz.key, "next_run": nxt.isoformat()})
+            print(f"Scheduler: next run {nxt.isoformat()}", flush=True)
+            while (remaining := (nxt - datetime.now(tz)).total_seconds()) > 0:
+                time.sleep(min(remaining, 300))
+            with psycopg.connect(dsn) as conn:
+                stamp = datetime.now(tz).isoformat()
+                if not auto_collect_enabled(conn):
+                    print("Scheduler: auto-collect is off; skipping this run.", flush=True)
+                    set_setting(conn, "collect_last_run", {"at": stamp, "skipped": True})
+                    continue
+                try:
+                    result = run(conn)
+                    set_setting(conn, "collect_last_run", {"at": stamp, **result})
+                except Exception as e:
+                    print(f"Scheduler: run failed: {e}", flush=True)
+                    set_setting(conn, "collect_last_run", {"at": stamp, "error": str(e)[:300]})
+        except Exception as e:  # e.g. database restarting: wait and try again, never exit
+            print(f"Scheduler: {type(e).__name__}: {e}; retrying in 60s", flush=True)
+            time.sleep(60)
 
 
 def main():
@@ -213,17 +285,23 @@ def main():
     ap.add_argument("--seed", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--schedule", action="store_true",
+                    help="stay running and collect daily at COLLECT_AT, unless Auto-collect is off")
     a = ap.parse_args()
     import psycopg
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
+    if a.schedule:
+        schedule_loop(dsn)
+        return
     with psycopg.connect(dsn) as conn:
         if a.seed:
             added, updated = seed_sources(conn)
             print(f"Sources: {added} added, {updated} updated ({len(SOURCES)} in the registry).")
         if a.run:
+            # Manual runs always go ahead; the Auto-collect toggle only governs the daily schedule.
             run(conn, a.limit)
         if not (a.seed or a.run):
-            print("Nothing to do. Use --seed and/or --run.")
+            print("Nothing to do. Use --seed, --run and/or --schedule.")
 
 
 if __name__ == "__main__":

@@ -109,6 +109,42 @@ def collection_action(item_id: int, action: str):
     return {"id": item_id, "status": mapping[action]}
 
 
+class Toggle(BaseModel):
+    enabled: bool
+
+
+def _auto_collect_state(c):
+    from collection import get_setting
+    return {"enabled": bool(get_setting(c, "auto_collect", {"enabled": True}).get("enabled", True)),
+            "schedule": get_setting(c, "collect_schedule"),
+            "last_run": get_setting(c, "collect_last_run")}
+
+
+@app.get("/api/auto-collect")
+def auto_collect():
+    try:
+        with _db() as c:
+            return _auto_collect_state(c)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.post("/api/auto-collect")
+def set_auto_collect(t: Toggle):
+    """The header switch. Off = the scheduler skips its daily run (no model tokens spent)."""
+    from collection import set_setting
+    try:
+        with _db() as c:
+            set_setting(c, "auto_collect", {"enabled": t.enabled})
+            return _auto_collect_state(c)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -125,7 +161,13 @@ DASHBOARD = r"""<!doctype html>
 header{background:var(--ink);color:var(--panel);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
 .brand{font-family:'Archivo',sans-serif;font-weight:900;font-size:22px;letter-spacing:-1px}.brand span{color:var(--accent)}
 .sub{font-family:'Archivo',sans-serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#A69F90}
-.status{display:flex;gap:16px;font-family:'Archivo',sans-serif;font-size:12px}
+.status{display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-family:'Archivo',sans-serif;font-size:12px}
+.ac{display:flex;align-items:center;gap:8px;cursor:pointer;padding-right:16px;border-right:1px solid #3A352C}
+.switch{position:relative;width:38px;height:22px;border-radius:999px;border:none;background:#5A5448;cursor:pointer;padding:0;transition:background .15s}
+.switch .knob{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#F7F4ED;transition:left .15s}
+.switch[aria-checked="true"]{background:#1F6B4A}.switch[aria-checked="true"] .knob{left:19px}
+.switch:disabled{opacity:.5;cursor:default}.switch:focus-visible{outline:2px solid #EE6A54;outline-offset:2px}
+#acTxt{min-width:24px;color:#A69F90}
 .pill{display:flex;align-items:center;gap:7px}.dot{width:9px;height:9px;border-radius:50%;background:#8A8375}.dot.up{background:#5FBF8F}.dot.down{background:#E8604B}
 .tabs{display:flex;gap:2px;background:var(--panel);border-bottom:1px solid var(--line);padding:0 16px}
 .tab{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;padding:13px 18px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
@@ -165,6 +207,11 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 <header>
   <div><div class="brand">TRANSIT<span>411</span></div><div class="sub">Command Center</div></div>
   <div class="status">
+    <label class="ac" id="acWrap" title="Loading auto-collect status...">
+      <span>Auto-collect</span>
+      <button type="button" class="switch" id="acSwitch" role="switch" aria-checked="false" aria-label="Auto-collect daily" disabled><span class="knob"></span></button>
+      <span id="acTxt">...</span>
+    </label>
     <div class="pill"><span class="dot" id="apiDot"></span><span id="apiTxt">API...</span></div>
     <div class="pill"><span class="dot" id="dbDot"></span><span id="dbTxt">DB...</span></div>
   </div>
@@ -332,5 +379,26 @@ function cCard(it){
 }
 async function cAct(id,action){try{await fetch("/api/collection/"+id+"/"+action,{method:"POST"});loadCollection();}catch(e){}}
 document.getElementById("cOut").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(b)cAct(b.dataset.id,b.dataset.act);});
+// ---- Auto-collect switch (header) ----
+const acSwitch=document.getElementById("acSwitch");
+function when(iso){if(!iso)return "";const d=new Date(iso);return d.toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});}
+function showAuto(s){
+  acSwitch.disabled=false;acSwitch.setAttribute("aria-checked",s.enabled?"true":"false");
+  document.getElementById("acTxt").textContent=s.enabled?"On":"Off";
+  const lines=[s.enabled?"Daily collection is ON.":"Daily collection is OFF - the scheduled run is skipped, no tokens used."];
+  if(s.schedule)lines.push("Schedule: daily at "+s.schedule.at+" ("+s.schedule.tz+")"+(s.enabled&&s.schedule.next_run?", next "+when(s.schedule.next_run):""));
+  else lines.push("Scheduler hasn't reported in yet.");
+  const lr=s.last_run;
+  if(lr)lines.push("Last run "+when(lr.at)+": "+(lr.skipped?"skipped (off)":lr.error?"error - "+lr.error:(lr.added+" items added"+(lr.failed&&lr.failed.length?", failed: "+lr.failed.join(", "):""))));
+  document.getElementById("acWrap").title=lines.join("\n");
+}
+async function loadAuto(){try{const r=await fetch("/api/auto-collect");if(r.ok)showAuto(await r.json());else document.getElementById("acTxt").textContent="?";}catch(e){document.getElementById("acTxt").textContent="?";}}
+acSwitch.onclick=async()=>{
+  const want=acSwitch.getAttribute("aria-checked")!=="true";acSwitch.disabled=true;
+  try{const r=await fetch("/api/auto-collect",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:want})});
+    if(r.ok)showAuto(await r.json());else{acSwitch.disabled=false;alert("Couldn't change auto-collect: "+errText(await r.text()));}}
+  catch(e){acSwitch.disabled=false;alert("Couldn't reach the Command Center.");}
+};
+loadAuto();setInterval(loadAuto,60000);
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""

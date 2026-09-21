@@ -71,3 +71,18 @@ services:
     depends_on:
       - db
     entrypoint: ["python", "collection.py"]
+
+  # Always-on: runs the collector daily at COLLECT_AT (COLLECT_TZ). Skips the run, spending no model
+  # tokens, while the Command Center's Auto-collect toggle is off.
+  scheduler:
+    build: .
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - COLLECT_MODEL=${COLLECT_MODEL:-claude-haiku-4-5}
+      - COLLECT_AT=${COLLECT_AT:-06:00}
+      - COLLECT_TZ=${COLLECT_TZ:-America/New_York}
+    depends_on:
+      - db
+    entrypoint: ["python", "collection.py", "--schedule"]

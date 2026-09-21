@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS content_posts (
   created_at   TIMESTAMPTZ DEFAULT now()
 );
 
+-- Small shared settings (e.g. the Command Center's Auto-collect toggle). collection.py also
+-- creates this if missing, since init.sql only runs when the database is first created.
+CREATE TABLE IF NOT EXISTS app_settings (
+  key          TEXT PRIMARY KEY,
+  value        JSONB NOT NULL,
+  updated_at   TIMESTAMPTZ DEFAULT now()
+);
+
 -- Newsletter subscribers.
 CREATE TABLE IF NOT EXISTS subscribers (
   id           BIGSERIAL PRIMARY KEY,
