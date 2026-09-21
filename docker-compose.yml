@@ -1,0 +1,26 @@
+# Transit411 engine — phase 1 (NTD data + Ask NTD API).
+# Postgres+pgvector for content/subscribers is added in phase 2, once this is validated.
+services:
+  # One-shot: fetch real NTD data and (re)build the database. Run on demand:
+  #   docker compose run --rm ingest
+  ingest:
+    build: .
+    profiles: ["tools"]
+    environment:
+      - NTD_DB=/data/ntd.duckdb
+    volumes:
+      - ${DATA_DIR:-/share/Container/transit411/data}:/data
+    command: ["python", "build_db.py", "--db", "/data/ntd.duckdb"]
+
+  # Always-on: the read-only Ask NTD API. LAN-only; front with Cloudflare Tunnel to go public.
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      - NTD_DB=/data/ntd.duckdb
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ASK_NTD_MODEL=${ASK_NTD_MODEL:-claude-haiku-4-5}
+    volumes:
+      - ${DATA_DIR:-/share/Container/transit411/data}:/data
+    ports:
+      - "8000:8000"

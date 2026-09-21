@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask NTD</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='6' width='24' height='18' rx='5' fill='%23155e75'/%3E%3Crect x='8' y='10' width='7' height='6' rx='1' fill='white'/%3E%3Crect x='17' y='10' width='7' height='6' rx='1' fill='white'/%3E%3Ccircle cx='10' cy='27' r='2.5' fill='%23155e75'/%3E%3Ccircle cx='22' cy='27' r='2.5' fill='%23155e75'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f0f2f5; --border: #dde1e7;
+    --text: #17202b; --muted: #5b6675; --accent: #155e75; --accent-hover: #0e4a5c; --accent-text: #ffffff;
+    --accent-soft: #e3f1f5; --error-bg: #fdecec; --error-text: #8a1c1c; --note-bg: #fff7e0; --note-text: #6b4e00;
+    --grid: #e6e9ee;
+    --s1: #1f77b4; --s2: #d95f02; --s3: #2ca02c; --s4: #9467bd; --s5: #c2185b; --s6: #8c6d31; --s7: #17a2b8; --s8: #6b7280;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f141a; --surface: #171e26; --surface-2: #1f2832; --border: #2c3744;
+      --text: #e6ebf1; --muted: #9aa6b4; --accent: #38a3c0; --accent-hover: #5bb8d1; --accent-text: #06202a;
+      --accent-soft: #15313b; --error-bg: #3a1d1f; --error-text: #ffb4b4; --note-bg: #332a10; --note-text: #f3d98a;
+      --grid: #26303b;
+      --s1: #5aa9e6; --s2: #f29b4b; --s3: #6cc36c; --s4: #b99be0; --s5: #ef6f9e; --s6: #c9a864; --s7: #4fd0e0; --s8: #a3adba;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f141a; --surface: #171e26; --surface-2: #1f2832; --border: #2c3744;
+    --text: #e6ebf1; --muted: #9aa6b4; --accent: #38a3c0; --accent-hover: #5bb8d1; --accent-text: #06202a;
+    --accent-soft: #15313b; --error-bg: #3a1d1f; --error-text: #ffb4b4; --note-bg: #332a10; --note-text: #f3d98a;
+    --grid: #26303b;
+    --s1: #5aa9e6; --s2: #f29b4b; --s3: #6cc36c; --s4: #b99be0; --s5: #ef6f9e; --s6: #c9a864; --s7: #4fd0e0; --s8: #a3adba;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 16px 48px; }
+  header h1 { margin: 0; font-size: 1.9rem; letter-spacing: -0.01em; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 6px 0 0; color: var(--muted); }
+  #dataline { font-size: 0.875rem; margin-top: 4px; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-top: 20px; }
+  label.q { display: block; font-weight: 600; margin-bottom: 8px; }
+  .askrow { display: flex; gap: 10px; align-items: stretch; }
+  textarea {
+    flex: 1; min-height: 64px; resize: vertical; padding: 12px 14px; font: inherit; color: var(--text);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  button { font: inherit; cursor: pointer; }
+  .primary {
+    background: var(--accent); color: var(--accent-text); border: 0; border-radius: 10px; padding: 0 22px;
+    font-weight: 600; min-width: 96px;
+  }
+  .primary:hover { background: var(--accent-hover); }
+  .primary:disabled { opacity: 0.6; cursor: progress; }
+  .hint { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+
+  .examples { margin-top: 16px; }
+  .examples h2, .recent h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 12px; font-size: 0.875rem; text-align: left;
+  }
+  .chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .recent { margin-top: 14px; }
+
+  #status { margin-top: 16px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+  .spinner { width: 18px; height: 18px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error { background: var(--error-bg); color: var(--error-text); border-radius: 10px; padding: 12px 14px; margin-top: 16px; white-space: pre-wrap; }
+
+  .answer h2 { margin: 0; font-size: 1.15rem; }
+  .meta { color: var(--muted); font-size: 0.875rem; margin-top: 2px; }
+  .note { background: var(--note-bg); color: var(--note-text); border-radius: 8px; padding: 8px 12px; font-size: 0.875rem; margin-top: 12px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; }
+  .ghost { background: transparent; color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 0.875rem; }
+  .ghost:hover { border-color: var(--accent); }
+  select { font: inherit; font-size: 0.875rem; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+
+  .chartbox { margin-top: 16px; }
+  .chartbox svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chartbox text { fill: var(--muted); font-size: 12px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 0.85rem; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .bars { display: grid; grid-template-columns: minmax(90px, 32%) 1fr auto; gap: 6px 10px; align-items: center; font-size: 0.875rem; }
+  .bars .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bars .track { background: var(--surface-2); border-radius: 4px; height: 16px; }
+  .bars .fill { background: var(--s1); border-radius: 4px; height: 100%; }
+  .bars .val { font-variant-numeric: tabular-nums; }
+
+  .tablewrap { overflow-x: auto; margin-top: 16px; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { background: var(--surface-2); text-align: left; font-weight: 600; position: sticky; top: 0; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 0.875rem; }
+  pre { background: var(--surface-2); padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 0.8rem; }
+
+  footer { margin-top: 28px; color: var(--muted); font-size: 0.8rem; }
+  footer a { color: var(--accent); }
+  [hidden] { display: none !important; }
+
+  @media (max-width: 600px) {
+    .wrap { padding-top: 20px; }
+    header h1 { font-size: 1.5rem; }
+    .askrow { flex-direction: column; }
+    .primary { padding: 12px; }
+    .card { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Ask <span>NTD</span></h1>
+    <p>Ask questions about U.S. public transit (ridership, costs, fares and service) in plain English.
+       Answers come from official National Transit Database figures.</p>
+    <p id="dataline"></p>
+  </header>
+
+  <section class="card">
+    <form id="askform">
+      <label class="q" for="question">What would you like to know?</label>
+      <div class="askrow">
+        <textarea id="question" maxlength="500" placeholder="e.g. How has bus ridership in Texas changed since 2019?"></textarea>
+        <button class="primary" id="askbtn" type="submit">Ask</button>
+      </div>
+      <div class="hint">Press Enter to ask &middot; Shift+Enter for a new line</div>
+    </form>
+
+    <div class="examples">
+      <h2>Try one of these</h2>
+      <div class="chips" id="examples"></div>
+    </div>
+    <div class="recent" id="recentbox" hidden>
+      <h2>Your recent questions</h2>
+      <div class="chips" id="recent"></div>
+    </div>
+
+    <div id="status" role="status" aria-live="polite" hidden><div class="spinner"></div><span>Looking that up&hellip;</span></div>
+    <div id="error" class="error" role="alert" hidden></div>
+  </section>
+
+  <section class="card answer" id="answer" hidden>
+    <h2 id="a-question"></h2>
+    <div class="meta" id="a-meta"></div>
+    <div class="note" id="a-note" hidden></div>
+    <div class="toolbar">
+      <label id="metricwrap" hidden>Chart: <select id="metric"></select></label>
+      <button class="ghost" id="csvbtn" type="button">Download CSV</button>
+    </div>
+    <div class="chartbox" id="chart"></div>
+    <div class="tablewrap"><table id="table"></table></div>
+    <div class="meta" id="a-trunc" hidden></div>
+    <details>
+      <summary>Show the query used to answer this</summary>
+      <pre id="a-sql"></pre>
+    </details>
+  </section>
+
+  <footer>
+    Source: Federal Transit Administration, National Transit Database, via data.transportation.gov.
+    Inflation-adjusted figures use the BLS Consumer Price Index (CPI-U).
+    Answers are generated as database queries by AI; check the query for important decisions.
+    &middot; <a href="/docs">Developer API</a>
+  </footer>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const EXAMPLES = [
+  "Which subway systems have the lowest cost per rider?",
+  "How has national transit ridership recovered since 2019?",
+  "Show MBTA's inflation-adjusted cost per rider each year since 2015",
+  "Top 10 bus agencies by fare recovery in 2024, with at least 10 million trips",
+  "Compare light rail and commuter rail cost per rider in California",
+  "Which states had the most transit trips in 2024?",
+];
+const LABELS = {
+  upt: "Trips", agency: "Agency", mode: "Mode", mode_code: "Mode code", state: "State", city: "City",
+  ntd_id: "NTD ID", report_year: "Year", operating_expense: "Operating expense", cost_per_rider: "Cost per rider",
+  fare_recovery: "Fare recovery", fares: "Fares", voms: "Peak vehicles", passenger_miles: "Passenger miles",
+  vehicle_revenue_miles: "Revenue miles", vehicle_revenue_hours: "Revenue hours",
+  cost_per_revenue_hour: "Cost per revenue hour", avg_trip_miles: "Avg trip (miles)", cpi_factor: "CPI factor",
+  real_dollar_year: "Dollar year", total_trips: "Total trips", cpr: "Cost per rider",
+};
+const state = { years: null, result: null, kinds: {}, spec: null };
+
+// ---------- formatting ----------
+function label(c) {
+  const real = /_real(_|$)/.test(c);
+  const base = c.replace(/_real(_|$)/, "$1").replace(/_$/, "");
+  let s = LABELS[base] || base.replace(/_/g, " ");
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  return real ? s + " (inflation-adj.)" : s;
+}
+function kind(c, rows) {
+  const n = c.toLowerCase();
+  const vals = rows.map((r) => r[c]).filter((v) => v !== null && v !== undefined);
+  if (!vals.length || !vals.every((v) => typeof v === "number")) return "text";
+  if (/(^|_)(year|yr)$|^year/.test(n)) return "year";
+  if (/(^|_)id$/.test(n)) return "text";
+  if (/percent|pct/.test(n)) return "pct";
+  if (/recovery|ratio/.test(n)) return "ratio";
+  if (/factor|cpi/.test(n)) return "num";
+  if (/cost|expense|opex|fare|dollar|spend|price|cpr|_real/.test(n)) return "money";
+  return "num";
+}
+function fmt(v, k) {
+  if (v === null || v === undefined) return "—";
+  if (k === "text") return String(v);
+  if (k === "year") return String(Math.round(v));
+  if (k === "pct") return v.toFixed(1) + "%";
+  if (k === "ratio") return (v * 100).toFixed(1) + "%";
+  const a = Math.abs(v);
+  let s;
+  if (a >= 1e9) s = (a / 1e9).toFixed(2) + "B";
+  else if (a >= 1e6) s = (a / 1e6).toFixed(1) + "M";
+  else if (Number.isInteger(v) || a >= 1000) s = Math.round(a).toLocaleString();
+  else s = a.toLocaleString(undefined, { minimumFractionDigits: k === "money" ? 2 : 0, maximumFractionDigits: 2 });
+  return (v < 0 ? "-" : "") + (k === "money" ? "$" : "") + s;
+}
+function fullValue(v) {
+  return typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 4 }) : String(v ?? "");
+}
+
+// ---------- asking ----------
+function setBusy(b) {
+  $("#askbtn").disabled = b;
+  $("#status").hidden = !b;
+}
+function showError(msg, sql) {
+  const el = $("#error");
+  el.textContent = msg + (sql ? "\n\nQuery that failed:\n" + sql : "");
+  el.hidden = false;
+}
+function errorText(body, status) {
+  const d = body && body.detail;
+  let msg = !d ? `Something went wrong (HTTP ${status}).` : typeof d === "string" ? d : d.error || JSON.stringify(d);
+  if (/credit balance/i.test(msg)) msg += "\nThe Anthropic account needs more credits (console.anthropic.com → Billing).";
+  else if (/not read-only/i.test(msg)) msg = "That question led to a query that would change data, so it was refused. Try asking it differently.";
+  else if (/Generated SQL failed/i.test(msg)) msg = "The AI wrote a query that didn't work. Try rephrasing, or be more specific about years, modes or agencies.\n\n" + msg;
+  return msg;
+}
+async function ask(q) {
+  q = q.trim();
+  if (!q) return;
+  $("#question").value = q;
+  $("#error").hidden = true;
+  setBusy(true);
+  const t0 = performance.now();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 90000);
+  try {
+    const r = await fetch("/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q }), signal: ctl.signal,
+    });
+    let body = null;
+    try { body = await r.json(); } catch (_) {}
+    if (!r.ok) {
+      showError(errorText(body, r.status), body && body.detail && body.detail.sql);
+      return;
+    }
+    remember(q);
+    render(q, body, (performance.now() - t0) / 1000);
+  } catch (e) {
+    showError(e.name === "AbortError"
+      ? "That took more than 90 seconds, so it was stopped. Try a narrower question."
+      : "Couldn't reach the Ask NTD server. Check that the NAS is on and connected.");
+  } finally {
+    clearTimeout(timer);
+    setBusy(false);
+  }
+}
+
+// ---------- recent questions (this browser only) ----------
+function loadRecent() {
+  try { return JSON.parse(localStorage.getItem("askntd.recent") || "[]"); } catch (_) { return []; }
+}
+function remember(q) {
+  const list = [q, ...loadRecent().filter((x) => x !== q)].slice(0, 8);
+  try { localStorage.setItem("askntd.recent", JSON.stringify(list)); } catch (_) {}
+  drawRecent();
+}
+function chipList(el, items) {
+  el.replaceChildren(...items.map((t) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = t;
+    b.addEventListener("click", () => ask(t));
+    return b;
+  }));
+}
+function drawRecent() {
+  const list = loadRecent();
+  $("#recentbox").hidden = !list.length;
+  chipList($("#recent"), list);
+}
+
+// ---------- rendering ----------
+function render(q, res, secs) {
+  state.result = res;
+  const cols = res.columns, rows = res.rows;
+  state.kinds = Object.fromEntries(cols.map((c) => [c, kind(c, rows)]));
+  $("#answer").hidden = false;
+  $("#a-question").textContent = q;
+  $("#a-meta").textContent = `${rows.length.toLocaleString()} ${rows.length === 1 ? "row" : "rows"} · answered in ${secs.toFixed(1)}s`;
+  $("#a-sql").textContent = res.sql;
+
+  const usesReal = cols.some((c) => /_real/.test(c)) || /_real\b/.test(res.sql);
+  const note = $("#a-note");
+  note.hidden = !usesReal;
+  if (usesReal) {
+    const base = state.years ? state.years[1] : "latest-year";
+    note.textContent = `Dollar figures marked “inflation-adj.” are in ${base} dollars (CPI-U), so years compare fairly. Other dollar figures are as reported.`;
+  }
+
+  drawTable(cols, rows);
+  state.spec = chartSpec(cols, rows);
+  const sel = $("#metric");
+  if (state.spec) {
+    sel.replaceChildren(...state.spec.metrics.map((m) => new Option(label(m), m)));
+    $("#metricwrap").hidden = state.spec.metrics.length < 2;
+  } else {
+    $("#metricwrap").hidden = true;
+  }
+  drawChart();
+  if (!rows.length) {
+    $("#chart").replaceChildren();
+    $("#a-meta").textContent = "No matching data. Try different years, modes, or agency names.";
+  }
+  $("#answer").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function drawTable(cols, rows) {
+  const t = $("#table");
+  const max = 500;
+  const head = document.createElement("tr");
+  cols.forEach((c) => {
+    const th = document.createElement("th");
+    th.textContent = label(c);
+    th.title = c;
+    if (state.kinds[c] !== "text") th.className = "n";
+    head.appendChild(th);
+  });
+  const body = rows.slice(0, max).map((r) => {
+    const tr = document.createElement("tr");
+    cols.forEach((c) => {
+      const td = document.createElement("td");
+      const k = state.kinds[c];
+      td.textContent = fmt(r[c], k);
+      if (k !== "text") { td.className = "n"; td.title = fullValue(r[c]); }
+      tr.appendChild(td);
+    });
+    return tr;
+  });
+  const thead = document.createElement("thead"); thead.appendChild(head);
+  const tbody = document.createElement("tbody"); tbody.append(...body);
+  t.replaceChildren(thead, tbody);
+  $("#a-trunc").hidden = rows.length <= max;
+  $("#a-trunc").textContent = `Showing the first ${max} rows. Download CSV for all ${rows.length.toLocaleString()}.`;
+}
+
+function chartSpec(cols, rows) {
+  if (rows.length < 2) return null;
+  const k = state.kinds;
+  const yearCol = cols.find((c) => k[c] === "year");
+  const metrics = cols.filter((c) => ["money", "num", "pct", "ratio"].includes(k[c]) && !/factor|cpi/.test(c));
+  if (!metrics.length) return null;
+  // Text columns that vary between rows identify the series / bar labels.
+  const textCols = cols.filter((c) => k[c] === "text" && new Set(rows.map((r) => r[c])).size > 1);
+  if (yearCol && new Set(rows.map((r) => r[yearCol])).size >= 2) return { type: "line", x: yearCol, textCols, metrics };
+  if (textCols.length && rows.length <= 30) return { type: "bar", textCols, metrics };
+  return null;
+}
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function niceStep(range) {
+  const raw = range / 5, p = Math.pow(10, Math.floor(Math.log10(raw))), e = raw / p;
+  return p * (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1);
+}
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, text) {
+  const n = document.createElementNS(NS, tag);
+  for (const [a, v] of Object.entries(attrs)) n.setAttribute(a, v);
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function drawChart() {
+  const box = $("#chart");
+  box.replaceChildren();
+  const spec = state.spec;
+  if (!spec) return;
+  const metric = $("#metric").value || spec.metrics[0];
+  const mk = state.kinds[metric];
+  const rows = state.result.rows.filter((r) => typeof r[metric] === "number");
+  if (!rows.length) return;
+  const key = (r) => spec.textCols.map((c) => r[c]).join(" · ");
+  if (spec.type === "bar") return drawBars(box, rows, key, metric, mk);
+
+  // Line chart: one series per distinct label (max 8, largest first).
+  const groups = new Map();
+  rows.forEach((r) => {
+    const g = spec.textCols.length ? key(r) : label(metric);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(r);
+  });
+  let series = [...groups.entries()].map(([name, rs]) => ({
+    name, pts: rs.map((r) => [r[spec.x], r[metric]]).sort((a, b) => a[0] - b[0]),
+  }));
+  // Several unlabeled values for one year can't be drawn as a line honestly; leave it to the table.
+  if (series.some((s) => new Set(s.pts.map((p) => p[0])).size < s.pts.length)) {
+    const n = document.createElement("div");
+    n.className = "meta";
+    n.textContent = "No chart: this answer has several rows per year without a label telling them apart. See the table.";
+    box.appendChild(n);
+    return;
+  }
+  series.sort((a, b) => Math.max(...b.pts.map((p) => p[1])) - Math.max(...a.pts.map((p) => p[1])));
+  const hidden = series.length - 8;
+  series = series.slice(0, 8);
+
+  const W = Math.max(box.clientWidth, 300), H = W < 500 ? 240 : 320;
+  const m = { l: 70, r: 16, t: 12, b: 30 };
+  const xs = series.flatMap((s) => s.pts.map((p) => p[0])), ys = series.flatMap((s) => s.pts.map((p) => p[1]));
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const yMin = Math.min(0, ...ys), yMaxRaw = Math.max(...ys);
+  const step = niceStep((yMaxRaw - yMin) || 1), yMax = Math.ceil(yMaxRaw / step) * step || step;
+  const X = (v) => m.l + (x1 === x0 ? 0.5 : (v - x0) / (x1 - x0)) * (W - m.l - m.r);
+  const Y = (v) => m.t + (1 - (v - yMin) / (yMax - yMin)) * (H - m.t - m.b);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${label(metric)} by year` });
+  for (let v = Math.floor(yMin / step) * step; v <= yMax + step / 2; v += step) {
+    svg.appendChild(el("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: css("--grid") }));
+    svg.appendChild(el("text", { x: m.l - 8, y: Y(v) + 4, "text-anchor": "end" }, fmt(v, mk)));
+  }
+  const years = [...new Set(xs)].sort((a, b) => a - b);
+  const every = Math.ceil(years.length / Math.floor((W - m.l) / 48));
+  years.forEach((yr, i) => {
+    if (i % every === 0 || i === years.length - 1)
+      svg.appendChild(el("text", { x: X(yr), y: H - 8, "text-anchor": "middle" }, String(yr)));
+  });
+  const legend = document.createElement("div");
+  legend.className = "legend";
+  series.forEach((s, i) => {
+    const color = css(`--s${i + 1}`);
+    svg.appendChild(el("polyline", {
+      points: s.pts.map((p) => `${X(p[0])},${Y(p[1])}`).join(" "),
+      fill: "none", stroke: color, "stroke-width": 2.5, "stroke-linejoin": "round",
+    }));
+    s.pts.forEach((p) => {
+      const c = el("circle", { cx: X(p[0]), cy: Y(p[1]), r: 3.5, fill: color });
+      c.appendChild(el("title", {}, `${s.name}, ${p[0]}: ${fmt(p[1], mk)}`));
+      svg.appendChild(c);
+    });
+    if (series.length > 1 || spec.textCols.length) {
+      const item = document.createElement("span");
+      const sw = document.createElement("i"); sw.style.background = color;
+      item.append(sw, document.createTextNode(s.name));
+      legend.appendChild(item);
+    }
+  });
+  box.appendChild(svg);
+  if (legend.childNodes.length) box.appendChild(legend);
+  if (hidden > 0) {
+    const n = document.createElement("div");
+    n.className = "meta";
+    n.textContent = `Chart shows the 8 largest series; ${hidden} more are in the table.`;
+    box.appendChild(n);
+  }
+}
+
+function drawBars(box, rows, key, metric, mk) {
+  if (rows.some((r) => r[metric] < 0)) return;
+  const max = Math.max(...rows.map((r) => r[metric])) || 1;
+  const grid = document.createElement("div");
+  grid.className = "bars";
+  grid.setAttribute("role", "img");
+  grid.setAttribute("aria-label", `${label(metric)} bar chart`);
+  rows.forEach((r) => {
+    const l = document.createElement("div"); l.className = "lbl"; l.textContent = key(r); l.title = key(r);
+    const track = document.createElement("div"); track.className = "track";
+    const fill = document.createElement("div"); fill.className = "fill";
+    fill.style.width = `${(r[metric] / max) * 100}%`;
+    track.appendChild(fill);
+    const v = document.createElement("div"); v.className = "val"; v.textContent = fmt(r[metric], mk);
+    grid.append(l, track, v);
+  });
+  box.appendChild(grid);
+}
+
+function downloadCsv() {
+  const res = state.result;
+  if (!res) return;
+  const q = (v) => (v === null || v === undefined ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const lines = [res.columns.join(","), ...res.rows.map((r) => res.columns.map((c) => q(r[c])).join(","))];
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ask-ntd.csv";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- wiring ----------
+$("#askform").addEventListener("submit", (e) => { e.preventDefault(); ask($("#question").value); });
+$("#question").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask($("#question").value); }
+});
+$("#metric").addEventListener("change", drawChart);
+$("#csvbtn").addEventListener("click", downloadCsv);
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawChart, 150); });
+chipList($("#examples"), EXAMPLES);
+drawRecent();
+
+fetch("/health").then((r) => r.json()).then((h) => {
+  if (h.ok) {
+    state.years = h.years;
+    $("#dataline").textContent = `Data: report years ${h.years[0]}–${h.years[1]} · ${h.rows.toLocaleString()} agency–mode records in the latest year`;
+  } else {
+    $("#dataline").textContent = "The database isn't available right now.";
+  }
+}).catch(() => {});
+</script>
+</body>
+</html>

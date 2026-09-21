@@ -1,0 +1,2 @@
+# These files run in Linux containers on the NAS: keep LF line endings on every checkout.
+* text=auto eol=lf

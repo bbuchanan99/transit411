@@ -1,0 +1,6 @@
+duckdb>=1.0
+pandas>=2.0
+requests>=2.31
+anthropic>=0.40
+fastapi>=0.110
+uvicorn[standard]>=0.29
