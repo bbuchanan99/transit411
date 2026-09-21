@@ -97,12 +97,17 @@ def collection(status: str = "pending"):
 
 @app.post("/api/collection/{item_id}/{action}")
 def collection_action(item_id: int, action: str):
-    mapping = {"approve": "approved", "skip": "skipped", "publish": "published", "reset": "pending"}
+    # Publishing goes through /api/publish/{id}, which also creates the post; no "publish" shortcut here.
+    mapping = {"approve": "approved", "skip": "skipped", "reset": "pending"}
     if action not in mapping:
         raise HTTPException(400, "unknown action")
     try:
         with _db() as c, c.cursor() as cur:
             cur.execute("UPDATE collected_items SET status=%s WHERE id=%s", (mapping[action], item_id))
+            # Moving a published item back (e.g. "Return to pending") takes its post off the site too.
+            _ensure_posts_link(cur)
+            cur.execute("UPDATE content_posts SET status='draft' WHERE item_id=%s AND status='published'",
+                        (item_id,))
             c.commit()
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
@@ -145,6 +150,12 @@ def set_auto_collect(t: Toggle):
         raise HTTPException(502, f"DB error: {e}")
 
 
+def _ensure_posts_link(cur):
+    # Which collected item a post came from, so publish/unpublish keep both in step.
+    # (init.sql has it for new databases; this adds it to the existing one.)
+    cur.execute("ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS item_id BIGINT")
+
+
 @app.get("/api/publish/ready")
 def publish_ready():
     items = []
@@ -178,10 +189,12 @@ def publish_item(item_id: int):
             body = summary or ""
             if source_url:
                 body += f"\n\nSource: {source_name or ''} - {source_url}"
-            cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at) "
-                        "VALUES (%s,%s,%s,%s,'published', now()) "
-                        "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now() RETURNING id",
-                        (slug, pillar, headline, body))
+            _ensure_posts_link(cur)
+            cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at, item_id) "
+                        "VALUES (%s,%s,%s,%s,'published', now(), %s) "
+                        "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now(), "
+                        "item_id=EXCLUDED.item_id RETURNING id",
+                        (slug, pillar, headline, body, item_id))
             post_id = cur.fetchone()[0]
             cur.execute("UPDATE collected_items SET status='published' WHERE id=%s", (item_id,))
             c.commit()
@@ -211,10 +224,20 @@ def posts():
 
 @app.post("/api/posts/{post_id}/unpublish")
 def unpublish(post_id: int):
+    """Take a post off the site and put its item back in "Ready to publish", so it can be republished."""
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("UPDATE content_posts SET status='draft' WHERE id=%s", (post_id,))
+            _ensure_posts_link(cur)
+            cur.execute("UPDATE content_posts SET status='draft' WHERE id=%s RETURNING item_id", (post_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no post with that id")
+            if row[0] is not None:
+                cur.execute("UPDATE collected_items SET status='approved' WHERE id=%s AND status='published'",
+                            (row[0],))
             c.commit()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return {"post_id": post_id, "status": "draft"}
@@ -500,7 +523,7 @@ function pReadyCard(it){
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:17px;line-height:1.3;margin-bottom:6px">'+esc(it.headline)+'</div>'
     +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
     +'<div style="display:flex;gap:10px;align-items:center"><button class="go" style="padding:9px 18px" data-pub="'+it.id+'">Publish</button>'
-    +(it.source_url?'<a href="'+esc(it.source_url)+'" target="_blank" rel="noopener" style="font-family:Archivo,sans-serif;font-size:12px">source</a>':'')+'</div></div>';
+    +(safeUrl(it.source_url)?'<a href="'+esc(safeUrl(it.source_url))+'" target="_blank" rel="noopener noreferrer" style="font-family:Archivo,sans-serif;font-size:12px">source</a>':'')+'</div></div>';
 }
 function pPostRow(p){
   return '<div class="rcard" style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px">'
@@ -508,7 +531,13 @@ function pPostRow(p){
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:16px;line-height:1.3">'+esc(p.title)+'</div></div>'
     +'<button class="ex" data-unpub="'+p.id+'">Unpublish</button></div>';
 }
-document.getElementById("pReady").addEventListener("click",async e=>{const b=e.target.closest("[data-pub]");if(!b)return;await fetch("/api/publish/"+b.dataset.pub,{method:"POST"});loadPublish();});
-document.getElementById("pPosts").addEventListener("click",async e=>{const b=e.target.closest("[data-unpub]");if(!b)return;await fetch("/api/posts/"+b.dataset.unpub+"/unpublish",{method:"POST"});loadPublish();});
+async function pPost(url,what,b){ // POST, and say so if it didn't work instead of silently reloading
+  b.disabled=true;
+  try{const r=await fetch(url,{method:"POST"});if(!r.ok)alert("Couldn't "+what+": "+errText(await r.text()));}
+  catch(e){alert("Couldn't reach the Command Center.");}
+  loadPublish();
+}
+document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
+document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""

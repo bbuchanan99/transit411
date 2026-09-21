@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS content_posts (
   body         TEXT,
   status       TEXT DEFAULT 'draft',    -- draft | scheduled | published
   publish_at   TIMESTAMPTZ,
+  item_id      BIGINT,                  -- the collected_items row it was published from
   created_at   TIMESTAMPTZ DEFAULT now()
 );
 
