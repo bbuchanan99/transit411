@@ -1,0 +1,22 @@
+/* Shared component styles. Use the host page's CSS variables (with fallbacks) so the
+   same components look right in the Command Center and on the public site. */
+.t411-card{background:var(--card,#fff);border:1px solid var(--line,#ddd);border-radius:12px;overflow:hidden}
+.t411-scroll{overflow-x:auto;padding:10px 18px}
+.t411-table{width:100%;border-collapse:collapse;font-size:13px;font-family:'Archivo',system-ui,sans-serif}
+.t411-table th{text-align:left;color:var(--muted,#666);border-bottom:2px solid var(--line,#ddd);padding:8px 12px 8px 0;white-space:nowrap}
+.t411-table td{padding:8px 12px 8px 0;border-bottom:1px solid var(--line-soft,#eee);white-space:nowrap}
+.t411-table td.num{font-family:'JetBrains Mono',ui-monospace,monospace}
+.t411-empty{padding:20px;color:var(--muted,#666);font-family:'Archivo',system-ui,sans-serif;font-size:14px}
+.t411-ms{display:inline-block;margin:0 16px 8px 0}
+.t411-ms-k{display:block;font-family:'Archivo',system-ui,sans-serif;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted,#666)}
+.t411-ms-v{display:block;font-family:'Archivo',system-ui,sans-serif;font-weight:700}
+.t411-tl{padding:6px 0}
+.t411-tl-row{display:flex;align-items:center;gap:10px;margin:6px 0;font-family:'Archivo',system-ui,sans-serif;font-size:12px}
+.t411-tl-dot{width:9px;height:9px;border-radius:50%;background:var(--accent,#c0341f);flex-shrink:0}
+.t411-tl-date{width:96px;flex-shrink:0;color:var(--muted,#666)}
+.t411-row{cursor:pointer}
+.t411-row:hover td{background:var(--panel,#f7f7f7)}
+.t411-detail td{background:var(--panel,#f7f7f7);padding:12px 18px;white-space:normal}
+.t411-ms-title{font-family:'Archivo',system-ui,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent,#c0341f);margin-bottom:8px}
+.t411-btn{font-family:'Archivo',system-ui,sans-serif;font-size:12px;font-weight:600;padding:7px 12px;margin-top:4px;border:1px solid var(--line,#ddd);background:transparent;color:var(--ink,#111);border-radius:999px;cursor:pointer}
+.t411-btn:hover{border-color:var(--accent,#c0341f);color:var(--accent,#c0341f)}

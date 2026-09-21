@@ -8,6 +8,7 @@ import os
 from typing import List, Optional
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -19,6 +20,9 @@ except Exception:
 API_URL = os.environ.get("API_URL", "http://api:8000")
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
 app = FastAPI(title="Transit411 Command Center")
+# Shared component bundle (t411.js / t411.css), also used by the public site.
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")),
+          name="static")
 
 
 @app.get("/api/status")
@@ -468,6 +472,8 @@ DASHBOARD = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Transit411 - Command Center</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="/static/t411.css">
+<script src="/static/t411.js"></script>
 <style>
 :root{--bg:#F2EEE4;--panel:#F7F4ED;--card:#FFF;--ink:#17140F;--muted:#6A6458;--line:#D8D2C4;--soft:#E7E1D4;--accent:#C0341F;--ok:#1F6B4A;--bar:#C0341F;--track:#EDE7D8}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Spectral',Georgia,serif}
@@ -851,8 +857,6 @@ const gChips=document.getElementById("gChips");
   const b=document.createElement("button");b.className="ex";b.textContent=lbl;
   b.onclick=()=>{gPhase=k;document.querySelectorAll("#gChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadCIG();};
   if(k==="")b.style.borderColor="var(--accent)";gChips.appendChild(b);});
-const RATING={H:"High",MH:"Medium-High",M:"Medium",ML:"Medium-Low",L:"Low"};
-function gAmt(num,raw){return num!=null?("$"+Number(num).toLocaleString(undefined,{maximumFractionDigits:0})+"M"):(raw?esc(raw):"-");}
 function gStat(v,l){return '<div><div style="font-family:Archivo,sans-serif;font-weight:900;font-size:22px">'+v+'</div><div style="font-family:Archivo,sans-serif;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">'+l+'</div></div>';}
 async function loadCIG(){
   const out=document.getElementById("gOut"),sum=document.getElementById("gSummary");
@@ -870,42 +874,9 @@ async function loadCIG(){
           +(stale?' &middot; '+age+' days old - time to upload a new one':'')
           +(s.snapshots>1?' &middot; '+s.snapshots+' months of history':'')+'</div>';})()+'</div>';
     if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">'+(s.projects?'No projects in this phase.':'No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.')+'</div></div>';return;}
-    out.innerHTML='<div class="rcard" style="padding:0"><div class="twrap" style="padding:10px 18px">'
-      +'<table><thead><tr><th>Project</th><th>Sponsor</th><th>Location</th><th>Mode</th><th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th></tr></thead><tbody>'
-      +d.projects.map(gRow).join("")+'</tbody></table></div></div>';
+    // Shared component (static/t411.js): the same table, milestones and history the public site uses.
+    T411.renderCigTable(out, d.projects);
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load the pipeline.</div></div>';}
 }
-// Click a project row for its milestone dates; "Show snapshot history" lists it across loaded months.
-function gRow(p,i){
-  const rt=p.rating?('<span title="'+esc(RATING[p.rating]||"")+'">'+esc(p.rating)+'</span>'):'-';
-  const main='<tr class="gmain" data-i="'+i+'" style="cursor:pointer" title="Show milestone dates"><td style="font-weight:600">'+esc(p.project_name)+'</td><td>'+esc(p.sponsor)+'</td>'
-    +'<td>'+esc(p.city||"")+', '+esc(p.state||"")+'</td><td>'+esc(p.mode||"-")+'</td><td>'+esc(p.phase)+'</td>'
-    +'<td class="num">'+gAmt(p.cost_musd,p.cost_raw)+'</td><td class="num">'+gAmt(p.cig_request_musd,p.cig_request_raw)+'</td>'
-    +'<td class="num">'+esc(p.cig_share||"-")+'</td><td>'+rt+'</td><td>'+esc(p.est_grant||"-")+'</td></tr>';
-  return main+'<tr id="gd'+i+'" style="display:none"><td colspan="10" style="background:var(--panel);padding:12px 18px;white-space:normal">'+gDetail(p)+'</td></tr>';
-}
-function gDetail(p){
-  const items=[["PD entry",p.pd_entry],["NEPA complete",p.nepa],["Engineering entry",p.eng_entry],["LONP request",p.lonp_req],["LONP decision",p.lonp_dec],["LONP action",p.lonp_action],["Rating requested",p.req_rating_date],["Project rated",p.proj_rating_date],["Overall rating",p.rating?(p.rating+(RATING[p.rating]?" ("+RATING[p.rating]+")":"")):null],["Local match",p.noncig_status]];
-  const chips=items.filter(x=>x[1]).map(x=>'<span style="display:inline-block;margin:0 16px 8px 0"><span style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">'+x[0]+'</span><br><span style="font-family:Archivo,sans-serif;font-weight:700">'+esc(x[1])+'</span></span>').join("");
-  return '<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:8px">Milestones</div>'+(chips||'<span style="color:var(--muted)">No dates recorded.</span>')
-    +'<div style="margin-top:8px"><button class="ex" type="button" data-hist="'+esc(p.project_name)+'" data-sp="'+esc(p.sponsor||"")+'">Show snapshot history</button><div class="ghist" style="margin-top:8px"></div></div>';
-}
-function gMoney(v){return v!=null?"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:1})+"M":"-";}
-document.getElementById("gOut").addEventListener("click",async e=>{
-  const hb=e.target.closest("[data-hist]");
-  if(hb){
-    const box=hb.parentElement.querySelector(".ghist"),note=t=>'<span style="color:var(--muted);font-family:Archivo,sans-serif;font-size:12px">'+t+'</span>';
-    box.innerHTML=note("Loading...");
-    try{
-      const r=await fetch("/api/cig/history?name="+encodeURIComponent(hb.dataset.hist)+"&sponsor="+encodeURIComponent(hb.dataset.sp));
-      const d=await r.json();const h=(r.ok&&d.history)||[];
-      box.innerHTML=h.length>1?h.map(x=>'<div style="font-family:Archivo,sans-serif;font-size:12px;margin-top:4px">'+esc(x.snapshot_date)+' &middot; '+esc(x.phase||"")+' &middot; rating '+esc(x.rating||"-")+' &middot; cost '+gMoney(x.cost_musd)+' &middot; CIG '+gMoney(x.cig_request_musd)+' &middot; est. grant '+esc(x.est_grant||"-")+'</div>').join("")
-        :note("Only one snapshot so far - history builds as each month's dashboard is uploaded.");
-    }catch(err){box.innerHTML='<span style="color:var(--accent);font-family:Archivo,sans-serif;font-size:12px">Could not load history.</span>';}
-    return;
-  }
-  const row=e.target.closest(".gmain");
-  if(row){const dd=document.getElementById("gd"+row.dataset.i);if(dd)dd.style.display=dd.style.display==="none"?"":"none";}
-});
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""
