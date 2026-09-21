@@ -1,5 +1,11 @@
-# Transit411 engine — phase 1 (NTD data + Ask NTD API).
-# Postgres+pgvector for content/subscribers is added in phase 2, once this is validated.
+# Transit411 engine: NTD data + Ask NTD API (phase 1), Postgres/pgvector + Command Center (phase 2).
+#
+# Naming: the project name below prefixes everything Compose creates for this project:
+# containers (transit411-<service>-1), the network (transit411_default) and built images
+# (transit411-<service>). New services added to this file get the prefix automatically,
+# so name services plainly (e.g. "collector", not "transit411-collector").
+name: transit411
+
 services:
   # One-shot: fetch real NTD data and (re)build the database. Run on demand:
   #   docker compose run --rm ingest
