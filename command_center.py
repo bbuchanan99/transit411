@@ -178,23 +178,28 @@ def publish_item(item_id: int):
     import re
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("SELECT pillar, headline, summary, source_name, source_url "
+            cur.execute("SELECT pillar, headline, summary, source_name, source_url, "
+                        "agencies, mode, programs, tags, state "
                         "FROM collected_items WHERE id=%s AND status='approved'", (item_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "no approved item with that id")
-            pillar, headline, summary, source_name, source_url = row
+            pillar, headline, summary, source_name, source_url, agencies, mode, programs, tags, state = row
             base = re.sub(r"[^a-z0-9]+", "-", (headline or "post").lower()).strip("-")[:60] or "post"
             slug = f"{base}-{item_id}"
             body = summary or ""
             if source_url:
                 body += f"\n\nSource: {source_name or ''} - {source_url}"
             _ensure_posts_link(cur)
-            cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at, item_id) "
-                        "VALUES (%s,%s,%s,%s,'published', now(), %s) "
+            cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at, item_id, "
+                        "source_name, source_url, agencies, mode, programs, tags, state) "
+                        "VALUES (%s,%s,%s,%s,'published', now(), %s, %s,%s,%s,%s,%s,%s,%s) "
                         "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now(), "
-                        "item_id=EXCLUDED.item_id RETURNING id",
-                        (slug, pillar, headline, body, item_id))
+                        "item_id=EXCLUDED.item_id, source_name=EXCLUDED.source_name, source_url=EXCLUDED.source_url, "
+                        "agencies=EXCLUDED.agencies, mode=EXCLUDED.mode, programs=EXCLUDED.programs, "
+                        "tags=EXCLUDED.tags, state=EXCLUDED.state RETURNING id",
+                        (slug, pillar, headline, body, item_id, source_name, source_url,
+                         agencies or [], mode or [], programs or [], tags or [], state))
             post_id = cur.fetchone()[0]
             cur.execute("UPDATE collected_items SET status='published' WHERE id=%s", (item_id,))
             c.commit()
@@ -206,12 +211,31 @@ def publish_item(item_id: int):
 
 
 @app.get("/api/posts")
-def posts():
+def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Optional[str] = None,
+          program: Optional[str] = None, tag: Optional[str] = None, state: Optional[str] = None,
+          featured: Optional[bool] = None):
+    where, params = ["status='published'"], []
+    if pillar:
+        where.append("pillar=%s"); params.append(pillar)
+    if agency:
+        where.append("%s = ANY(agencies)"); params.append(agency)
+    if mode:
+        where.append("%s = ANY(mode)"); params.append(mode)
+    if program:
+        where.append("%s = ANY(programs)"); params.append(program)
+    if tag:
+        where.append("%s = ANY(tags)"); params.append(tag)
+    if state:
+        where.append("state=%s"); params.append(state)
+    if featured is not None:
+        where.append("featured=%s"); params.append(featured)
+    sql = ("SELECT id, slug, pillar, title, status, publish_at, source_name, source_url, "
+           "agencies, mode, programs, tags, state, featured, sponsor FROM content_posts "
+           "WHERE " + " AND ".join(where) + " ORDER BY featured DESC, publish_at DESC NULLS LAST LIMIT 200")
     out = []
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("SELECT id, slug, pillar, title, status, publish_at FROM content_posts "
-                        "WHERE status='published' ORDER BY publish_at DESC NULLS LAST LIMIT 200")
+            cur.execute(sql, params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 p = dict(zip(names, row))
@@ -241,6 +265,23 @@ def unpublish(post_id: int):
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return {"post_id": post_id, "status": "draft"}
+
+
+@app.post("/api/posts/{post_id}/feature")
+def feature(post_id: int, on: bool = True, sponsor: Optional[str] = None, days: int = 30):
+    """Mark a post as a featured/sponsored placement (e.g. a paid People-on-the-move highlight)."""
+    try:
+        with _db() as c, c.cursor() as cur:
+            if on:
+                cur.execute("UPDATE content_posts SET featured=true, sponsor=%s, "
+                            "featured_until = now() + make_interval(days => %s) WHERE id=%s",
+                            (sponsor, days, post_id))
+            else:
+                cur.execute("UPDATE content_posts SET featured=false, featured_until=NULL WHERE id=%s", (post_id,))
+            c.commit()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"post_id": post_id, "featured": on}
 
 
 @app.get("/", response_class=HTMLResponse)

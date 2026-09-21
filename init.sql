@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS collected_items (
   deadline    DATE,              -- for procurements / ballot measures (freshness engine)
   relevance   TEXT DEFAULT 'med',
   status      TEXT DEFAULT 'pending',  -- pending | approved | skipped | published | filtered (auto: low relevance)
+  agencies    TEXT[],
+  mode        TEXT[],
+  programs    TEXT[],
+  tags        TEXT[],
+  state       TEXT,
   embedding   VECTOR(1536),      -- for semantic content search
   collected_at TIMESTAMPTZ DEFAULT now()
 );
@@ -41,6 +46,17 @@ CREATE TABLE IF NOT EXISTS content_posts (
   status       TEXT DEFAULT 'draft',    -- draft | scheduled | published
   publish_at   TIMESTAMPTZ,
   item_id      BIGINT,                  -- the collected_items row it was published from
+  source_name  TEXT,
+  source_url   TEXT,
+  agencies     TEXT[],
+  mode         TEXT[],
+  programs     TEXT[],
+  tags         TEXT[],
+  state        TEXT,
+  featured     BOOLEAN DEFAULT false,
+  featured_until TIMESTAMPTZ,
+  sponsor      TEXT,
+  source_type  TEXT DEFAULT 'collected',
   created_at   TIMESTAMPTZ DEFAULT now()
 );
 

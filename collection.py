@@ -136,11 +136,16 @@ def classify(entry):
     client = anthropic.Anthropic(api_key=key)
     msg = client.messages.create(
         model=os.environ.get("COLLECT_MODEL", "claude-haiku-4-5"),
-        max_tokens=400,
+        max_tokens=600,
         system=("You triage transit-industry news for an editorial queue aimed at agency staff, "
                 "consultants and contractors. Given a feed item, return ONLY JSON:\n"
                 '{"pillar":"Funding|Procurement|People|Policy","headline":"rewritten, <=14 words, original wording",'
-                '"summary":"1-2 sentence paraphrase, no copied text","relevance":"high|med|low"}\n'
+                '"summary":"1-2 sentence paraphrase, no copied text","relevance":"high|med|low",'
+                '"agencies":["exact transit agency names mentioned"],"state":"2-letter US state code or empty",'
+                '"mode":["any of: Bus, BRT, Light Rail, Heavy Rail, Commuter Rail, Streetcar, Ferry, Multimodal"],'
+                '"programs":["any of: CIG New Starts, CIG Small Starts, CIG Core Capacity, TIFIA, RRIF, RAISE, INFRA, Formula, Ballot Measure, P3"],'
+                '"tags":["short free-form topic, project, or firm tags"]}\n'
+                "Use exact agency names; leave any array empty when nothing applies. "
                 "Bias toward funding/procurement/people/policy that affects the capital pipeline. "
                 "Low relevance for operations, safety-incident, or consumer stories."),
         messages=[{"role": "user", "content": f"Title: {entry.get('title','')}\nSummary: {entry.get('summary','')}\nLink: {entry.get('link','')}"}])
@@ -195,19 +200,22 @@ def item_exists(conn, url):
 
 
 def insert_item(conn, pillar, headline, summary, source_name, source_url, published, relevance,
-                status="pending"):
+                status="pending", agencies=None, mode=None, programs=None, tags=None, state=None):
     """status 'filtered' records an item the model rated low relevance: kept out of the review
     queue, but its link is remembered so later runs never pay to triage it again."""
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO collected_items (pillar, headline, summary, source_name, source_url, published, relevance, status) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            "INSERT INTO collected_items (pillar, headline, summary, source_name, source_url, published, relevance, status, "
+            "agencies, mode, programs, tags, state) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s)",
             (pillar, headline, summary, source_name, source_url,
-             published.date() if published else None, relevance, status))
+             published.date() if published else None, relevance, status,
+             agencies or [], mode or [], programs or [], tags or [], state))
     conn.commit()
 
 
 def run(conn, limit_sources=None):
+    migrate(conn)
     with conn.cursor() as cur:
         # Only RSS sources are fetched for now; --limit counts those, not skipped API/Scrape ones.
         cur.execute("SELECT name, url FROM sources WHERE method = 'RSS' ORDER BY id")
@@ -242,7 +250,9 @@ def run(conn, limit_sources=None):
                             name, e["link"], e["published"], "low", status="filtered")
                 continue
             insert_item(conn, c.get("pillar"), c.get("headline") or e["title"],
-                        c.get("summary"), name, e["link"], e["published"], c.get("relevance", "med"))
+                        c.get("summary"), name, e["link"], e["published"], c.get("relevance", "med"),
+                        agencies=c.get("agencies"), mode=c.get("mode"), programs=c.get("programs"),
+                        tags=c.get("tags"), state=c.get("state"))
             kept += 1
         added += kept
         print(f"  {name}: {len(entries)} in feed, {new} new, {kept} queued, {low} low relevance"
@@ -323,11 +333,43 @@ def schedule_loop(dsn):
             time.sleep(60)
 
 
+def migrate(conn):
+    """Add facet + featured columns to an existing database. Idempotent; safe to run every time."""
+    stmts = [
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS agencies TEXT[]",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS mode TEXT[]",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS programs TEXT[]",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS tags TEXT[]",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS state TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS source_name TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS source_url TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS agencies TEXT[]",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS mode TEXT[]",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS programs TEXT[]",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS tags TEXT[]",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS state TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS featured BOOLEAN DEFAULT false",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS featured_until TIMESTAMPTZ",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS sponsor TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'collected'",
+        "CREATE INDEX IF NOT EXISTS ci_agencies_idx ON collected_items USING GIN (agencies)",
+        "CREATE INDEX IF NOT EXISTS cp_agencies_idx ON content_posts USING GIN (agencies)",
+        "CREATE INDEX IF NOT EXISTS cp_tags_idx ON content_posts USING GIN (tags)",
+        "CREATE INDEX IF NOT EXISTS cp_mode_idx ON content_posts USING GIN (mode)",
+        "CREATE INDEX IF NOT EXISTS cp_programs_idx ON content_posts USING GIN (programs)",
+    ]
+    with conn.cursor() as cur:
+        for st in stmts:
+            cur.execute(st)
+    conn.commit()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--migrate", action="store_true")
     ap.add_argument("--schedule", action="store_true",
                     help="stay running and collect daily at COLLECT_AT, unless Auto-collect is off")
     a = ap.parse_args()
@@ -337,6 +379,9 @@ def main():
         schedule_loop(dsn)
         return
     with psycopg.connect(dsn) as conn:
+        if a.migrate:
+            migrate(conn)
+            print("Schema migrated (facet + featured columns ensured).")
         if a.seed:
             added, updated, retired = seed_sources(conn)
             print(f"Sources: {added} added, {updated} updated, {retired} retired "
@@ -344,8 +389,8 @@ def main():
         if a.run:
             # Manual runs always go ahead; the Auto-collect toggle only governs the daily schedule.
             run(conn, a.limit)
-        if not (a.seed or a.run):
-            print("Nothing to do. Use --seed, --run and/or --schedule.")
+        if not (a.seed or a.run or a.migrate):
+            print("Nothing to do. Use --migrate, --seed, --run and/or --schedule.")
 
 
 if __name__ == "__main__":
