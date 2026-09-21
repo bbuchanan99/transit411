@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS collected_items (
   published   DATE,
   deadline    DATE,              -- for procurements / ballot measures (freshness engine)
   relevance   TEXT DEFAULT 'med',
-  status      TEXT DEFAULT 'pending',  -- pending | approved | skipped | published
+  status      TEXT DEFAULT 'pending',  -- pending | approved | skipped | published | filtered (auto: low relevance)
   embedding   VECTOR(1536),      -- for semantic content search
   collected_at TIMESTAMPTZ DEFAULT now()
 );

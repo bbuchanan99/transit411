@@ -78,7 +78,9 @@ SEARCH_QUERIES = [
     ("transit capital project funding when:21d", "Funding"),
     ("transit ballot measure OR sales tax when:30d", "Funding"),
     ("light rail OR bus rapid transit contract award when:30d", "Procurement"),
-    ("transit progressive design-build OR RFP OR RFQ when:30d", "Procurement"),
+    # Split from "transit progressive design-build OR RFP OR RFQ" (2 hits in 30 days; these found 12 and 39).
+    ('transit agency RFP OR "request for proposals" OR "request for qualifications" when:30d', "Procurement"),
+    ('transit "design-build" when:30d', "Procurement"),
     ("transit agency CEO OR general manager appointed when:30d", "People"),
     ("FTA OR transit surface transportation reauthorization when:30d", "Policy"),
 ]
@@ -102,7 +104,8 @@ ALL_SOURCES = SOURCES + SEARCH_SOURCES
 
 def seed_sources(conn):
     """Sync the registry into Postgres by source name: add new sources and update existing ones
-    (URL, method, notes...), so corrections here reach the database. Safe to re-run."""
+    (URL, method, notes...), so corrections here reach the database. Keyword searches that were
+    removed from SEARCH_QUERIES are marked 'Retired' so --run stops fetching them. Safe to re-run."""
     added = updated = 0
     with conn.cursor() as cur:
         for name, url, pillar, typ, method, trust, notes in ALL_SOURCES:
@@ -114,8 +117,12 @@ def seed_sources(conn):
                 cur.execute("INSERT INTO sources (name, url, pillar, type, method, trust, notes) "
                             "VALUES (%s,%s,%s,%s,%s,%s,%s)", (name, url, pillar, typ, method, trust, notes))
                 added += 1
+        cur.execute("UPDATE sources SET method='Retired', notes='No longer in SEARCH_QUERIES.' "
+                    "WHERE type='Search' AND method <> 'Retired' AND NOT (name = ANY(%s))",
+                    ([s[0] for s in SEARCH_SOURCES],))
+        retired = cur.rowcount
     conn.commit()
-    return added, updated
+    return added, updated, retired
 
 
 def classify(entry):
@@ -187,13 +194,16 @@ def item_exists(conn, url):
         return cur.fetchone() is not None
 
 
-def insert_item(conn, pillar, headline, summary, source_name, source_url, published, relevance):
+def insert_item(conn, pillar, headline, summary, source_name, source_url, published, relevance,
+                status="pending"):
+    """status 'filtered' records an item the model rated low relevance: kept out of the review
+    queue, but its link is remembered so later runs never pay to triage it again."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO collected_items (pillar, headline, summary, source_name, source_url, published, relevance, status) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,'pending')",
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             (pillar, headline, summary, source_name, source_url,
-             published.date() if published else None, relevance))
+             published.date() if published else None, relevance, status))
     conn.commit()
 
 
@@ -228,6 +238,8 @@ def run(conn, limit_sources=None):
                 continue
             if c.get("relevance") == "low":
                 low += 1
+                insert_item(conn, c.get("pillar"), c.get("headline") or e["title"], c.get("summary"),
+                            name, e["link"], e["published"], "low", status="filtered")
                 continue
             insert_item(conn, c.get("pillar"), c.get("headline") or e["title"],
                         c.get("summary"), name, e["link"], e["published"], c.get("relevance", "med"))
@@ -326,8 +338,9 @@ def main():
         return
     with psycopg.connect(dsn) as conn:
         if a.seed:
-            added, updated = seed_sources(conn)
-            print(f"Sources: {added} added, {updated} updated ({len(ALL_SOURCES)} in the registry).")
+            added, updated, retired = seed_sources(conn)
+            print(f"Sources: {added} added, {updated} updated, {retired} retired "
+                  f"({len(ALL_SOURCES)} in the registry).")
         if a.run:
             # Manual runs always go ahead; the Auto-collect toggle only governs the daily schedule.
             run(conn, a.limit)

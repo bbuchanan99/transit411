@@ -339,7 +339,7 @@ document.getElementById("askForm").onsubmit=e=>{e.preventDefault();const v=docum
 // ---- Collection tab ----
 let cFilter="pending";
 const cChips=document.getElementById("cChips");
-[["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"]].forEach(([k,lbl])=>{
+[["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"],["filtered","Auto-filtered"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="ex";b.textContent=lbl;
   b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadCollection();};
   if(k==="pending")b.style.borderColor="var(--accent)";cChips.appendChild(b);});
