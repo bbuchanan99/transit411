@@ -6,15 +6,33 @@ It allowlists a handful of safe read/ask endpoints and forwards them to the Comm
 Center; every other path (publish, approve, delete, upload, collect, ...) returns 404,
 so nothing that writes or mutates can be reached from the public internet.
 
+The two "ask" endpoints each cost a model call on your Anthropic account, so they are limited
+per visitor and per day, question size is capped, and they can be switched off entirely.
+
   uvicorn readonly_api:app --host 0.0.0.0 --port 8000
 Env: UPSTREAM_URL (default http://command-center:8080)
+     PUBLIC_ASK_ENABLED (default true), ASK_PER_IP_HOUR (20), ASK_PER_DAY (200), ASK_MAX_CHARS (500)
 """
+import json
 import os
+import time
+from collections import defaultdict, deque
+from datetime import datetime, timezone
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 UPSTREAM = os.environ.get("UPSTREAM_URL", "http://command-center:8080")
+
+# Spending limits for the model-backed endpoints (counts are in memory; a restart resets them).
+ASK_PATHS = {"/api/ask", "/api/cig/ask"}
+ASK_ENABLED = os.environ.get("PUBLIC_ASK_ENABLED", "true").lower() not in ("0", "false", "no", "off")
+ASK_PER_IP_HOUR = int(os.environ.get("ASK_PER_IP_HOUR", "20"))
+ASK_PER_DAY = int(os.environ.get("ASK_PER_DAY", "200"))
+ASK_MAX_CHARS = int(os.environ.get("ASK_MAX_CHARS", "500"))
+MAX_BODY = 16 * 1024
+_ip_hits = defaultdict(deque)       # visitor ip -> timestamps of asks in the last hour
+_day = {"date": None, "count": 0}   # asks today (UTC), across all visitors
 
 # (method, exact path) pairs that are safe to expose publicly.
 ALLOW = {
@@ -40,18 +58,62 @@ def health():
     return {"ok": True, "service": "readonly-api"}
 
 
+def _visitor(request):
+    # Only reachable through the tunnel (no published port), so Cloudflare's header is trustworthy.
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "unknown")
+
+
+def _check_ask(request, body):
+    """Enforce the ask limits and return a trimmed request body (question + at most 6 short turns)."""
+    if not ASK_ENABLED:
+        raise HTTPException(503, "Questions are turned off right now.")
+    try:
+        data = json.loads(body or b"{}")
+        q = data.get("question")
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "Send JSON with a 'question'.")
+    if not isinstance(q, str) or not q.strip():
+        raise HTTPException(400, "Send JSON with a 'question'.")
+    if len(q) > ASK_MAX_CHARS:
+        raise HTTPException(400, f"Please keep questions under {ASK_MAX_CHARS} characters.")
+    hist = data.get("history") if isinstance(data.get("history"), list) else []
+    hist = [{"question": str(t.get("question") or "")[:ASK_MAX_CHARS], "sql": str(t.get("sql") or "")[:4000]}
+            for t in hist[-6:] if isinstance(t, dict)]
+    now = time.time()
+    today = datetime.now(timezone.utc).date()
+    if _day["date"] != today:
+        _day["date"], _day["count"] = today, 0
+    if _day["count"] >= ASK_PER_DAY:
+        raise HTTPException(429, "Today's question limit has been reached. Please try again tomorrow.",
+                            headers={"Retry-After": "3600"})
+    hits = _ip_hits[_visitor(request)]
+    while hits and hits[0] < now - 3600:
+        hits.popleft()
+    if len(hits) >= ASK_PER_IP_HOUR:
+        raise HTTPException(429, "You've asked a lot of questions this hour. Please try again a bit later.",
+                            headers={"Retry-After": str(int(hits[0] + 3600 - now) + 1)})
+    hits.append(now)
+    _day["count"] += 1
+    return json.dumps({"question": q.strip(), "history": hist}).encode()
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def proxy(path: str, request: Request):
     full = "/" + path
     if (request.method, full) not in ALLOW:
         raise HTTPException(status_code=404, detail="Not found")
     body = await request.body()
+    if len(body) > MAX_BODY:
+        raise HTTPException(413, "Request too large.")
+    if full in ASK_PATHS:
+        body = _check_ask(request, body)
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             up = await client.request(
                 request.method, UPSTREAM + full,
                 params=dict(request.query_params), content=body,
-                headers={"content-type": request.headers.get("content-type", "application/json")},
+                headers={"content-type": "application/json" if full in ASK_PATHS
+                         else request.headers.get("content-type", "application/json")},
             )
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Upstream unreachable")

@@ -113,21 +113,36 @@ services:
 
   # Read-only public API: the ONLY thing the Cloudflare tunnel exposes. It allowlists the safe
   # read/ask endpoints and forwards them to the Command Center; everything else returns 404.
+  # No published port: reachable only by the tunnel (and the other containers).
   readonly-api:
     build: .
     restart: unless-stopped
     command: ["uvicorn", "readonly_api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       - UPSTREAM_URL=http://command-center:8080
+      # Limits for the two model-backed "ask" endpoints (each question costs an Anthropic call).
+      - PUBLIC_ASK_ENABLED=${PUBLIC_ASK_ENABLED:-true}
+      - ASK_PER_IP_HOUR=${ASK_PER_IP_HOUR:-20}
+      - ASK_PER_DAY=${ASK_PER_DAY:-200}
+      - ASK_MAX_CHARS=${ASK_MAX_CHARS:-500}
+    networks: [default, public]
     depends_on:
       - command-center
 
   # Cloudflare Tunnel: dials out to Cloudflare (no open ports) and serves your public API hostname.
   # Put the tunnel token in .env as CLOUDFLARE_TUNNEL_TOKEN. In the Cloudflare dashboard, set the
   # tunnel's Public Hostname (e.g. api.transit411.com) to service http://readonly-api:8000.
+  # It sits on its own "public" network with readonly-api only, so a hostname misconfigured in the
+  # dashboard still can't reach the Command Center, the database or the NTD API.
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN}"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}   # env var, so the token isn't in the NAS's process list
+    networks: [public]
     depends_on:
       - readonly-api
+
+networks:
+  public: {}
