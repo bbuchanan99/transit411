@@ -78,3 +78,19 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .foot-cols a{color:var(--ink);font-weight:600}
 .preview-note{font-family:'Archivo',sans-serif;font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:1px}
 @media (max-width:720px){.lead h1{font-size:32px}.brand{font-size:32px}.lead,.rail{border-right:none}}
+
+/* section + data pages */
+.section-page{padding-top:30px;padding-bottom:24px}
+.section-title{font-family:'Archivo',sans-serif;font-size:34px;font-weight:800;letter-spacing:-1px;margin:0;border-bottom:3px solid var(--ink);padding-bottom:12px}
+.section-blurb{color:var(--muted);font-size:15px;line-height:1.55;margin:12px 0 22px;max-width:700px}
+.post-list{display:flex;flex-direction:column}
+.post{padding:20px 0;border-bottom:1px solid var(--line-soft)}
+.post-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+.post-title{font-family:'Archivo',sans-serif;font-size:22px;font-weight:700;line-height:1.25;margin:0 0 8px}
+.post-title a{color:var(--ink)}
+.post-deck{font-size:16px;line-height:1.55;color:var(--muted);margin:0}
+.data-hub{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin:20px 0}
+.data-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px}
+.data-card h3{font-size:19px;font-weight:800;margin:0 0 8px}
+.data-card p{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 12px}
+.data-card .cta{font-family:'Archivo',sans-serif;font-size:13px;font-weight:800;color:var(--accent)}

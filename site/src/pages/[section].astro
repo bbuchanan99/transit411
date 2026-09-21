@@ -1,0 +1,28 @@
+---
+import Base from "../layouts/Base.astro";
+import { SECTIONS, getPosts } from "../lib/content.js";
+
+export function getStaticPaths() {
+  return Object.keys(SECTIONS).map((section) => ({ params: { section } }));
+}
+
+const { section } = Astro.params;
+const meta = SECTIONS[section];
+const posts = getPosts(meta.pillar);
+---
+<Base title={meta.label + " — Transit411"}>
+  <div class="wrap section-page">
+    <h1 class="section-title disp">{meta.label}</h1>
+    <p class="section-blurb">{meta.blurb}</p>
+    <div class="post-list">
+      {posts.map((p) => (
+        <article class="post">
+          <div class="post-k">{p.pillar}</div>
+          <h2 class="post-title"><a href="#">{p.title}</a></h2>
+          <p class="post-deck">{p.deck}</p>
+        </article>
+      ))}
+      {posts.length === 0 && <p class="section-blurb">No items yet.</p>}
+    </div>
+  </div>
+</Base>
