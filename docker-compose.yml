@@ -24,3 +24,30 @@ services:
       - ${DATA_DIR:-/share/Container/transit411/data}:/data
     ports:
       - "8000:8000"
+
+  # Content store: Postgres + pgvector (collection queue, sources, posts, subscribers).
+  # No published port: only the other containers can reach it.
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=transit411
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-transit411}
+      - POSTGRES_DB=transit411
+    volumes:
+      - ${DATA_DIR:-/share/Container/transit411/data}/postgres:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  # The private home-base dashboard (LAN only). Published on 8088 because QNAP's own admin UI owns 8080.
+  command-center:
+    build: .
+    restart: unless-stopped
+    command: ["uvicorn", "command_center:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      - API_URL=http://api:8000
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+    ports:
+      - "8088:8080"
+    depends_on:
+      - api
+      - db
