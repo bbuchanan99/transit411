@@ -62,6 +62,53 @@ def ask(a: Ask):
     return r.json()
 
 
+def _db():
+    if not psycopg:
+        raise HTTPException(500, "psycopg not installed")
+    return psycopg.connect(DATABASE_URL, connect_timeout=5)
+
+
+@app.get("/api/collection")
+def collection(status: str = "pending"):
+    from collection import freshness
+    items = []
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute(
+                "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, relevance, status "
+                "FROM collected_items WHERE status=%s ORDER BY collected_at DESC LIMIT 200", (status,))
+            names = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                it = dict(zip(names, row))
+                st, sc = freshness(it.get("published"), it.get("deadline"))
+                it["fresh_status"], it["fresh_score"] = st, sc
+                it["published"] = it["published"].isoformat() if it.get("published") else None
+                it["deadline"] = it["deadline"].isoformat() if it.get("deadline") else None
+                items.append(it)
+            cur.execute("SELECT status, count(*) FROM collected_items GROUP BY status")
+            counts = {row[0]: row[1] for row in cur.fetchall()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    items.sort(key=lambda x: x["fresh_score"], reverse=True)
+    return {"items": items, "counts": counts}
+
+
+@app.post("/api/collection/{item_id}/{action}")
+def collection_action(item_id: int, action: str):
+    mapping = {"approve": "approved", "skip": "skipped", "publish": "published", "reset": "pending"}
+    if action not in mapping:
+        raise HTTPException(400, "unknown action")
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("UPDATE collected_items SET status=%s WHERE id=%s", (mapping[action], item_id))
+            c.commit()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"id": item_id, "status": mapping[action]}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -135,7 +182,11 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div class="askhead"><div class="examples" id="ex"></div><div><span class="follow" id="follow">Following your thread</span> <button class="newq" id="newq" type="button">New question</button></div></div>
     <div id="out"></div>
   </div>
-  <div class="panel" id="p-collect"><div class="soon">Collection queue - phase 2b. Reads/writes the Postgres store; approvals publish to the site.</div></div>
+  <div class="panel" id="p-collect">
+    <div class="askhead"><div><h2 class="disp">Collection queue</h2><p class="lead">Items the engine gathered, freshest first - approve what runs, skip the rest. Populate with the collector job.</p></div><button class="newq" id="cRefresh" type="button">Refresh</button></div>
+    <div class="examples" id="cChips"></div>
+    <div id="cOut"></div>
+  </div>
   <div class="panel" id="p-sources"><div class="soon">Source registry - phase 2b. The watchlist that feeds the collection engine.</div></div>
   <div class="panel" id="p-publish"><div class="soon">Publishing & newsletter - phase 2b. Draft, schedule, push approved items to the public site.</div></div>
 </div>
@@ -238,5 +289,46 @@ async function doAsk(q){
   }catch(e){const pend=document.getElementById("pending");if(pend)pend.remove();document.getElementById("out").insertAdjacentHTML("beforeend",'<div class="rcard"><div class="err">Could not reach the API.</div></div>');}
 }
 document.getElementById("askForm").onsubmit=e=>{e.preventDefault();const v=document.getElementById("q").value.trim();if(v)doAsk(v);};
+// ---- Collection tab ----
+let cFilter="pending";
+const cChips=document.getElementById("cChips");
+[["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"]].forEach(([k,lbl])=>{
+  const b=document.createElement("button");b.className="ex";b.textContent=lbl;
+  b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadCollection();};
+  if(k==="pending")b.style.borderColor="var(--accent)";cChips.appendChild(b);});
+document.getElementById("cRefresh").onclick=loadCollection;
+document.querySelector('.tab[data-t="collect"]').addEventListener("click",loadCollection);
+const FCOLOR={Live:"#C0341F",Fresh:"#1F6B4A",Recent:"#1F6B7A",Aging:"#B07A1E",Stale:"#6A6458",Developing:"#3D5C8F",Expired:"#6A6458"};
+function esc(s){return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+async function loadCollection(){
+  const out=document.getElementById("cOut");
+  out.innerHTML='<div class="rcard"><div class="loading">Loading the queue...</div></div>';
+  try{
+    const r=await fetch("/api/collection?status="+cFilter);
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(await r.text())+'</div></div>';return;}
+    const d=await r.json();
+    if(!d.items||!d.items.length){out.innerHTML='<div class="rcard"><div class="loading">Nothing '+cFilter+'. Populate with: docker compose run --rm collect --run</div></div>';return;}
+    out.innerHTML=d.items.map(cCard).join("");
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not reach the queue.</div></div>';}
+}
+function cCard(it){
+  const fc=FCOLOR[it.fresh_status]||"#6A6458";const acted=cFilter!=="pending";
+  return '<div class="rcard" style="padding:16px 18px">'
+    +'<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase">'
+    +'<span style="color:var(--accent)">'+esc(it.pillar)+'</span>'
+    +'<span style="color:'+fc+';border:1px solid '+fc+';border-radius:999px;padding:2px 8px">'+esc(it.fresh_status)+'</span>'
+    +'<span style="color:var(--muted)">'+esc(it.relevance)+' relevance</span></div>'
+    +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:17px;line-height:1.3;margin-bottom:6px">'+esc(it.headline)+'</div>'
+    +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
+    +'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
+    +'<b style="color:var(--ink)">'+esc(it.source_name)+'</b>'+(it.published?'<span>'+esc(it.published)+'</span>':'')
+    +(it.source_url?'<a href="'+esc(it.source_url)+'" target="_blank" rel="noopener">source</a>':'')+'</div>'
+    +'<div style="display:flex;gap:8px;margin-top:12px">'
+    +(acted?'<button class="ex" data-id="'+it.id+'" data-act="reset">Return to pending</button>'
+           :'<button class="go" style="padding:9px 18px" data-id="'+it.id+'" data-act="approve">Approve</button><button class="ex" data-id="'+it.id+'" data-act="skip">Skip</button>')
+    +'</div></div>';
+}
+async function cAct(id,action){try{await fetch("/api/collection/"+id+"/"+action,{method:"POST"});loadCollection();}catch(e){}}
+document.getElementById("cOut").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(b)cAct(b.dataset.id,b.dataset.act);});
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""

@@ -57,3 +57,17 @@ services:
     depends_on:
       - api
       - db
+
+  # Collector: fetch sources, summarize, score freshness, write pending items to Postgres.
+  #   docker compose run --rm collect --seed     (once)
+  #   docker compose run --rm collect --run
+  collect:
+    build: .
+    profiles: ["tools"]
+    environment:
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - COLLECT_MODEL=${COLLECT_MODEL:-claude-haiku-4-5}
+    depends_on:
+      - db
+    entrypoint: ["python", "collection.py"]
