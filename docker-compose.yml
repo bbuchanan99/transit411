@@ -52,6 +52,10 @@ services:
     environment:
       - API_URL=http://api:8000
       - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - CIG_PDF_DIR=/data/cig
+    volumes:
+      # Kept copies of every loaded CIG dashboard PDF (Grants tab > Dashboard files).
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig
     ports:
       - "8088:8080"
     depends_on:
@@ -97,6 +101,9 @@ services:
     profiles: ["tools"]
     environment:
       - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - CIG_PDF_DIR=/data/cig
+    volumes:
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig
     depends_on:
       - db
     entrypoint: ["python", "cig.py"]

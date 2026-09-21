@@ -88,3 +88,10 @@ CREATE TABLE IF NOT EXISTS cig_projects (
 -- Versioned: one row per project per monthly snapshot.
 CREATE UNIQUE INDEX IF NOT EXISTS cig_uniq ON cig_projects (snapshot_date, project_name, sponsor);
 CREATE INDEX IF NOT EXISTS cig_proj_idx ON cig_projects (project_name);
+
+-- Every CIG dashboard load or refusal (Grants tab > Dashboard files); loaded PDFs are kept on disk.
+CREATE TABLE IF NOT EXISTS cig_loads (
+  id BIGSERIAL PRIMARY KEY, loaded_at TIMESTAMPTZ DEFAULT now(), snapshot_date DATE,
+  source TEXT, name TEXT, status TEXT, projects INTEGER, message TEXT,
+  file_path TEXT, file_bytes INTEGER, sha256 TEXT
+);

@@ -199,6 +199,117 @@ def load(conn, rows, snap):
     return len(unique)
 
 
+# ---- Load history: every dashboard load (or refusal) and a kept copy of its PDF ------------------
+PDF_DIR = os.environ.get("CIG_PDF_DIR", "/data/cig")
+
+
+def create_loads_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS cig_loads (
+            id BIGSERIAL PRIMARY KEY, loaded_at TIMESTAMPTZ DEFAULT now(), snapshot_date DATE,
+            source TEXT, name TEXT, status TEXT, projects INTEGER, message TEXT,
+            file_path TEXT, file_bytes INTEGER, sha256 TEXT)""")
+    conn.commit()
+
+
+def keep_pdf(body, snap):
+    """Save a copy of the dashboard PDF as <snapshot>_<hash>.pdf in PDF_DIR. Returns (path, sha256),
+    or (None, sha256) if the folder isn't available (the load still goes ahead)."""
+    import hashlib
+    sha = hashlib.sha256(body).hexdigest()
+    try:
+        os.makedirs(PDF_DIR, exist_ok=True)
+        path = os.path.join(PDF_DIR, f"{snap or 'undated'}_{sha[:10]}.pdf")
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                f.write(body)
+        return path, sha
+    except OSError:
+        return None, sha
+
+
+def record_load(conn, snap, source, name, status, projects=None, message=None, body=None):
+    """Log a load attempt in cig_loads, keeping the PDF when it loaded. Never raises: history
+    bookkeeping must not break a load."""
+    try:
+        path, sha = keep_pdf(body, snap) if (body and status == "loaded") else (None, None)
+        create_loads_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO cig_loads (snapshot_date, source, name, status, projects, message, file_path, "
+                        "file_bytes, sha256) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (snap, source, (name or "")[:500], status, projects, (message or "")[:500] or None,
+                         path, len(body) if body else None, sha))
+        conn.commit()
+    except Exception as e:
+        print(f"(could not record load history: {type(e).__name__}: {e})")
+
+
+# ---- Month-over-month changes ---------------------------------------------------------------------
+PHASE_ORDER = {"PD": 1, "Eng": 2, "FFGA": 3, "CGA": 3, "Const": 4}
+CHANGE_FIELDS = [("phase", "phase"), ("rating", "rating"), ("cost_musd", "cost"), ("cig_request_musd", "CIG request"),
+                 ("cig_share", "CIG share"), ("est_grant", "est. grant"), ("noncig_status", "local match")]
+
+
+def snapshots(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('cig_projects') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            return []
+        cur.execute("SELECT snapshot_date, count(*) FROM cig_projects GROUP BY 1 ORDER BY 1 DESC")
+        return [(d.isoformat(), n) for d, n in cur.fetchall()]
+
+
+def changes(conn, to_snap=None, from_snap=None):
+    """Differences between two snapshots, matched on (project_name, sponsor): new and dropped projects,
+    and per-field changes. Defaults: latest snapshot vs the one before it. A project FTA renames shows
+    up as one dropped + one new."""
+    snaps = [s for s, _ in snapshots(conn)]
+    if len(snaps) < 2:
+        return {"snapshots": snaps, "from": None, "to": snaps[0] if snaps else None, "changes": []}
+    to_snap = to_snap if to_snap in snaps else snaps[0]
+    older = [s for s in snaps if s < to_snap]
+    from_snap = from_snap if from_snap in older else (older[0] if older else None)
+    if not from_snap:
+        return {"snapshots": snaps, "from": None, "to": to_snap, "changes": []}
+    cols = ["project_name", "sponsor", "city", "state", "mode"] + [f for f, _ in CHANGE_FIELDS]
+    rows = {}
+    with conn.cursor() as cur:
+        for snap in (from_snap, to_snap):
+            cur.execute(f"SELECT {', '.join(cols)} FROM cig_projects WHERE snapshot_date=%s", (snap,))
+            rows[snap] = {(r[0], r[1]): dict(zip(cols, r)) for r in cur.fetchall()}
+    a, b = rows[from_snap], rows[to_snap]
+    num = lambda v: float(v) if v is not None else None
+    out = []
+    for key in sorted(set(a) | set(b), key=lambda k: (k[0] or "").lower()):
+        pa, pb = a.get(key), b.get(key)
+        p = pb or pa
+        base = {"project_name": p["project_name"], "sponsor": p["sponsor"], "state": p["state"], "mode": p["mode"]}
+        if pa is None:
+            out.append({**base, "type": "new", "detail": {"phase": pb["phase"], "cig_request_musd": num(pb["cig_request_musd"])}})
+            continue
+        if pb is None:
+            out.append({**base, "type": "dropped", "detail": {"phase": pa["phase"], "cig_request_musd": num(pa["cig_request_musd"])}})
+            continue
+        for field, label in CHANGE_FIELDS:
+            va, vb = pa[field], pb[field]
+            if field.endswith("_musd"):
+                va, vb = num(va), num(vb)
+            if va == vb:
+                continue
+            ch = {**base, "type": field, "label": label, "before": va, "after": vb}
+            if field == "phase":
+                oa, ob = PHASE_ORDER.get(va or ""), PHASE_ORDER.get(vb or "")
+                ch["direction"] = "advanced" if (oa and ob and ob > oa) else "back" if (oa and ob and ob < oa) else None
+            if field.endswith("_musd") and va is not None and vb is not None:
+                ch["delta"] = round(vb - va, 1)
+                ch["pct"] = round((vb - va) / va * 100, 1) if va else None
+            out.append(ch)
+    order = {"new": 0, "dropped": 1, "phase": 2, "rating": 3, "est_grant": 4, "cig_request_musd": 5,
+             "cost_musd": 6, "cig_share": 7, "noncig_status": 8}
+    out.sort(key=lambda c: (order.get(c["type"], 9), (c["project_name"] or "").lower()))
+    return {"snapshots": snaps, "from": from_snap, "to": to_snap, "changes": out}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file")
@@ -220,8 +331,16 @@ def main():
     print(f"Parsed {len(rows)} projects (snapshot {snap}).")
     import psycopg
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
+    with open(path, "rb") as f:
+        body = f.read()
     with psycopg.connect(dsn) as conn:
-        n = load(conn, rows, snap)
+        try:
+            n = load(conn, rows, snap)
+        except SystemExit as e:  # the too-few-rows safeguard: log the refusal, then report it
+            conn.rollback()
+            record_load(conn, snap, "command line", src, "refused", len(rows), str(e))
+            raise
+        record_load(conn, snap, "command line", src, "loaded", n, body=body)
     print(f"Loaded {n} projects as snapshot {snap} (other snapshots preserved).")
 
 

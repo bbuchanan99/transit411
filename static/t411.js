@@ -86,5 +86,83 @@
     el.innerHTML = '<div class="t411-tl">' + rows + '</div>';
   }
 
-  window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline };
+  // "What changed" between two dashboard snapshots (from /api/cig/changes). opts.onProject(name, sponsor)
+  // is called when a project name is clicked; opts.headerExtra is HTML placed in the header (e.g. a
+  // compare-with selector).
+  const KIND = {
+    new: ["New", "t411-k-new"], dropped: ["Dropped", "t411-k-drop"], phase: ["Phase", "t411-k-phase"],
+    rating: ["Rating", "t411-k-rating"], est_grant: ["Grant date", "t411-k-date"], cig_request_musd: ["CIG request", "t411-k-money"],
+    cost_musd: ["Cost", "t411-k-money"], cig_share: ["CIG share", "t411-k-money"], noncig_status: ["Local match", "t411-k-date"]
+  };
+  function day(iso) {
+    if (!iso) return "?";
+    const d = new Date(iso + "T12:00:00");
+    return isNaN(d) ? esc(iso) : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  }
+  function val(v, money) { return v == null || v === "" ? "—" : money ? amt(v) : esc(v); }
+  function changeText(c) {
+    const d = c.detail || {};
+    if (c.type === "new") return "entered the pipeline" + (d.phase ? " in " + esc(d.phase) : "") + (d.cig_request_musd != null ? " · CIG " + amt(d.cig_request_musd) : "");
+    if (c.type === "dropped") return "no longer listed" + (d.phase ? " (was " + esc(d.phase) + (d.cig_request_musd != null ? ", CIG " + amt(d.cig_request_musd) : "") + ")" : "");
+    const money = c.type.endsWith("_musd");
+    let t = val(c.before, money) + " → " + val(c.after, money);
+    if (c.type === "phase" && c.direction) t += c.direction === "advanced" ? " (advanced)" : " (moved back)";
+    if (money && c.delta != null) t += " (" + (c.delta > 0 ? "+" : c.delta < 0 ? "-" : "") + amt(Math.abs(c.delta)) + (c.pct != null ? ", " + (c.pct > 0 ? "+" : "") + c.pct + "%" : "") + ")";
+    return t;
+  }
+  function renderCigChanges(el, data, opts) {
+    opts = opts || {};
+    data = data || {};
+    const head = '<div class="t411-ch-head"><div class="t411-ch-title">What changed'
+      + (data.from ? ' <span class="t411-ch-range">' + day(data.from) + ' → ' + day(data.to) + '</span>' : '') + '</div>'
+      + (opts.headerExtra || "") + '</div>';
+    if (!data.from) {
+      el.innerHTML = '<div class="t411-card t411-ch">' + head + '<div class="t411-empty">'
+        + ((data.snapshots || []).length ? "Only one dashboard loaded so far — changes appear once a second month is loaded."
+                                         : "No dashboards loaded yet.") + '</div></div>';
+      return;
+    }
+    const list = data.changes || [];
+    const counts = {};
+    list.forEach(c => { counts[c.type] = (counts[c.type] || 0) + 1; });
+    const summary = Object.keys(KIND).filter(k => counts[k]).map(k =>
+      '<span class="t411-badge ' + KIND[k][1] + '">' + counts[k] + ' ' + KIND[k][0].toLowerCase() + '</span>').join(" ");
+    const rows = list.map(c => {
+      const k = KIND[c.type] || [c.label || c.type, ""];
+      const dirCls = c.direction === "back" ? " t411-k-back" : "";
+      return '<div class="t411-ch-row"><span class="t411-badge ' + k[1] + dirCls + '">' + esc(k[0]) + '</span>'
+        + '<span class="t411-ch-main"><button type="button" class="t411-ch-proj" data-name="' + esc(c.project_name) + '" data-sponsor="' + esc(c.sponsor || "") + '">'
+        + esc(c.project_name) + '</button> <span class="t411-ch-sub">' + esc(c.sponsor || "") + (c.state ? ", " + esc(c.state) : "") + '</span>'
+        + '<span class="t411-ch-what">' + changeText(c) + '</span></span></div>';
+    }).join("");
+    el.innerHTML = '<div class="t411-card t411-ch">' + head
+      + (list.length ? '<div class="t411-ch-sum">' + summary + '</div>' + rows
+                     : '<div class="t411-empty">No changes between these two dashboards.</div>') + '</div>';
+    if (!el._t411ChBound) {
+      el._t411ChBound = true;
+      el.addEventListener("click", e => {
+        const b = e.target.closest(".t411-ch-proj");
+        if (b && el._t411ChOpts && el._t411ChOpts.onProject) el._t411ChOpts.onProject(b.dataset.name, b.dataset.sponsor);
+      });
+    }
+    el._t411ChOpts = opts;
+  }
+
+  // Open (and scroll to) a project's row in a table drawn by renderCigTable. Returns false if it
+  // isn't in the table (e.g. filtered out, or a dropped project).
+  function openCigProject(tableEl, name, sponsor) {
+    const st = tableEl._t411;
+    if (!st) return false;
+    const i = st.projects.findIndex(p => p.project_name === name && (p.sponsor || "") === (sponsor || ""));
+    if (i < 0) return false;
+    const row = tableEl.querySelector('.t411-row[data-i="' + i + '"]');
+    const det = tableEl.querySelector('.t411-detail[data-i="' + i + '"]');
+    if (det && det.hidden) row.click();
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("t411-flash");
+    setTimeout(() => row.classList.remove("t411-flash"), 1600);
+    return true;
+  }
+
+  window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject };
 })();

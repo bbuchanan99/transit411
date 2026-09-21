@@ -433,39 +433,106 @@ async def cig_upload(request: Request, filename: str = ""):
     body = await request.body()
     if len(body) > MAX_CIG_PDF:
         raise HTTPException(413, "That file is over 25 MB; the CIG dashboard PDF is much smaller.")
-    return await _load_cig_pdf(body, filename, "file name")
+    return await _load_cig_pdf(body, filename, "file name", "upload", filename)
 
 
-async def _load_cig_pdf(body, name, what):
+async def _load_cig_pdf(body, name, what, source, label):
     """Parse a dashboard PDF and load it as the snapshot dated in `name` (upload file name or link).
     Shared by upload and load-from-link; cig.load's safeguard refuses a PDF that parses to too few
-    projects, leaving the pipeline as it was."""
+    projects, leaving the pipeline as it was. Every attempt is logged in cig_loads (source/label say
+    where it came from) and a loaded PDF is kept for the Dashboard files list."""
     import asyncio
     import tempfile
     import cig
     if not body.startswith(b"%PDF"):
         raise HTTPException(400, "That isn't a PDF. Use the CIG dashboard PDF from transit.dot.gov/CIG.")
+    snap = cig.date_in(name)
+    snap_used = snap or cig.snapshot_date("")
 
     def parse_and_load():
         with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
             f.write(body)
             f.flush()
             rows = cig.parse_pdf(f.name)
-        snap = cig.date_in(name)
         with _db() as c:
-            n = cig.load(c, rows, snap or cig.snapshot_date(""))
-        return n, snap
+            try:
+                n = cig.load(c, rows, snap_used)
+            except SystemExit as e:
+                c.rollback()
+                cig.record_load(c, snap_used, source, label, "refused", len(rows), str(e))
+                raise
+            cig.record_load(c, snap_used, source, label, "loaded", n, body=body)
+        return n
 
     try:
-        n, snap = await asyncio.to_thread(parse_and_load)  # parsing takes a few seconds; keep the server responsive
+        n = await asyncio.to_thread(parse_and_load)  # parsing takes a few seconds; keep the server responsive
     except SystemExit as e:  # cig.load's "too few projects" safeguard
         raise HTTPException(422, str(e))
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(422, f"Couldn't read that PDF ({type(e).__name__}: {e}). The current pipeline is unchanged.")
+        msg = f"Couldn't read that PDF ({type(e).__name__}: {e}). The current pipeline is unchanged."
+        try:
+            with _db() as c:
+                cig.record_load(c, snap_used, source, label, "refused", None, msg)
+        except Exception:
+            pass
+        raise HTTPException(422, msg)
     return {"projects": n, "snapshot": snap,
             "note": None if snap else f"No date in the {what}, so today's date was used as the snapshot date."}
+
+
+@app.get("/api/cig/changes")
+def cig_changes(to: Optional[str] = None, since: Optional[str] = None):
+    """What changed between two snapshots (default: latest vs the previous one)."""
+    import cig as cigmod
+    try:
+        with _db() as c:
+            return cigmod.changes(c, to, since)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.get("/api/cig/loads")
+def cig_loads():
+    """Every dashboard load or refusal, newest first, for the Dashboard files list."""
+    import cig as cigmod
+    try:
+        with _db() as c, c.cursor() as cur:
+            cigmod.create_loads_table(c)
+            cur.execute("SELECT id, to_char(loaded_at AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI'), "
+                        "to_char(snapshot_date,'YYYY-MM-DD'), source, name, status, projects, message, "
+                        "file_path IS NOT NULL, file_bytes FROM cig_loads ORDER BY loaded_at DESC, id DESC LIMIT 200")
+            keys = ["id", "loaded_at", "snapshot_date", "source", "name", "status", "projects", "message",
+                    "has_file", "file_bytes"]
+            return {"loads": [dict(zip(keys, r)) for r in cur.fetchall()]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.get("/api/cig/loads/{load_id}/file")
+def cig_load_file(load_id: int):
+    """The kept copy of a loaded dashboard PDF."""
+    import cig as cigmod
+    from fastapi.responses import FileResponse
+    try:
+        with _db() as c, c.cursor() as cur:
+            cigmod.create_loads_table(c)
+            cur.execute("SELECT file_path, snapshot_date FROM cig_loads WHERE id=%s", (load_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    base = os.path.realpath(cigmod.PDF_DIR)
+    path = os.path.realpath(row[0]) if row and row[0] else None
+    # Only ever serve files from the kept-PDF folder.
+    if not path or not path.startswith(base + os.sep) or not os.path.isfile(path):
+        raise HTTPException(404, "No kept copy of that file.")
+    return FileResponse(path, media_type="application/pdf",
+                        filename=f"CIG-Dashboard-{row[1].isoformat() if row[1] else 'undated'}.pdf")
 
 
 class CigLink(BaseModel):
@@ -513,7 +580,7 @@ async def cig_load_url(link: CigLink):
         raise
     except requests.RequestException as e:
         raise HTTPException(502, f"Couldn't download that link ({type(e).__name__}).")
-    return await _load_cig_pdf(body, u.path, "link")
+    return await _load_cig_pdf(body, u.path, "link", "link", url)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -649,6 +716,11 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     </form>
     <div id="gMsg"></div>
     <div id="gSummary" style="margin-bottom:14px"></div>
+    <div id="gChanges"></div>
+    <details class="rcard" id="gLoadsBox" style="padding:0 18px;margin-bottom:14px">
+      <summary style="padding:13px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px;cursor:pointer">Dashboard files <span id="gLoadsCount" style="font-weight:600;color:var(--muted)"></span></summary>
+      <div id="gLoads" style="padding-bottom:12px"></div>
+    </details>
     <div class="examples" id="gChips"></div>
     <div id="gOut"></div>
   </div>
@@ -931,6 +1003,7 @@ function gStat(v,l){return '<div><div style="font-family:Archivo,sans-serif;font
 async function loadCIG(){
   const out=document.getElementById("gOut"),sum=document.getElementById("gSummary");
   out.innerHTML='<div class="rcard"><div class="loading">Loading the pipeline...</div></div>';
+  loadChanges();loadLoads();
   try{
     const q=gPhase?("?phase="+encodeURIComponent(gPhase)):"";
     const d=await (await fetch("/api/cig"+q)).json();
@@ -947,6 +1020,49 @@ async function loadCIG(){
     // Shared component (static/t411.js): the same table, milestones and history the public site uses.
     T411.renderCigTable(out, d.projects);
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load the pipeline.</div></div>';}
+}
+
+// ---- What changed (shared component) ----
+let gSince="";
+async function loadChanges(){
+  const box=document.getElementById("gChanges");
+  try{
+    const r=await fetch("/api/cig/changes"+(gSince?"?since="+encodeURIComponent(gSince):""));
+    if(!r.ok){box.innerHTML="";return;}
+    const d=await r.json();
+    const older=(d.snapshots||[]).filter(s=>d.to&&s<d.to);
+    const sel=older.length>1?'<label style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">Compare with '
+      +'<select id="gSince" style="font-family:Archivo,sans-serif;font-size:12px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--card)">'
+      +older.map(s=>'<option value="'+esc(s)+'"'+(s===d.from?" selected":"")+'>'+esc(s)+(s===older[0]?" (previous)":"")+'</option>').join("")+'</select></label>':"";
+    T411.renderCigChanges(box,d,{headerExtra:sel,onProject:(name,sponsor)=>{
+      if(!T411.openCigProject(document.getElementById("gOut"),name,sponsor))
+        gNote("loading",name+" isn't in the current table"+(gPhase?" (try All phases)":" (it was dropped from the latest dashboard)")+".");
+    }});
+    const s=document.getElementById("gSince");if(s)s.onchange=e=>{gSince=e.target.value;loadChanges();};
+  }catch(e){box.innerHTML="";}
+}
+
+// ---- Dashboard files: every load or refusal, with the kept PDF ----
+const GSRC={upload:"Upload",link:"Link","command line":"Command line","before tracking":"Before tracking"};
+function gSize(b){return b?(b/1048576).toFixed(1)+" MB":"";}
+async function loadLoads(){
+  const box=document.getElementById("gLoads"),cnt=document.getElementById("gLoadsCount");
+  try{
+    const r=await fetch("/api/cig/loads");if(!r.ok){box.innerHTML='<div class="err">Could not load the file list.</div>';return;}
+    const d=await r.json(),L=d.loads||[];
+    cnt.textContent="("+L.length+")";
+    if(!L.length){box.innerHTML='<div class="loading" style="padding:0">No dashboard loads recorded yet.</div>';return;}
+    box.innerHTML='<div class="t411-scroll" style="padding:0"><table class="t411-table"><thead><tr><th>Loaded</th><th>Snapshot</th><th>How</th><th>File / link</th><th>Projects</th><th>Result</th><th>PDF</th></tr></thead><tbody>'
+      +L.map(x=>{
+        const url=safeUrl(x.name);
+        const name=url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" title="'+esc(x.name)+'">'+esc(x.name.split("/").pop())+'</a>':esc(x.name||"-");
+        const ok=x.status==="loaded";
+        const res=ok?'<span style="color:#1F6B4A;font-weight:700">Loaded</span>'
+          :'<span style="color:var(--accent);font-weight:700" title="'+esc(x.message||"")+'">Refused</span> <span style="color:var(--muted);white-space:normal">'+esc((x.message||"").split(";")[0])+'</span>';
+        const pdf=x.has_file?'<a href="/api/cig/loads/'+x.id+'/file" target="_blank" rel="noopener">Open</a> <span style="color:var(--muted)">'+gSize(x.file_bytes)+'</span>':'<span style="color:var(--muted)">-</span>';
+        return '<tr><td>'+esc(x.loaded_at)+'</td><td>'+esc(x.snapshot_date||"-")+'</td><td>'+esc(GSRC[x.source]||x.source||"-")+'</td><td>'+name+'</td><td class="num">'+(x.projects!=null?x.projects:"-")+'</td><td>'+res+'</td><td>'+pdf+'</td></tr>';
+      }).join("")+'</tbody></table></div>';
+  }catch(e){box.innerHTML='<div class="err">Could not load the file list.</div>';}
 }
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""
