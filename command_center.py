@@ -145,6 +145,81 @@ def set_auto_collect(t: Toggle):
         raise HTTPException(502, f"DB error: {e}")
 
 
+@app.get("/api/publish/ready")
+def publish_ready():
+    items = []
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT id, pillar, headline, summary, source_name, source_url, published "
+                        "FROM collected_items WHERE status='approved' ORDER BY collected_at DESC LIMIT 200")
+            names = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                it = dict(zip(names, row))
+                it["published"] = it["published"].isoformat() if it.get("published") else None
+                items.append(it)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"items": items}
+
+
+@app.post("/api/publish/{item_id}")
+def publish_item(item_id: int):
+    import re
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT pillar, headline, summary, source_name, source_url "
+                        "FROM collected_items WHERE id=%s AND status='approved'", (item_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no approved item with that id")
+            pillar, headline, summary, source_name, source_url = row
+            base = re.sub(r"[^a-z0-9]+", "-", (headline or "post").lower()).strip("-")[:60] or "post"
+            slug = f"{base}-{item_id}"
+            body = summary or ""
+            if source_url:
+                body += f"\n\nSource: {source_name or ''} - {source_url}"
+            cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at) "
+                        "VALUES (%s,%s,%s,%s,'published', now()) "
+                        "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now() RETURNING id",
+                        (slug, pillar, headline, body))
+            post_id = cur.fetchone()[0]
+            cur.execute("UPDATE collected_items SET status='published' WHERE id=%s", (item_id,))
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"post_id": post_id, "item_id": item_id, "status": "published"}
+
+
+@app.get("/api/posts")
+def posts():
+    out = []
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT id, slug, pillar, title, status, publish_at FROM content_posts "
+                        "WHERE status='published' ORDER BY publish_at DESC NULLS LAST LIMIT 200")
+            names = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                p = dict(zip(names, row))
+                p["publish_at"] = p["publish_at"].isoformat() if p.get("publish_at") else None
+                out.append(p)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"posts": out}
+
+
+@app.post("/api/posts/{post_id}/unpublish")
+def unpublish(post_id: int):
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("UPDATE content_posts SET status='draft' WHERE id=%s", (post_id,))
+            c.commit()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"post_id": post_id, "status": "draft"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -235,7 +310,13 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="cOut"></div>
   </div>
   <div class="panel" id="p-sources"><div class="soon">Source registry - phase 2b. The watchlist that feeds the collection engine.</div></div>
-  <div class="panel" id="p-publish"><div class="soon">Publishing & newsletter - phase 2b. Draft, schedule, push approved items to the public site.</div></div>
+  <div class="panel" id="p-publish">
+    <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads.</p></div><button class="newq" id="pRefresh" type="button">Refresh</button></div>
+    <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:6px 0 10px">Ready to publish</div>
+    <div id="pReady"></div>
+    <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 0 10px">Published</div>
+    <div id="pPosts"></div>
+  </div>
 </div>
 <script>
 let thread=[];  // [{question, sql, columns, rows}]
@@ -400,5 +481,34 @@ acSwitch.onclick=async()=>{
   catch(e){acSwitch.disabled=false;alert("Couldn't reach the Command Center.");}
 };
 loadAuto();setInterval(loadAuto,60000);
+// ---- Publish tab ----
+document.getElementById("pRefresh").onclick=loadPublish;
+document.querySelector('.tab[data-t="publish"]').addEventListener("click",loadPublish);
+async function loadPublish(){
+  const ready=document.getElementById("pReady"),posts=document.getElementById("pPosts");
+  ready.innerHTML='<div class="rcard"><div class="loading">Loading...</div></div>';
+  try{const d=await (await fetch("/api/publish/ready")).json();
+    ready.innerHTML=(d.items&&d.items.length)?d.items.map(pReadyCard).join(""):'<div class="rcard"><div class="loading">Nothing approved yet - approve items in the Collection tab.</div></div>';
+  }catch(e){ready.innerHTML='<div class="rcard"><div class="err">Could not load approved items.</div></div>';}
+  try{const d=await (await fetch("/api/posts")).json();
+    posts.innerHTML=(d.posts&&d.posts.length)?d.posts.map(pPostRow).join(""):'<div class="rcard"><div class="loading">No published posts yet.</div></div>';
+  }catch(e){posts.innerHTML='<div class="rcard"><div class="err">Could not load posts.</div></div>';}
+}
+function pReadyCard(it){
+  return '<div class="rcard" style="padding:16px 18px">'
+    +'<div style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:6px">'+esc(it.pillar)+'</div>'
+    +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:17px;line-height:1.3;margin-bottom:6px">'+esc(it.headline)+'</div>'
+    +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
+    +'<div style="display:flex;gap:10px;align-items:center"><button class="go" style="padding:9px 18px" data-pub="'+it.id+'">Publish</button>'
+    +(it.source_url?'<a href="'+esc(it.source_url)+'" target="_blank" rel="noopener" style="font-family:Archivo,sans-serif;font-size:12px">source</a>':'')+'</div></div>';
+}
+function pPostRow(p){
+  return '<div class="rcard" style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px">'
+    +'<div><div style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">'+esc(p.pillar)+' - '+esc((p.publish_at||"").slice(0,10))+'</div>'
+    +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:16px;line-height:1.3">'+esc(p.title)+'</div></div>'
+    +'<button class="ex" data-unpub="'+p.id+'">Unpublish</button></div>';
+}
+document.getElementById("pReady").addEventListener("click",async e=>{const b=e.target.closest("[data-pub]");if(!b)return;await fetch("/api/publish/"+b.dataset.pub,{method:"POST"});loadPublish();});
+document.getElementById("pPosts").addEventListener("click",async e=>{const b=e.target.closest("[data-unpub]");if(!b)return;await fetch("/api/posts/"+b.dataset.unpub+"/unpublish",{method:"POST"});loadPublish();});
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""
