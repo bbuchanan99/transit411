@@ -6,6 +6,8 @@ Transit411 collection engine - populates the review queue.
   python collection.py --run         # fetch sources, summarize, score, insert pending items
   python collection.py --run --limit 5   # only the first 5 sources (testing)
   python collection.py --schedule    # stay running; collect daily at COLLECT_AT (the scheduler service)
+  python collection.py --migrate     # add new columns to an existing database
+  python collection.py --backfill    # one-off: add facets to items collected before facets existed
 
 Writes to `collected_items` and `sources`. The Command Center's Collection tab
 reviews what this produces. The daily run can be switched off from the Command Center's
@@ -396,12 +398,75 @@ def migrate(conn):
     conn.commit()
 
 
+def classify_facets(item):
+    """Facets only, for items triaged before facets existed. Shorter prompt and reply than
+    classify(); leaves headline/summary/relevance alone."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    import json
+    import re
+    import anthropic
+    client = anthropic.Anthropic(api_key=key)
+    msg = client.messages.create(
+        model=os.environ.get("COLLECT_MODEL", "claude-haiku-4-5"),
+        max_tokens=300,
+        system=("Tag a transit-industry news item. Return ONLY JSON:\n"
+                '{"agencies":["exact transit agency names mentioned"],"state":"2-letter US state code or empty",'
+                f'"mode":["any of: {", ".join(MODES)}"],"programs":["any of: {", ".join(PROGRAMS)}"],'
+                '"tags":["short free-form topic, project, or firm tags"]}\n'
+                "Use exact agency names; leave any array empty when nothing applies."),
+        messages=[{"role": "user", "content": f"Headline: {item['headline']}\nSummary: {item.get('summary') or ''}"
+                                              f"\nLink: {item.get('source_url') or ''}"}])
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    text = re.sub(r"^```json|^```|```$", "", text, flags=re.M).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def backfill(conn, limit=None):
+    """One-off: add facets to pending/approved/published items collected before facets existed
+    (agencies IS NULL), and copy them onto any posts made from those items. Items whose model call
+    fails stay NULL, so re-running retries just those."""
+    migrate(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, headline, summary, source_url FROM collected_items "
+                    "WHERE agencies IS NULL AND status IN ('pending','approved','published') ORDER BY id"
+                    + (" LIMIT %s" % int(limit) if limit else ""))
+        items = [dict(zip(("id", "headline", "summary", "source_url"), r)) for r in cur.fetchall()]
+    done = failed = 0
+    for it in items:
+        try:
+            c = classify_facets(it)
+        except Exception as e:
+            print(f"  - item {it['id']}: {type(e).__name__}")
+            c = None
+        if not c:
+            failed += 1
+            continue
+        f = clean_facets(c)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE collected_items SET agencies=%s, mode=%s, programs=%s, tags=%s, state=%s "
+                        "WHERE id=%s", (f["agencies"], f["mode"], f["programs"], f["tags"], f["state"], it["id"]))
+            cur.execute("UPDATE content_posts SET agencies=%s, mode=%s, programs=%s, tags=%s, state=%s "
+                        "WHERE item_id=%s", (f["agencies"], f["mode"], f["programs"], f["tags"], f["state"], it["id"]))
+        conn.commit()
+        done += 1
+        if done % 25 == 0:
+            print(f"  {done}/{len(items)} tagged", flush=True)
+    print(f"Backfill: {done} tagged, {failed} failed (re-run to retry), {len(items)} needed facets.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--migrate", action="store_true")
+    ap.add_argument("--backfill", action="store_true",
+                    help="one-off: add facets to existing items collected before facets existed")
     ap.add_argument("--schedule", action="store_true",
                     help="stay running and collect daily at COLLECT_AT, unless Auto-collect is off")
     a = ap.parse_args()
@@ -421,8 +486,10 @@ def main():
         if a.run:
             # Manual runs always go ahead; the Auto-collect toggle only governs the daily schedule.
             run(conn, a.limit)
-        if not (a.seed or a.run or a.migrate):
-            print("Nothing to do. Use --migrate, --seed, --run and/or --schedule.")
+        if a.backfill:
+            backfill(conn, None if a.run else a.limit)
+        if not (a.seed or a.run or a.migrate or a.backfill):
+            print("Nothing to do. Use --migrate, --seed, --run, --backfill and/or --schedule.")
 
 
 if __name__ == "__main__":
