@@ -165,30 +165,67 @@ async function refreshStatus(){
 }
 function setPill(k,up,txt){document.getElementById(k+"Dot").className="dot "+(up?"up":"down");document.getElementById(k+"Txt").textContent=txt;}
 
+// Everything from the API, the model or the database is untrusted text: escape it before it
+// goes into innerHTML (phase 2b will show headlines scraped from other sites).
+function esc(v){return String(v??"").replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));}
 function isNum(v){return typeof v==="number"&&isFinite(v);}
-function fmt(v){return isNum(v)?(Math.abs(v)>=1e9?"$"+(v/1e9).toFixed(2)+"B":Math.abs(v)>=1e6&&v%1===0?(v/1e6).toFixed(1)+"M":v.toLocaleString(undefined,{maximumFractionDigits:2})):v;}
-function pickChartCol(cols,rows){ // last column that is numeric across rows = the metric asked about
-  for(let i=cols.length-1;i>=0;i--){if(rows.every(r=>isNum(r[cols[i]])))return cols[i];}return null;}
-function pickLabelCol(cols,rows){for(const c of cols){if(rows.some(r=>!isNum(r[c])))return c;}return cols[0];}
+// Format by what the column holds (same rules as the Ask NTD page), not by the size of the number.
+function kind(c,rows){
+  const n=c.toLowerCase(),vals=rows.map(r=>r[c]).filter(v=>v!==null&&v!==undefined);
+  if(!vals.length||!vals.every(isNum))return "text";
+  if(/(^|_)(year|yr)$|^year/.test(n))return "year";
+  if(/(^|_)id$/.test(n))return "text";
+  if(/percent|pct/.test(n))return "pct";
+  if(/recovery|ratio/.test(n))return "ratio";
+  if(/factor|cpi/.test(n))return "num";
+  if(/cost|expense|opex|fare|dollar|spend|price|cpr|_real/.test(n))return "money";
+  return "num";
+}
+function fmt(v,k){
+  if(v===null||v===undefined)return "—";
+  if(k==="text"||!isNum(v))return String(v);
+  if(k==="year")return String(Math.round(v));
+  if(k==="pct")return v.toFixed(1)+"%";
+  if(k==="ratio")return (v*100).toFixed(1)+"%";
+  const a=Math.abs(v);let s;
+  if(a>=1e9)s=(a/1e9).toFixed(2)+"B";
+  else if(a>=1e6)s=(a/1e6).toFixed(1)+"M";
+  else if(Number.isInteger(v)||a>=1000)s=Math.round(a).toLocaleString();
+  else s=a.toLocaleString(undefined,{minimumFractionDigits:k==="money"?2:0,maximumFractionDigits:2});
+  return (v<0?"-":"")+(k==="money"?"$":"")+s;
+}
+function pickChartCol(cols,kinds){ // last numeric column (not a year or ID) = the metric asked about
+  for(let i=cols.length-1;i>=0;i--){if(!["text","year"].includes(kinds[cols[i]]))return cols[i];}return null;}
+function pickLabel(cols,rows,kinds){ // a readable name, never an ID; add mode when it tells rows apart
+  const text=cols.filter(c=>kinds[c]==="text"&&!/(^|_)id$|^ntd_id$|mode_code/.test(c.toLowerCase()));
+  const first=["agency","name","mode","state","city"].find(p=>text.includes(p))||text[0];
+  if(!first)return null;
+  const varies=c=>new Set(rows.map(r=>r[c])).size>1;
+  const parts=[first];
+  if(first!=="mode"&&text.includes("mode")&&varies("mode"))parts.push("mode");
+  return r=>parts.map(c=>r[c]??"").join(" · ");
+}
 
 function render(res){
   const cols=res.columns||[],rows=res.rows||[];
   if(!rows.length){document.getElementById("out").innerHTML='<div class="rcard"><div class="err">No rows returned.</div></div>';return;}
-  const metric=pickChartCol(cols,rows),lab=pickLabelCol(cols,rows);
+  const kinds=Object.fromEntries(cols.map(c=>[c,kind(c,rows)]));
+  const metric=pickChartCol(cols,kinds),label=pickLabel(cols,rows,kinds);
   let chart="";
-  if(metric){const max=Math.max(...rows.map(r=>r[metric]));chart='<div class="chart">'+rows.slice(0,15).map(r=>{
-    const pct=Math.max(3,(r[metric]/max)*100);return '<div class="brow"><div class="blabel" title="'+r[lab]+'">'+r[lab]+'</div><div class="btrack"><div class="bfill" style="width:'+pct+'%"></div></div><div class="bval">'+fmt(r[metric])+'</div></div>';}).join("")+'</div>';}
-  let th=cols.map(c=>"<th>"+c+"</th>").join("");
-  let tb=rows.map(r=>"<tr>"+cols.map(c=>'<td class="'+(isNum(r[c])?"num":"")+'">'+fmt(r[c])+"</td>").join("")+"</tr>").join("");
-  const head=res.question?("Q: "+res.question):"Result";
-  const sql=res.sql?'<details><summary>View the query it ran ▾</summary><pre>'+res.sql.replace(/</g,"&lt;")+'</pre></details>':"";
-  document.getElementById("out").innerHTML='<div class="rcard"><div class="rh">'+head+' · '+rows.length+' rows'+(metric?' · charting '+metric:'')+'</div>'+chart+'<div class="twrap"><table><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sql+'</div>';
+  const plotted=metric&&label?rows.filter(r=>isNum(r[metric])):[];
+  if(plotted.length&&plotted.every(r=>r[metric]>=0)){const max=Math.max(...plotted.map(r=>r[metric]))||1;chart='<div class="chart">'+plotted.slice(0,15).map(r=>{
+    const pct=Math.max(3,(r[metric]/max)*100),l=esc(label(r));return '<div class="brow"><div class="blabel" title="'+l+'">'+l+'</div><div class="btrack"><div class="bfill" style="width:'+pct+'%"></div></div><div class="bval">'+esc(fmt(r[metric],kinds[metric]))+'</div></div>';}).join("")+'</div>';}
+  let th=cols.map(c=>"<th>"+esc(c)+"</th>").join("");
+  let tb=rows.map(r=>"<tr>"+cols.map(c=>'<td class="'+(kinds[c]==="text"?"":"num")+'">'+esc(fmt(r[c],kinds[c]))+"</td>").join("")+"</tr>").join("");
+  const head=res.question?("Q: "+esc(res.question)):"Result";
+  const sql=res.sql?'<details><summary>View the query it ran ▾</summary><pre>'+esc(res.sql)+'</pre></details>':"";
+  document.getElementById("out").innerHTML='<div class="rcard"><div class="rh">'+head+' · '+rows.length+' rows'+(chart?' · charting '+esc(metric):'')+'</div>'+chart+'<div class="twrap"><table><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sql+'</div>';
 }
 async function doAsk(q){
-  document.getElementById("out").innerHTML='<div class="rcard"><div class="loading">Reading “'+q+'” and running the query…</div></div>';
+  document.getElementById("out").innerHTML='<div class="rcard"><div class="loading">Reading “'+esc(q)+'” and running the query…</div></div>';
   try{
     const r=await fetch("/api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q})});
-    if(!r.ok){const t=await r.text();document.getElementById("out").innerHTML='<div class="rcard"><div class="err">'+t+'</div></div>';return;}
+    if(!r.ok){const t=await r.text();document.getElementById("out").innerHTML='<div class="rcard"><div class="err">'+esc(t)+'</div></div>';return;}
     render(await r.json());
   }catch(e){document.getElementById("out").innerHTML='<div class="rcard"><div class="err">Could not reach the API.</div></div>';}
 }
