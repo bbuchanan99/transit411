@@ -86,3 +86,14 @@ services:
     depends_on:
       - db
     entrypoint: ["python", "collection.py", "--schedule"]
+
+  # CIG pipeline: load the FTA Capital Investment Grants dashboard into Postgres.
+  #   docker compose run --rm cig --latest
+  cig:
+    build: .
+    profiles: ["tools"]
+    environment:
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+    depends_on:
+      - db
+    entrypoint: ["python", "cig.py"]

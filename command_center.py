@@ -345,6 +345,47 @@ def feature(post_id: int, on: bool = True, sponsor: Optional[str] = None, days: 
     return {"post_id": post_id, "featured": on}
 
 
+@app.get("/api/cig")
+def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optional[str] = None,
+        state: Optional[str] = None, sponsor: Optional[str] = None):
+    where, params = [], []
+    if phase:
+        where.append("phase=%s"); params.append(phase)
+    if mode:
+        where.append("mode=%s"); params.append(mode)
+    if rating:
+        where.append("rating=%s"); params.append(rating)
+    if state:
+        where.append("state=%s"); params.append(state)
+    if sponsor:
+        where.append("sponsor ILIKE %s"); params.append(f"%{sponsor}%")
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    out, summary = [], {}
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT to_char(max(snapshot_date),'YYYY-MM-DD'), count(*), "
+                        "COALESCE(sum(cig_request_musd),0) FROM cig_projects")
+            snap, total_projects, total_cig = cur.fetchone()
+            cur.execute("SELECT phase, count(*) FROM cig_projects GROUP BY phase")
+            by_phase = {ph: n for ph, n in cur.fetchall()}
+            cur.execute("SELECT id, project_name, sponsor, city, state, mode, phase, cost_musd, cost_raw, "
+                        "cig_request_musd, cig_request_raw, cig_share, rating, noncig_status, est_grant "
+                        "FROM cig_projects" + wsql +
+                        " ORDER BY cig_request_musd DESC NULLS LAST, project_name")
+            names = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                pr = dict(zip(names, row))
+                for k in ("cost_musd", "cig_request_musd"):
+                    if pr.get(k) is not None:
+                        pr[k] = float(pr[k])
+                out.append(pr)
+        summary = {"snapshot": snap, "projects": total_projects,
+                   "total_cig_musd": float(total_cig), "by_phase": by_phase}
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"summary": summary, "projects": out}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -435,6 +476,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   <button class="tab" data-t="collect">Collection</button>
   <button class="tab" data-t="sources">Sources</button>
   <button class="tab" data-t="publish">Publish</button>
+  <button class="tab" data-t="grants">Grants</button>
 </div>
 <div class="wrap">
   <div class="panel on" id="p-ask">
@@ -464,6 +506,12 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="pReady"></div>
     <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 0 10px">Published</div>
     <div id="pPosts"></div>
+  </div>
+  <div class="panel" id="p-grants">
+    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. Load with the cig job.</p></div><button class="newq" id="gRefresh" type="button">Refresh</button></div>
+    <div id="gSummary" style="margin-bottom:14px"></div>
+    <div class="examples" id="gChips"></div>
+    <div id="gOut"></div>
   </div>
 </div>
 <script>
@@ -704,5 +752,41 @@ async function pPost(url,what,b){ // POST, and say so if it didn't work instead 
 }
 document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
+// ---- CIG Pipeline tab ----
+let gPhase="";
+document.getElementById("gRefresh").onclick=loadCIG;
+document.querySelector('.tab[data-t="grants"]').addEventListener("click",loadCIG);
+const gChips=document.getElementById("gChips");
+[["","All phases"],["PD","Project Development"],["Eng","Engineering"]].forEach(([k,lbl])=>{
+  const b=document.createElement("button");b.className="ex";b.textContent=lbl;
+  b.onclick=()=>{gPhase=k;document.querySelectorAll("#gChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadCIG();};
+  if(k==="")b.style.borderColor="var(--accent)";gChips.appendChild(b);});
+const RATING={H:"High",MH:"Medium-High",M:"Medium",ML:"Medium-Low",L:"Low"};
+function gAmt(num,raw){return num!=null?("$"+Number(num).toLocaleString(undefined,{maximumFractionDigits:0})+"M"):(raw?esc(raw):"-");}
+function gStat(v,l){return '<div><div style="font-family:Archivo,sans-serif;font-weight:900;font-size:22px">'+v+'</div><div style="font-family:Archivo,sans-serif;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">'+l+'</div></div>';}
+async function loadCIG(){
+  const out=document.getElementById("gOut"),sum=document.getElementById("gSummary");
+  out.innerHTML='<div class="rcard"><div class="loading">Loading the pipeline...</div></div>';
+  try{
+    const q=gPhase?("?phase="+encodeURIComponent(gPhase)):"";
+    const d=await (await fetch("/api/cig"+q)).json();
+    const s=d.summary||{},bp=s.by_phase||{};
+    sum.innerHTML='<div class="rcard" style="padding:16px 18px;display:flex;gap:26px;flex-wrap:wrap;align-items:center">'
+      +gStat(s.projects||0,"projects")+gStat("$"+(((s.total_cig_musd||0)/1000).toFixed(1))+"B","CIG requested")
+      +gStat(bp.PD||0,"in development")+gStat(bp.Eng||0,"in engineering")
+      +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-left:auto">snapshot '+(s.snapshot||"-")+'</div></div>';
+    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">No projects loaded. Run: docker compose run --rm cig --latest</div></div>';return;}
+    out.innerHTML='<div class="rcard" style="padding:0"><div class="twrap" style="padding:10px 18px">'
+      +'<table><thead><tr><th>Project</th><th>Sponsor</th><th>Location</th><th>Mode</th><th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th></tr></thead><tbody>'
+      +d.projects.map(gRow).join("")+'</tbody></table></div></div>';
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load the pipeline.</div></div>';}
+}
+function gRow(p){
+  const rt=p.rating?('<span title="'+(RATING[p.rating]||"")+'">'+esc(p.rating)+'</span>'):'-';
+  return '<tr><td style="font-weight:600">'+esc(p.project_name)+'</td><td>'+esc(p.sponsor)+'</td>'
+    +'<td>'+esc(p.city||"")+', '+esc(p.state||"")+'</td><td>'+esc(p.mode||"-")+'</td><td>'+esc(p.phase)+'</td>'
+    +'<td class="num">'+gAmt(p.cost_musd,p.cost_raw)+'</td><td class="num">'+gAmt(p.cig_request_musd,p.cig_request_raw)+'</td>'
+    +'<td class="num">'+esc(p.cig_share||"-")+'</td><td>'+rt+'</td><td>'+esc(p.est_grant||"-")+'</td></tr>';
+}
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""

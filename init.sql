@@ -75,3 +75,12 @@ CREATE TABLE IF NOT EXISTS subscribers (
   confirmed    BOOLEAN DEFAULT false,
   created_at   TIMESTAMPTZ DEFAULT now()
 );
+
+-- FTA Capital Investment Grants pipeline (loaded by cig.py from the monthly dashboard PDF).
+CREATE TABLE IF NOT EXISTS cig_projects (
+  id BIGSERIAL PRIMARY KEY, snapshot_date DATE, project_name TEXT, sponsor TEXT,
+  city TEXT, state TEXT, mode TEXT, phase TEXT, length_mi TEXT, stations TEXT,
+  cost_musd NUMERIC, cost_raw TEXT, cig_request_musd NUMERIC, cig_request_raw TEXT,
+  cig_share TEXT, rating TEXT, noncig_status TEXT, est_grant TEXT, nepa TEXT,
+  pd_entry TEXT, eng_entry TEXT, fetched_at TIMESTAMPTZ DEFAULT now()
+);
