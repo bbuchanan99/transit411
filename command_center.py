@@ -68,15 +68,40 @@ def _db():
     return psycopg.connect(DATABASE_URL, connect_timeout=5)
 
 
+# Every searchable text field of an item, for the Collection tab's search box.
+_SEARCH_TEXT = ("concat_ws(' ', headline, summary, source_name, pillar, state, array_to_string(agencies, ' '), "
+                "array_to_string(tags, ' '), array_to_string(mode, ' '), array_to_string(programs, ' '))")
+
+
+def _collection_where(status, q=None, pillar=None, agency=None, mode=None, program=None, state=None, tag=None):
+    """WHERE clause + params for the Collection tab's filters. Every word of q must appear somewhere
+    (case-insensitive); facet filters are exact matches on the stored values."""
+    where, params = ["status=%s"], [status]
+    for word in (q or "").split()[:8]:
+        where.append(_SEARCH_TEXT + " ILIKE %s ESCAPE '\\'")
+        params.append("%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+    for col, val in (("pillar", pillar), ("state", state)):
+        if val:
+            where.append(f"{col}=%s"); params.append(val)
+    for col, val in (("agencies", agency), ("mode", mode), ("programs", program), ("tags", tag)):
+        if val:
+            where.append(f"%s = ANY({col})"); params.append(val)
+    return " AND ".join(where), params
+
+
 @app.get("/api/collection")
-def collection(status: str = "pending"):
+def collection(status: str = "pending", q: Optional[str] = None, pillar: Optional[str] = None,
+               agency: Optional[str] = None, mode: Optional[str] = None, program: Optional[str] = None,
+               state: Optional[str] = None, tag: Optional[str] = None):
     from collection import freshness
     items = []
+    where, params = _collection_where(status, q, pillar, agency, mode, program, state, tag)
     try:
         with _db() as c, c.cursor() as cur:
             cur.execute(
-                "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, relevance, status "
-                "FROM collected_items WHERE status=%s ORDER BY collected_at DESC LIMIT 200", (status,))
+                "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, relevance, status, "
+                "agencies, mode, programs, tags, state "
+                f"FROM collected_items WHERE {where} ORDER BY collected_at DESC LIMIT 200", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 it = dict(zip(names, row))
@@ -84,7 +109,11 @@ def collection(status: str = "pending"):
                 it["fresh_status"], it["fresh_score"] = st, sc
                 it["published"] = it["published"].isoformat() if it.get("published") else None
                 it["deadline"] = it["deadline"].isoformat() if it.get("deadline") else None
+                for k in ("agencies", "mode", "programs", "tags"):
+                    it[k] = it.get(k) or []
                 items.append(it)
+            cur.execute(f"SELECT count(*) FROM collected_items WHERE {where}", params)
+            matched = cur.fetchone()[0]
             cur.execute("SELECT status, count(*) FROM collected_items GROUP BY status")
             counts = {row[0]: row[1] for row in cur.fetchall()}
     except HTTPException:
@@ -92,7 +121,29 @@ def collection(status: str = "pending"):
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     items.sort(key=lambda x: x["fresh_score"], reverse=True)
-    return {"items": items, "counts": counts}
+    return {"items": items, "counts": counts, "matched": matched}
+
+
+@app.get("/api/collection/facets")
+def collection_facets(status: str = "pending"):
+    """Values present in this status's items, with counts, for the Collection tab's filter menus."""
+    out = {}
+    try:
+        with _db() as c, c.cursor() as cur:
+            for key, col in (("pillar", "pillar"), ("state", "state")):
+                cur.execute(f"SELECT {col}, count(*) FROM collected_items WHERE status=%s AND {col} IS NOT NULL "
+                            f"AND {col} <> '' GROUP BY 1 ORDER BY 2 DESC, 1", (status,))
+                out[key] = [{"value": v, "count": n} for v, n in cur.fetchall()]
+            for key, col, limit in (("mode", "mode", 50), ("program", "programs", 50),
+                                    ("agency", "agencies", 40), ("tag", "tags", 40)):
+                cur.execute(f"SELECT v, count(*) FROM collected_items, unnest({col}) AS v WHERE status=%s "
+                            f"GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {limit}", (status,))
+                out[key] = [{"value": v, "count": n} for v, n in cur.fetchall()]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return out
 
 
 @app.post("/api/collection/{item_id}/{action}")
@@ -333,6 +384,20 @@ form{display:flex;gap:10px;margin-bottom:10px}
 input[type=text]{flex-grow:1;padding:14px 15px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:15px;font-family:'Spectral',serif;border-radius:9px}
 button.go{font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:.5px;background:var(--accent);color:#fff;border:none;padding:0 26px;border-radius:9px;cursor:pointer}
 .examples{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.csearch{display:flex;gap:8px;flex-wrap:wrap;margin:-4px 0 10px}
+.csearch input{flex:1 1 260px;min-width:0;padding:11px 13px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:14px;font-family:'Spectral',serif;border-radius:9px}
+.csearch select{flex:0 1 150px;min-width:0;padding:9px 8px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:'Archivo',sans-serif;font-size:12px;border-radius:9px}
+.csearch select.on{border-color:var(--accent);color:var(--accent)}
+.cactive{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:4px;margin-bottom:12px;font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+.fpill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--accent);color:var(--accent);background:transparent;border-radius:999px;padding:4px 10px;font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;cursor:pointer}
+.facets{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}
+.fchip{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+.fchip:hover{border-color:var(--accent);color:var(--accent)}
+.fchip.k-state{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.fchip.k-mode{border-color:#1F6B7A;color:#1F6B7A}
+.fchip.k-program{border-color:#1F6B4A;color:#1F6B4A}
+.fchip.k-agency{font-weight:800}
+.fchip.k-tag{background:transparent;color:var(--muted);font-weight:600}
 .ex{font-family:'Archivo',sans-serif;font-size:12px;font-weight:600;padding:7px 12px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;cursor:pointer}.ex:hover{border-color:var(--accent);color:var(--accent)}
 .rcard{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:14px}
 .rh{background:var(--ink);color:var(--panel);padding:11px 18px;font-family:'Archivo',sans-serif;font-size:13px}
@@ -381,6 +446,15 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   <div class="panel" id="p-collect">
     <div class="askhead"><div><h2 class="disp">Collection queue</h2><p class="lead">Items the engine gathered, freshest first - approve what runs, skip the rest. Populate with the collector job.</p></div><button class="newq" id="cRefresh" type="button">Refresh</button></div>
     <div class="examples" id="cChips"></div>
+    <div class="csearch">
+      <input type="search" id="cQ" placeholder="Search headlines, summaries, agencies, tags..." autocomplete="off" aria-label="Search the collection">
+      <select id="cPillar" aria-label="Pillar"></select>
+      <select id="cMode" aria-label="Mode"></select>
+      <select id="cProgram" aria-label="Program"></select>
+      <select id="cState" aria-label="State"></select>
+      <button class="newq" id="cClear" type="button">Clear</button>
+    </div>
+    <div class="cactive" id="cActive"></div>
     <div id="cOut"></div>
   </div>
   <div class="panel" id="p-sources"><div class="soon">Source registry - phase 2b. The watchlist that feeds the collection engine.</div></div>
@@ -496,10 +570,44 @@ let cFilter="pending";
 const cChips=document.getElementById("cChips");
 [["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"],["filtered","Auto-filtered"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="ex";b.textContent=lbl;
-  b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadCollection();};
+  b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadFacets();loadCollection();};
   if(k==="pending")b.style.borderColor="var(--accent)";cChips.appendChild(b);});
-document.getElementById("cRefresh").onclick=loadCollection;
-document.querySelector('.tab[data-t="collect"]').addEventListener("click",loadCollection);
+document.getElementById("cRefresh").onclick=()=>{loadFacets();loadCollection();};
+document.querySelector('.tab[data-t="collect"]').addEventListener("click",()=>{loadFacets();loadCollection();});
+
+// Search + facet filters. Dropdowns hold pillar/mode/program/state; agency and tag filters are set by
+// clicking a chip on a card. Every value comes from the database, so it's escaped wherever it's shown.
+const cF={q:"",pillar:"",mode:"",program:"",state:"",agency:"",tag:""};
+const CSEL={pillar:["cPillar","All pillars"],mode:["cMode","All modes"],program:["cProgram","All programs"],state:["cState","All states"]};
+const CLABEL={pillar:"Pillar",mode:"Mode",program:"Program",state:"State",agency:"Agency",tag:"Tag",q:"Search"};
+function fillSelect(k,opts){
+  const [id,all]=CSEL[k],sel=document.getElementById(id),cur=cF[k];
+  const vals=opts.map(o=>o.value);if(cur&&!vals.includes(cur))opts=[{value:cur,count:0},...opts];
+  sel.innerHTML='<option value="">'+all+'</option>'+opts.map(o=>'<option value="'+esc(o.value)+'"'+(o.value===cur?" selected":"")+'>'+esc(o.value)+' ('+o.count+')</option>').join("");
+  sel.classList.toggle("on",!!cur);
+}
+async function loadFacets(){
+  try{const r=await fetch("/api/collection/facets?status="+encodeURIComponent(cFilter));if(!r.ok)return;
+    const d=await r.json();Object.keys(CSEL).forEach(k=>fillSelect(k,d[k]||[]));}catch(e){}
+}
+function setFilter(k,v){cF[k]=v;if(CSEL[k]){const s=document.getElementById(CSEL[k][0]);s.value=v;s.classList.toggle("on",!!v);}
+  if(k==="q")document.getElementById("cQ").value=v;loadCollection();}
+Object.keys(CSEL).forEach(k=>document.getElementById(CSEL[k][0]).addEventListener("change",e=>setFilter(k,e.target.value)));
+let cQTimer;document.getElementById("cQ").addEventListener("input",e=>{clearTimeout(cQTimer);cQTimer=setTimeout(()=>setFilter("q",e.target.value.trim()),300);});
+document.getElementById("cClear").onclick=()=>{Object.keys(cF).forEach(k=>cF[k]="");document.getElementById("cQ").value="";
+  Object.keys(CSEL).forEach(k=>{const s=document.getElementById(CSEL[k][0]);s.value="";s.classList.remove("on");});loadCollection();};
+function renderActive(matched,shown){
+  const on=Object.keys(cF).filter(k=>cF[k]);const box=document.getElementById("cActive");
+  box.innerHTML=(on.length?on.map(k=>'<button type="button" class="fpill" data-clear="'+k+'" title="Remove this filter">'+esc(CLABEL[k])+': '+esc(cF[k])+' &times;</button>').join(""):"")
+    +(matched!=null?'<span>'+matched+' match'+(matched===1?"":"es")+(matched>shown?' (showing newest '+shown+')':'')+'</span>':"");
+}
+document.getElementById("cActive").addEventListener("click",e=>{const b=e.target.closest("[data-clear]");if(b)setFilter(b.dataset.clear,"");});
+function facetChips(it){
+  const chip=(k,v)=>'<button type="button" class="fchip k-'+k+'" data-fk="'+k+'" data-fv="'+esc(v)+'" title="Show only '+esc(CLABEL[k].toLowerCase())+': '+esc(v)+'">'+esc(v)+'</button>';
+  const parts=[].concat(it.state?[chip("state",it.state)]:[],(it.mode||[]).map(v=>chip("mode",v)),(it.programs||[]).map(v=>chip("program",v)),
+    (it.agencies||[]).map(v=>chip("agency",v)),(it.tags||[]).map(v=>chip("tag",v)));
+  return parts.length?'<div class="facets">'+parts.join("")+'</div>':"";
+}
 const FCOLOR={Live:"#C0341F",Fresh:"#1F6B4A",Recent:"#1F6B7A",Aging:"#B07A1E",Stale:"#6A6458",Developing:"#3D5C8F",Expired:"#6A6458"};
 // Uses the page's esc() above (it also escapes quotes, which attributes need). Feed links are
 // untrusted: only http(s) URLs become links, so a "javascript:" link can't run on click.
@@ -508,10 +616,13 @@ async function loadCollection(){
   const out=document.getElementById("cOut");
   out.innerHTML='<div class="rcard"><div class="loading">Loading the queue...</div></div>';
   try{
-    const r=await fetch("/api/collection?status="+cFilter);
-    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(await r.text())+'</div></div>';return;}
+    const qs=new URLSearchParams({status:cFilter});Object.keys(cF).forEach(k=>{if(cF[k])qs.set(k,cF[k]);});
+    const r=await fetch("/api/collection?"+qs.toString());
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
     const d=await r.json();
-    if(!d.items||!d.items.length){out.innerHTML='<div class="rcard"><div class="loading">Nothing '+cFilter+'. Populate with: docker compose run --rm collect --run</div></div>';return;}
+    renderActive(d.matched,(d.items||[]).length);
+    const filtered=Object.keys(cF).some(k=>cF[k]);
+    if(!d.items||!d.items.length){out.innerHTML='<div class="rcard"><div class="loading">'+(filtered?'No '+esc(cFilter)+' items match these filters.':'Nothing '+esc(cFilter)+'. Populate with: docker compose run --rm collect --run')+'</div></div>';return;}
     out.innerHTML=d.items.map(cCard).join("");
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not reach the queue.</div></div>';}
 }
@@ -524,6 +635,7 @@ function cCard(it){
     +'<span style="color:var(--muted)">'+esc(it.relevance)+' relevance</span></div>'
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:17px;line-height:1.3;margin-bottom:6px">'+esc(it.headline)+'</div>'
     +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
+    +facetChips(it)
     +'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
     +'<b style="color:var(--ink)">'+esc(it.source_name)+'</b>'+(it.published?'<span>'+esc(it.published)+'</span>':'')
     +(safeUrl(it.source_url)?'<a href="'+esc(safeUrl(it.source_url))+'" target="_blank" rel="noopener noreferrer">source</a>':'')+'</div>'
@@ -533,7 +645,9 @@ function cCard(it){
     +'</div></div>';
 }
 async function cAct(id,action){try{await fetch("/api/collection/"+id+"/"+action,{method:"POST"});loadCollection();}catch(e){}}
-document.getElementById("cOut").addEventListener("click",e=>{const b=e.target.closest("[data-act]");if(b)cAct(b.dataset.id,b.dataset.act);});
+document.getElementById("cOut").addEventListener("click",e=>{
+  const f=e.target.closest("[data-fk]");if(f){setFilter(f.dataset.fk,f.dataset.fv);window.scrollTo({top:0,behavior:"smooth"});return;}
+  const b=e.target.closest("[data-act]");if(b)cAct(b.dataset.id,b.dataset.act);});
 // ---- Auto-collect switch (header) ----
 const acSwitch=document.getElementById("acSwitch");
 function when(iso){if(!iso)return "";const d=new Date(iso);return d.toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});}
