@@ -110,3 +110,24 @@ services:
     depends_on:
       - db
     entrypoint: ["python", "cig.py"]
+
+  # Read-only public API: the ONLY thing the Cloudflare tunnel exposes. It allowlists the safe
+  # read/ask endpoints and forwards them to the Command Center; everything else returns 404.
+  readonly-api:
+    build: .
+    restart: unless-stopped
+    command: ["uvicorn", "readonly_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      - UPSTREAM_URL=http://command-center:8080
+    depends_on:
+      - command-center
+
+  # Cloudflare Tunnel: dials out to Cloudflare (no open ports) and serves your public API hostname.
+  # Put the tunnel token in .env as CLOUDFLARE_TUNNEL_TOKEN. In the Cloudflare dashboard, set the
+  # tunnel's Public Hostname (e.g. api.transit411.com) to service http://readonly-api:8000.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN}"]
+    depends_on:
+      - readonly-api
