@@ -91,25 +91,37 @@ def derive_mode(rec):
     return None
 
 
-def snapshot_date(path_or_url):
-    m = re.search(r"(\d{2})-(\d{2})-(\d{4})", path_or_url or "")
+def date_in(s):
+    """The date in a dashboard file name or URL, as YYYY-MM-DD, or None. Handles both
+    2026-09-11 and 09-11-2026 styles."""
+    s = s or ""
+    m = re.search(r"(20\d{2})-(\d{2})-(\d{2})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.search(r"(\d{2})-(\d{2})-(20\d{2})", s)
     if m:
         return f"{m.group(3)}-{m.group(1)}-{m.group(2)}"
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    return None
+
+
+def snapshot_date(path_or_url):
+    return date_in(path_or_url) or datetime.utcnow().strftime("%Y-%m-%d")
 
 
 def find_latest_pdf():
     import requests
     r = requests.get(CIG_URL, timeout=30, headers={"User-Agent": "Transit411/1.0"})
+    if r.status_code == 403:
+        raise SystemExit(f"{CIG_URL} refused the request (HTTP 403 - the site blocks automated access).\n"
+                         "Download the dashboard PDF in a browser, copy it into the app folder, and run:\n"
+                         "  docker compose run --rm -v \"$PWD/<file>.pdf:/tmp/dash.pdf\" cig --file /tmp/dash.pdf")
     r.raise_for_status()
     links = re.findall(r'href="([^"]+\.pdf)"', r.text, flags=re.I)
     dash = [l for l in links if "dashboard" in l.lower()]
     if not dash:
         raise SystemExit("No dashboard PDF link found on " + CIG_URL)
-    def keyf(u):
-        m = re.search(r"(\d{4})-(\d{2})-(\d{2})", u) or re.search(r"(\d{2})-(\d{2})-(\d{4})", u)
-        return u  # lexical fallback
-    url = sorted(dash)[-1]
+    # Newest by the date in the file name (a plain string sort puts 09-...-2025 after 03-...-2026).
+    url = max(dash, key=lambda u: (date_in(u) or "", u))
     if url.startswith("/"):
         url = "https://www.transit.dot.gov" + url
     return url
@@ -134,10 +146,18 @@ def create_table(conn):
     conn.commit()
 
 
+MIN_ROWS = 20  # the dashboard lists far more; fewer means the PDF layout changed and parsing failed
+
+
 def load(conn, rows, snap):
     create_table(conn)
+    if len(rows) < MIN_ROWS:
+        raise SystemExit(f"Only {len(rows)} projects parsed (expected {MIN_ROWS}+); the dashboard layout may have "
+                         "changed. Existing cig_projects data was left unchanged.")
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM cig_projects")  # dashboard is a point-in-time snapshot
+        # The dashboard is a point-in-time snapshot; replace it in one transaction so a failure
+        # part-way leaves the previous snapshot in place.
+        cur.execute("DELETE FROM cig_projects")
         for r in rows:
             cur.execute(
                 "INSERT INTO cig_projects (snapshot_date, project_name, sponsor, city, state, mode, phase, "
