@@ -227,11 +227,13 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
         where.append("%s = ANY(tags)"); params.append(tag)
     if state:
         where.append("state=%s"); params.append(state)
+    # A placement only counts as featured until featured_until passes.
+    live = "(COALESCE(featured, false) AND (featured_until IS NULL OR featured_until > now()))"
     if featured is not None:
-        where.append("featured=%s"); params.append(featured)
+        where.append(f"{live} = %s"); params.append(featured)
     sql = ("SELECT id, slug, pillar, title, status, publish_at, source_name, source_url, "
-           "agencies, mode, programs, tags, state, featured, sponsor FROM content_posts "
-           "WHERE " + " AND ".join(where) + " ORDER BY featured DESC, publish_at DESC NULLS LAST LIMIT 200")
+           f"agencies, mode, programs, tags, state, {live} AS featured, featured_until, sponsor FROM content_posts "
+           "WHERE " + " AND ".join(where) + f" ORDER BY {live} DESC, publish_at DESC NULLS LAST LIMIT 200")
     out = []
     try:
         with _db() as c, c.cursor() as cur:
@@ -240,6 +242,7 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
             for row in cur.fetchall():
                 p = dict(zip(names, row))
                 p["publish_at"] = p["publish_at"].isoformat() if p.get("publish_at") else None
+                p["featured_until"] = p["featured_until"].isoformat() if p.get("featured_until") else None
                 out.append(p)
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
@@ -269,16 +272,23 @@ def unpublish(post_id: int):
 
 @app.post("/api/posts/{post_id}/feature")
 def feature(post_id: int, on: bool = True, sponsor: Optional[str] = None, days: int = 30):
-    """Mark a post as a featured/sponsored placement (e.g. a paid People-on-the-move highlight)."""
+    """Mark a post as a featured/sponsored placement (e.g. a paid People-on-the-move highlight)
+    for `days` days (1-365); it drops out of featured ordering automatically when that passes."""
+    if not 1 <= days <= 365:
+        raise HTTPException(400, "days must be between 1 and 365")
     try:
         with _db() as c, c.cursor() as cur:
             if on:
                 cur.execute("UPDATE content_posts SET featured=true, sponsor=%s, "
                             "featured_until = now() + make_interval(days => %s) WHERE id=%s",
-                            (sponsor, days, post_id))
+                            ((sponsor or "").strip()[:120] or None, days, post_id))
             else:
                 cur.execute("UPDATE content_posts SET featured=false, featured_until=NULL WHERE id=%s", (post_id,))
+            if not cur.rowcount:
+                raise HTTPException(404, "no post with that id")
             c.commit()
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return {"post_id": post_id, "featured": on}

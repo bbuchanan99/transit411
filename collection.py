@@ -157,6 +157,39 @@ def classify(entry):
         return None
 
 
+MODES = ["Bus", "BRT", "Light Rail", "Heavy Rail", "Commuter Rail", "Streetcar", "Ferry", "Multimodal"]
+PROGRAMS = ["CIG New Starts", "CIG Small Starts", "CIG Core Capacity", "TIFIA", "RRIF", "RAISE", "INFRA",
+            "Formula", "Ballot Measure", "P3"]
+US_STATES = set("AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ "
+                "NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR GU VI AS MP".split())
+
+
+def clean_facets(c):
+    """Make the model's facet fields safe to store and filter on: arrays really are lists of short
+    strings (a bare string like "Bus" becomes ["Bus"]), mode/programs keep only the allowed values
+    (case-insensitive), and state is a real 2-letter code or None."""
+    def as_list(v, limit=12, size=120):
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list):
+            return []
+        out = []
+        for x in v:
+            s = str(x).strip()[:size] if isinstance(x, (str, int, float)) else ""
+            if s and s not in out:
+                out.append(s)
+        return out[:limit]
+
+    def pick(v, allowed):
+        canon = {a.lower(): a for a in allowed}
+        return [canon[s.lower()] for s in as_list(v) if s.lower() in canon]
+
+    state = str(c.get("state") or "").strip().upper()
+    return {"agencies": as_list(c.get("agencies")), "mode": pick(c.get("mode"), MODES),
+            "programs": pick(c.get("programs"), PROGRAMS), "tags": as_list(c.get("tags"), size=60),
+            "state": state if state in US_STATES else None}
+
+
 USER_AGENT = "Mozilla/5.0 (compatible; Transit411FeedReader/1.0; +https://github.com/bbuchanan99/transit411)"
 
 
@@ -251,8 +284,7 @@ def run(conn, limit_sources=None):
                 continue
             insert_item(conn, c.get("pillar"), c.get("headline") or e["title"],
                         c.get("summary"), name, e["link"], e["published"], c.get("relevance", "med"),
-                        agencies=c.get("agencies"), mode=c.get("mode"), programs=c.get("programs"),
-                        tags=c.get("tags"), state=c.get("state"))
+                        **clean_facets(c))
             kept += 1
         added += kept
         print(f"  {name}: {len(entries)} in feed, {new} new, {kept} queued, {low} low relevance"
