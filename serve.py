@@ -7,7 +7,9 @@ Minimal read-only Ask NTD API — run on your NAS network to test end to end.
 
   GET  /health                       -> {ok, rows}
   GET  /sql?q=SELECT ...             -> {sql, columns, rows}
-  POST /ask   {"question": "..."}    -> {question, sql, columns, rows}   (needs ANTHROPIC_API_KEY)
+  POST /ask   {"question": "...", "history": [{"question": ..., "sql": ...}, ...]}
+              -> {question, sql, columns, rows}   (needs ANTHROPIC_API_KEY; history is optional
+                 and makes follow-ups like "what about Texas?" modify the previous query)
 
 NOT hardened for the public internet. Before exposing this beyond your LAN,
 add authentication, rate limiting, and HTTPS, and keep the API key server-side.
@@ -15,6 +17,7 @@ Recommended: keep this API + the database internal; put the public website on
 managed hosting and have it call this over a secure tunnel.
 """
 import os
+from typing import List, Optional
 import anthropic
 import duckdb
 from fastapi import FastAPI, HTTPException
@@ -82,14 +85,20 @@ def sql(q: str):
     return {"sql": q, **_result(df)}
 
 
+class Turn(BaseModel):
+    question: Optional[str] = None
+    sql: Optional[str] = None
+
+
 class Ask(BaseModel):
     question: str
+    history: Optional[List[Turn]] = None  # prior turns, oldest first; makes follow-ups work
 
 
 @app.post("/ask")
 def ask(a: Ask):
     try:
-        generated = nl_to_sql(a.question)
+        generated = nl_to_sql(a.question, history=[t.model_dump() for t in (a.history or [])])
     except anthropic.AnthropicError as e:
         # 502: the upstream model service failed, not this API or the question.
         raise HTTPException(status_code=502, detail=_anthropic_detail(e))

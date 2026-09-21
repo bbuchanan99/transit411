@@ -5,8 +5,10 @@ Query the NTD database. Two ways in:
   python query.py "cheapest subways per rider"          # natural language (needs ANTHROPIC_API_KEY)
 
 The natural-language path is the real Ask NTD engine: the model turns your
-question into ONE read-only SELECT, which runs against real NTD data. Swap the
-model call for a local LLM (Ollama) later without changing anything else.
+question into ONE read-only SELECT, which runs against real NTD data. It is
+conversation-aware: pass prior turns and follow-ups like "what about Texas?"
+modify the previous query instead of starting over. Swap the model call for a
+local LLM (Ollama) later without changing anything else.
 """
 import argparse
 import os
@@ -83,18 +85,28 @@ def run_sql(con, sql):
     return con.execute(sql).df()
 
 
-def nl_to_sql(question):
+def nl_to_sql(question, history=None):
+    """history: prior turns [{'question': str, 'sql': str}, ...]; follow-ups modify the last query."""
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         return None
     import anthropic
     client = anthropic.Anthropic(api_key=key)
+    messages = []
+    # Only complete turns, so user/assistant messages alternate; the last 6 are plenty of context.
+    for turn in [t for t in (history or []) if t.get("question") and t.get("sql")][-6:]:
+        messages.append({"role": "user", "content": turn["question"][:1000]})
+        messages.append({"role": "assistant", "content": turn["sql"][:4000]})
+    messages.append({"role": "user", "content": question})
     msg = client.messages.create(
         model=os.environ.get("ASK_NTD_MODEL", "claude-haiku-4-5"),
         max_tokens=2000,
         system="You translate a question into ONE read-only DuckDB SELECT over the tables below. "
+               "This may be a running conversation: resolve follow-ups (e.g. 'what about Texas?', "
+               "'and for buses?', 'just since 2019') against the PREVIOUS query, changing only what the "
+               "user changed. If the user clearly starts a new topic, ignore the prior turns. "
                "Return ONLY the SQL, no prose, no markdown fences.\n" + SCHEMA_DOC,
-        messages=[{"role": "user", "content": question}],
+        messages=messages,
     )
     if msg.stop_reason == "max_tokens":
         raise ValueError("The generated query was too long and got cut off; try a narrower question.")
