@@ -363,6 +363,10 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
     out, summary = [], {}
     try:
         with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT to_regclass('cig_projects') IS NOT NULL")
+            if not cur.fetchone()[0]:  # nothing loaded yet: an empty pipeline, not an error
+                return {"summary": {"snapshot": None, "projects": 0, "total_cig_musd": 0.0, "by_phase": {}},
+                        "projects": []}
             cur.execute("SELECT to_char(max(snapshot_date),'YYYY-MM-DD'), count(*), "
                         "COALESCE(sum(cig_request_musd),0) FROM cig_projects")
             snap, total_projects, total_cig = cur.fetchone()
@@ -775,7 +779,7 @@ async function loadCIG(){
       +gStat(s.projects||0,"projects")+gStat("$"+(((s.total_cig_musd||0)/1000).toFixed(1))+"B","CIG requested")
       +gStat(bp.PD||0,"in development")+gStat(bp.Eng||0,"in engineering")
       +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-left:auto">snapshot '+(s.snapshot||"-")+'</div></div>';
-    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">No projects loaded. Run: docker compose run --rm cig --latest</div></div>';return;}
+    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">No projects loaded. transit.dot.gov blocks automated downloads, so download the CIG dashboard PDF in a browser (transit.dot.gov/CIG) and load it with: docker compose run --rm -v &quot;$PWD/dashboard.pdf:/tmp/dash.pdf&quot; cig --file /tmp/dash.pdf</div></div>';return;}
     out.innerHTML='<div class="rcard" style="padding:0"><div class="twrap" style="padding:10px 18px">'
       +'<table><thead><tr><th>Project</th><th>Sponsor</th><th>Location</th><th>Mode</th><th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th></tr></thead><tbody>'
       +d.projects.map(gRow).join("")+'</tbody></table></div></div>';
