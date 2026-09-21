@@ -8,6 +8,7 @@ Transit411 collection engine - populates the review queue.
   python collection.py --schedule    # stay running; collect daily at COLLECT_AT (the scheduler service)
   python collection.py --migrate     # add new columns to an existing database
   python collection.py --backfill    # one-off: add facets to items collected before facets existed
+  python collection.py --normalize   # re-apply agency name normalization (after editing AGENCY_ALIASES)
 
 Writes to `collected_items` and `sources`. The Command Center's Collection tab
 reviews what this produces. The daily run can be switched off from the Command Center's
@@ -143,11 +144,11 @@ def classify(entry):
                 "consultants and contractors. Given a feed item, return ONLY JSON:\n"
                 '{"pillar":"Funding|Procurement|People|Policy","headline":"rewritten, <=14 words, original wording",'
                 '"summary":"1-2 sentence paraphrase, no copied text","relevance":"high|med|low",'
-                '"agencies":["exact transit agency names mentioned"],"state":"2-letter US state code or empty",'
+                '"agencies":["transit agencies/authorities named (organizations only, not cities or regions), by their common public name"],"state":"2-letter US state code or empty",'
                 '"mode":["any of: Bus, BRT, Light Rail, Heavy Rail, Commuter Rail, Streetcar, Ferry, Multimodal"],'
                 '"programs":["any of: CIG New Starts, CIG Small Starts, CIG Core Capacity, TIFIA, RRIF, RAISE, INFRA, Formula, Ballot Measure, P3"],'
                 '"tags":["short free-form topic, project, or firm tags"]}\n'
-                "Use exact agency names; leave any array empty when nothing applies. "
+                "Leave any array empty when nothing applies. "
                 "Bias toward funding/procurement/people/policy that affects the capital pipeline. "
                 "Low relevance for operations, safety-incident, or consumer stories."),
         messages=[{"role": "user", "content": f"Title: {entry.get('title','')}\nSummary: {entry.get('summary','')}\nLink: {entry.get('link','')}"}])
@@ -187,9 +188,101 @@ def clean_facets(c):
         return [canon[s.lower()] for s in as_list(v) if s.lower() in canon]
 
     state = str(c.get("state") or "").strip().upper()
-    return {"agencies": as_list(c.get("agencies")), "mode": pick(c.get("mode"), MODES),
+    state = state if state in US_STATES else None
+    return {"agencies": normalize_agencies(as_list(c.get("agencies")), state), "mode": pick(c.get("mode"), MODES),
             "programs": pick(c.get("programs"), PROGRAMS), "tags": as_list(c.get("tags"), size=60),
-            "state": state if state in US_STATES else None}
+            "state": state}
+
+
+# ---- Agency names -------------------------------------------------------------------------------
+# One standard name per agency: the common public name used in the industry (MBTA, BART, NJ Transit...).
+# Aliases are matched case- and punctuation-insensitively. Add a line when a new variant shows up
+# (see the agency list in the Collection tab's filters), then run `collect --normalize`.
+AGENCY_ALIASES = {
+    "MTA (New York)": ["MTA", "Metropolitan Transportation Authority", "New York MTA", "MTA New York",
+                       "New York Metropolitan Transportation Authority", "NY MTA"],
+    "MTA New York City Transit": ["New York City Transit", "NYC Transit", "NYCT", "NYC Transit Authority",
+                                  "New York City Transit Authority"],
+    "MTA Bus Company": ["MTA Bus"],
+    "MTA Long Island Rail Road": ["Long Island Rail Road", "LIRR"],
+    "MTA Metro-North Railroad": ["Metro-North", "Metro-North Railroad", "Metro North"],
+    "Maryland Transit Administration": ["Maryland MTA", "MTA Maryland"],
+    "PATH": ["Port Authority Trans-Hudson", "Port Authority Trans-Hudson Corporation"],
+    "NJ Transit": ["New Jersey Transit", "New Jersey Transit Corporation", "NJT"],
+    "MBTA": ["Massachusetts Bay Transportation Authority", "the T"],
+    "MassDOT": ["Massachusetts Department of Transportation"],
+    "SEPTA": ["Southeastern Pennsylvania Transportation Authority"],
+    "WMATA": ["Washington Metropolitan Area Transit Authority", "Washington Metropolitan Transit Authority",
+              "DC Metro", "Metro (Washington)"],
+    "CTA": ["Chicago Transit Authority"],
+    "Metra": ["Northeast Illinois Regional Commuter Railroad Corporation"],
+    "Pace": ["Pace Suburban Bus"],
+    "LA Metro": ["Los Angeles Metro", "Los Angeles County Metropolitan Transportation Authority", "LA County Metro",
+                 "Metro Los Angeles", "LACMTA"],
+    "BART": ["Bay Area Rapid Transit", "San Francisco Bay Area Rapid Transit District", "Bay Area Rapid Transit District"],
+    "SFMTA (Muni)": ["SFMTA", "Muni", "San Francisco Municipal Transportation Agency", "San Francisco Muni"],
+    "AC Transit": ["Alameda-Contra Costa Transit District"],
+    "VTA": ["Santa Clara Valley Transportation Authority"],
+    "SamTrans": ["San Mateo County Transit District"],
+    "San Diego MTS": ["San Diego Metropolitan Transit System", "MTS"],
+    "Big Blue Bus": ["Santa Monica Big Blue Bus"],
+    "Sound Transit": ["Central Puget Sound Regional Transit Authority"],
+    "King County Metro": ["King County Metro Transit"],
+    "TriMet": ["Tri-County Metropolitan Transportation District of Oregon"],
+    "DART": ["Dallas Area Rapid Transit"],
+    "Houston METRO": ["Houston Metro", "Metropolitan Transit Authority of Harris County", "METRO Houston",
+                      "Houston Transit Authority"],
+    "CapMetro": ["Capital Metro", "Capital Metropolitan Transportation Authority"],
+    "VIA Metropolitan Transit": ["VIA"],
+    "RTD (Denver)": ["RTD", "Denver RTD", "Regional Transportation District"],
+    "UTA": ["Utah Transit Authority"],
+    "Valley Metro": ["Valley Metro Rail"],
+    "MARTA": ["Metropolitan Atlanta Rapid Transit Authority"],
+    "Miami-Dade Transit": ["Miami-Dade Department of Transportation and Public Works", "County of Miami-Dade"],
+    "Metro Transit (Minneapolis)": ["Metro Transit"],
+    "Met Council": ["Metropolitan Council"],
+    "Pittsburgh Regional Transit": ["PRT", "Port Authority of Allegheny County"],
+    "Greater Cleveland RTA": ["Greater Cleveland Regional Transit Authority", "GCRTA"],
+    "Jacksonville Transportation Authority": ["JTA"],
+    "Columbus Transit": ["Columbus Transit System"],
+    "Canadian National Railway": ["Canadian National", "CN"],
+    "FTA": ["Federal Transit Administration"],
+}
+
+
+def _akey(s):
+    import re
+    s = str(s).lower().replace("&", " and ")
+    s = re.sub(r"^the\s+", "", s)
+    return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+
+_AGENCY_INDEX = {}
+for _canon, _aliases in AGENCY_ALIASES.items():
+    for _a in [_canon, *_aliases]:
+        _AGENCY_INDEX[_akey(_a)] = _canon
+
+
+def normalize_agencies(names, state=None):
+    """Map agency names to their standard name, drop group/region labels ("Bay Area transit agencies"),
+    and de-duplicate. "MTA" means Maryland's agency when the item's state is MD, New York's otherwise.
+    Unknown names are kept as written (trimmed)."""
+    import re
+    out = []
+    for n in names or []:
+        n = str(n).strip()
+        k = _akey(n)
+        if not k or re.search(r"\b(agencies|operators|region|area transit|systems)$", k) or k in ("dallas fort worth",):
+            continue
+        if k in ("mta", "maryland mta", "mta maryland") and state == "MD":
+            canon = "Maryland Transit Administration"
+        elif k == "regional transportation district" and state not in (None, "CO"):
+            canon = n  # another region's "RTD"; only Denver's is RTD (Denver)
+        else:
+            canon = _AGENCY_INDEX.get(k, n)
+        if canon not in out:
+            out.append(canon)
+    return out
 
 
 USER_AGENT = "Mozilla/5.0 (compatible; Transit411FeedReader/1.0; +https://github.com/bbuchanan99/transit411)"
@@ -412,10 +505,10 @@ def classify_facets(item):
         model=os.environ.get("COLLECT_MODEL", "claude-haiku-4-5"),
         max_tokens=300,
         system=("Tag a transit-industry news item. Return ONLY JSON:\n"
-                '{"agencies":["exact transit agency names mentioned"],"state":"2-letter US state code or empty",'
+                '{"agencies":["transit agencies/authorities named (organizations only, not cities or regions), by their common public name"],"state":"2-letter US state code or empty",'
                 f'"mode":["any of: {", ".join(MODES)}"],"programs":["any of: {", ".join(PROGRAMS)}"],'
                 '"tags":["short free-form topic, project, or firm tags"]}\n'
-                "Use exact agency names; leave any array empty when nothing applies."),
+                "Leave any array empty when nothing applies."),
         messages=[{"role": "user", "content": f"Headline: {item['headline']}\nSummary: {item.get('summary') or ''}"
                                               f"\nLink: {item.get('source_url') or ''}"}])
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
@@ -459,6 +552,27 @@ def backfill(conn, limit=None):
     print(f"Backfill: {done} tagged, {failed} failed (re-run to retry), {len(items)} needed facets.")
 
 
+def normalize_existing(conn):
+    """Re-apply normalize_agencies() to every stored item and post (no model calls). Run after
+    editing AGENCY_ALIASES."""
+    changed = {}
+    with conn.cursor() as cur:
+        for table in ("collected_items", "content_posts"):
+            cur.execute(f"SELECT id, agencies, state FROM {table} WHERE cardinality(agencies) > 0")
+            n = 0
+            for rid, agencies, state in cur.fetchall():
+                new = normalize_agencies(agencies, state)
+                if new != list(agencies):
+                    cur.execute(f"UPDATE {table} SET agencies=%s WHERE id=%s", (new, rid))
+                    n += 1
+            changed[table] = n
+        cur.execute("SELECT count(DISTINCT a) FROM collected_items, unnest(agencies) a")
+        distinct = cur.fetchone()[0]
+    conn.commit()
+    print(f"Agencies normalized: {changed['collected_items']} items, {changed['content_posts']} posts updated; "
+          f"{distinct} distinct agency names now.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", action="store_true")
@@ -467,6 +581,8 @@ def main():
     ap.add_argument("--migrate", action="store_true")
     ap.add_argument("--backfill", action="store_true",
                     help="one-off: add facets to existing items collected before facets existed")
+    ap.add_argument("--normalize", action="store_true",
+                    help="re-apply agency name normalization to stored items and posts (no model calls)")
     ap.add_argument("--schedule", action="store_true",
                     help="stay running and collect daily at COLLECT_AT, unless Auto-collect is off")
     a = ap.parse_args()
@@ -488,8 +604,10 @@ def main():
             run(conn, a.limit)
         if a.backfill:
             backfill(conn, None if a.run else a.limit)
-        if not (a.seed or a.run or a.migrate or a.backfill):
-            print("Nothing to do. Use --migrate, --seed, --run, --backfill and/or --schedule.")
+        if a.normalize:
+            normalize_existing(conn)
+        if not (a.seed or a.run or a.migrate or a.backfill or a.normalize):
+            print("Nothing to do. Use --migrate, --seed, --run, --backfill, --normalize and/or --schedule.")
 
 
 if __name__ == "__main__":
