@@ -1,0 +1,80 @@
+---
+import Base from "../layouts/Base.astro";
+
+// Sample content for the preview build. At launch this is replaced by a fetch of
+// published posts from `${import.meta.env.PUBLIC_API_BASE}/api/posts`.
+const lead = {
+  pillar: "Funding",
+  title: "The week's biggest transit funding story headlines the wire",
+  deck: "This is placeholder content for the preview build. At launch the homepage reads your published posts from the live API, and this becomes the top funding story of the week — written for agency staff, consultants, and contractors.",
+};
+const also = [
+  { pillar: "Procurement", title: "Agency releases a progressive design-build RFQ for a rail extension" },
+  { pillar: "People", title: "New chief program officer named at a major transit authority" },
+  { pillar: "Policy", title: "Surface transportation reauthorization advances out of committee" },
+];
+const stats = [
+  { l: "Active CIG projects", v: "47", s: "In the FTA pipeline" },
+  { l: "CIG requested", v: "$28.2B", s: "Total across the pipeline" },
+  { l: "In Engineering", v: "7", s: "Advanced past Project Development" },
+];
+const wire = [
+  { pillar: "Funding", title: "A funding item headline goes here for the preview" },
+  { pillar: "Procurement", title: "A procurement notice headline for the preview" },
+  { pillar: "People", title: "A people-on-the-move headline for the preview" },
+  { pillar: "Policy", title: "A policy headline for the preview build" },
+];
+---
+<Base>
+  <section class="lead-wrap wrap" style="padding-left:0;padding-right:0">
+    <div class="lead">
+      <span class="kicker">Lead &mdash; {lead.pillar}</span>
+      <h1 class="disp">{lead.title}</h1>
+      <div class="photo">[ Lead photo ]</div>
+      <p class="deck">{lead.deck}</p>
+      <div class="byline">By Transit411 &middot; <span class="preview-note">Preview &middot; sample content</span></div>
+    </div>
+    <div class="rail">
+      <div class="rail-h">Also this week</div>
+      {also.map((a) => (
+        <div class="rail-item">
+          <h3>{a.title}</h3>
+          <div class="k">{a.pillar}</div>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <section class="stats wrap" style="padding-left:0;padding-right:0">
+    {stats.map((st) => (
+      <div class="stat">
+        <div class="l">{st.l}</div>
+        <div class="v disp">{st.v}</div>
+        <div class="s">{st.s}</div>
+      </div>
+    ))}
+  </section>
+
+  <div class="wrap">
+    <h2 class="section-h">More from the wire</h2>
+    <div class="grid">
+      {wire.map((w) => (
+        <div class="cell">
+          <div class="k">{w.pillar}</div>
+          <h3>{w.title}</h3>
+        </div>
+      ))}
+    </div>
+
+    <section id="newsletter" class="newsletter">
+      <div>
+        <h2 class="disp">Transit411 Weekly Intelligence</h2>
+        <p>Funding news, procurement notices, and career moves &mdash; every Thursday.</p>
+      </div>
+      <form onsubmit="event.preventDefault();">
+        <input type="email" placeholder="you@agency.gov" aria-label="Email address" />
+        <button type="submit">Subscribe</button>
+      </form>
+    </section>
+  </div>
+</Base>
