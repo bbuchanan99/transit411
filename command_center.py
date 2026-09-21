@@ -428,25 +428,30 @@ MAX_CIG_PDF = 25 * 1024 * 1024
 
 @app.post("/api/cig/upload")
 async def cig_upload(request: Request, filename: str = ""):
-    """Load a CIG dashboard PDF downloaded in a browser (transit.dot.gov blocks automated downloads).
-    The raw PDF is the request body; `filename` supplies the snapshot date (e.g. ...09-11-2026.pdf).
-    Uses cig.py's parser and its safeguard: a PDF that parses to too few projects is refused and the
-    current pipeline is left as it was."""
-    import asyncio
-    import tempfile
-    import cig
+    """Load a CIG dashboard PDF downloaded in a browser. The raw PDF is the request body; `filename`
+    supplies the snapshot date (e.g. ...09-11-2026.pdf)."""
     body = await request.body()
     if len(body) > MAX_CIG_PDF:
         raise HTTPException(413, "That file is over 25 MB; the CIG dashboard PDF is much smaller.")
+    return await _load_cig_pdf(body, filename, "file name")
+
+
+async def _load_cig_pdf(body, name, what):
+    """Parse a dashboard PDF and load it as the snapshot dated in `name` (upload file name or link).
+    Shared by upload and load-from-link; cig.load's safeguard refuses a PDF that parses to too few
+    projects, leaving the pipeline as it was."""
+    import asyncio
+    import tempfile
+    import cig
     if not body.startswith(b"%PDF"):
-        raise HTTPException(400, "That isn't a PDF. Upload the CIG dashboard PDF from transit.dot.gov/CIG.")
+        raise HTTPException(400, "That isn't a PDF. Use the CIG dashboard PDF from transit.dot.gov/CIG.")
 
     def parse_and_load():
         with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
             f.write(body)
             f.flush()
             rows = cig.parse_pdf(f.name)
-        snap = cig.date_in(filename)
+        snap = cig.date_in(name)
         with _db() as c:
             n = cig.load(c, rows, snap or cig.snapshot_date(""))
         return n, snap
@@ -460,7 +465,55 @@ async def cig_upload(request: Request, filename: str = ""):
     except Exception as e:
         raise HTTPException(422, f"Couldn't read that PDF ({type(e).__name__}: {e}). The current pipeline is unchanged.")
     return {"projects": n, "snapshot": snap,
-            "note": None if snap else "No date in the file name, so today's date was used as the snapshot date."}
+            "note": None if snap else f"No date in the {what}, so today's date was used as the snapshot date."}
+
+
+class CigLink(BaseModel):
+    url: str
+
+
+CIG_HOSTS = {"www.transit.dot.gov", "transit.dot.gov"}
+
+
+@app.post("/api/cig/load-url")
+async def cig_load_url(link: CigLink):
+    """Fetch a dashboard PDF from its transit.dot.gov link and load it. FTA's /CIG page blocks
+    automated requests but the PDF files themselves don't, so pasting the link skips the download.
+    Only https PDF links on transit.dot.gov are fetched (no redirects to other hosts), so this can't
+    be used to make the NAS request arbitrary addresses."""
+    import asyncio
+    from urllib.parse import urlparse
+    import requests
+    url = link.url.strip()
+    u = urlparse(url)
+    if u.scheme != "https" or u.hostname not in CIG_HOSTS or not u.path.lower().endswith(".pdf"):
+        raise HTTPException(400, "Paste the dashboard's PDF link from transit.dot.gov "
+                                 "(https://www.transit.dot.gov/sites/fta.dot.gov/files/...pdf).")
+
+    def fetch():
+        with requests.get(url, timeout=(10, 60), stream=True, allow_redirects=False,
+                          headers={"User-Agent": "Transit411/1.0"}) as r:
+            if r.status_code in (301, 302, 303, 307, 308):
+                raise HTTPException(422, "That link redirects elsewhere; paste the PDF's final link.")
+            if r.status_code == 403:
+                raise HTTPException(422, "transit.dot.gov refused that request (HTTP 403). "
+                                         "Download the PDF in your browser and use Upload dashboard instead.")
+            if r.status_code != 200:
+                raise HTTPException(422, f"transit.dot.gov returned HTTP {r.status_code} for that link.")
+            data = bytearray()
+            for chunk in r.iter_content(64 * 1024):
+                data += chunk
+                if len(data) > MAX_CIG_PDF:
+                    raise HTTPException(413, "That file is over 25 MB; the CIG dashboard PDF is much smaller.")
+            return bytes(data)
+
+    try:
+        body = await asyncio.to_thread(fetch)
+    except HTTPException:
+        raise
+    except requests.RequestException as e:
+        raise HTTPException(502, f"Couldn't download that link ({type(e).__name__}).")
+    return await _load_cig_pdf(body, u.path, "link")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -587,9 +640,13 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="pPosts"></div>
   </div>
   <div class="panel" id="p-grants">
-    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. Click a project for its milestone dates and month-by-month history. FTA updates it about monthly: download the PDF at <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a>, then upload it here.</p></div>
+    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. Click a project for its milestone dates and month-by-month history. FTA updates it about monthly: open <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a>, then copy the dashboard PDF's link into the box below (or download it and upload it).</p></div>
       <div style="display:flex;gap:8px"><button class="go" style="padding:9px 16px" id="gUploadBtn" type="button">Upload dashboard</button><button class="newq" id="gRefresh" type="button">Refresh</button></div></div>
     <input type="file" id="gFile" accept="application/pdf,.pdf" hidden>
+    <form class="csearch" id="gLinkForm" style="margin:0 0 12px">
+      <input type="url" id="gLink" placeholder="...or paste the dashboard PDF link (https://www.transit.dot.gov/sites/fta.dot.gov/files/...pdf)" aria-label="Dashboard PDF link" autocomplete="off">
+      <button class="newq" id="gLinkBtn" type="submit">Load from link</button>
+    </form>
     <div id="gMsg"></div>
     <div id="gSummary" style="margin-bottom:14px"></div>
     <div class="examples" id="gChips"></div>
@@ -848,6 +905,19 @@ document.getElementById("gFile").addEventListener("change",async e=>{
     const t=await r.text();
     if(!r.ok){gNote("err","Not loaded: "+errText(t));}
     else{const d=JSON.parse(t);gNote("loading","Loaded "+d.projects+" projects"+(d.snapshot?" (snapshot "+d.snapshot+")":"")+"."+(d.note?" "+d.note:""));loadCIG();}
+  }catch(err){gNote("err","Couldn't reach the Command Center.");}
+  btn.disabled=false;
+});
+// Or paste the PDF's link: the server fetches it from transit.dot.gov and loads it the same way.
+document.getElementById("gLinkForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const inp=document.getElementById("gLink"),url=inp.value.trim();if(!url)return;
+  const btn=document.getElementById("gLinkBtn");btn.disabled=true;gNote("loading","Downloading and reading the dashboard...");
+  try{
+    const r=await fetch("/api/cig/load-url",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})});
+    const t=await r.text();
+    if(!r.ok){gNote("err","Not loaded: "+errText(t));}
+    else{const d=JSON.parse(t);inp.value="";gNote("loading","Loaded "+d.projects+" projects"+(d.snapshot?" (snapshot "+d.snapshot+")":"")+"."+(d.note?" "+d.note:""));loadCIG();}
   }catch(err){gNote("err","Couldn't reach the Command Center.");}
   btn.disabled=false;
 });
