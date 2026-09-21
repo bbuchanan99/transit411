@@ -15,6 +15,7 @@ import argparse
 import math
 import os
 from datetime import datetime, timezone
+from urllib.parse import quote_plus
 
 
 def _to_dt(v):
@@ -68,13 +69,43 @@ SOURCES = [
     ("Eno Center for Transportation", "https://enotrans.org/feed/", "Policy", "Association", "Manual", "Med", BLOCKED),
 ]
 
+# Keyword searches via Google News RSS. These route AROUND sites that block bots:
+# Google has already indexed the trade press, so a keyword search surfaces their stories
+# without us hitting their 403 walls. "when:Nd" limits each query to the last N days.
+SEARCH_QUERIES = [
+    ("transit funding when:21d", "Funding"),
+    ("FTA grant OR NOFO transit when:30d", "Funding"),
+    ("transit capital project funding when:21d", "Funding"),
+    ("transit ballot measure OR sales tax when:30d", "Funding"),
+    ("light rail OR bus rapid transit contract award when:30d", "Procurement"),
+    ("transit progressive design-build OR RFP OR RFQ when:30d", "Procurement"),
+    ("transit agency CEO OR general manager appointed when:30d", "People"),
+    ("FTA OR transit surface transportation reauthorization when:30d", "Policy"),
+]
+
+
+def google_news_url(query):
+    return ("https://news.google.com/rss/search?q=" + quote_plus(query)
+            + "&hl=en-US&gl=US&ceid=US:en")
+
+
+# Rendered as ordinary RSS sources so the existing fetch/classify/dedup pipeline handles them.
+SEARCH_SOURCES = [
+    (f"Google News: {q.split(' when:')[0]}", google_news_url(q), pillar, "Search", "RSS", "Med",
+     "Keyword search via Google News RSS.")
+    for q, pillar in SEARCH_QUERIES
+]
+
+# Everything --seed loads and --run fetches.
+ALL_SOURCES = SOURCES + SEARCH_SOURCES
+
 
 def seed_sources(conn):
     """Sync the registry into Postgres by source name: add new sources and update existing ones
     (URL, method, notes...), so corrections here reach the database. Safe to re-run."""
     added = updated = 0
     with conn.cursor() as cur:
-        for name, url, pillar, typ, method, trust, notes in SOURCES:
+        for name, url, pillar, typ, method, trust, notes in ALL_SOURCES:
             cur.execute("UPDATE sources SET url=%s, pillar=%s, type=%s, method=%s, trust=%s, notes=%s "
                         "WHERE name=%s", (url, pillar, typ, method, trust, notes, name))
             if cur.rowcount:
@@ -296,7 +327,7 @@ def main():
     with psycopg.connect(dsn) as conn:
         if a.seed:
             added, updated = seed_sources(conn)
-            print(f"Sources: {added} added, {updated} updated ({len(SOURCES)} in the registry).")
+            print(f"Sources: {added} added, {updated} updated ({len(ALL_SOURCES)} in the registry).")
         if a.run:
             # Manual runs always go ahead; the Auto-collect toggle only governs the daily schedule.
             run(conn, a.limit)
