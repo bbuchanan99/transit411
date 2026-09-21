@@ -583,6 +583,77 @@ async def cig_load_url(link: CigLink):
     return await _load_cig_pdf(body, u.path, "link", "link", url)
 
 
+CIG_SCHEMA_DOC = """Table cig_projects - the FTA Capital Investment Grants pipeline, ONE ROW PER PROJECT PER MONTHLY SNAPSHOT.
+Columns:
+- snapshot_date (date): which monthly dashboard the row is from. The CURRENT pipeline is the latest snapshot; unless the question is about history/change over time, filter to it: snapshot_date = (SELECT max(snapshot_date) FROM cig_projects).
+- project_name, sponsor (the transit agency), city, state (2-letter code)
+- mode: 'Bus','BRT','Light Rail','Heavy Rail','Commuter Rail','Streetcar','Rail' (may be NULL)
+- phase: 'PD' (Project Development) or 'Eng' (Engineering)
+- rating: 'H','MH','M','ML','L' (High..Low); NULL if unrated. "Medium or better" = rating IN ('M','MH','H').
+- cost_musd (numeric, total project cost in $millions), cig_request_musd (numeric, CIG funding sought in $millions), cig_share (text like '49%')
+- noncig_status: 'Committed' or 'In Progress' (local match). est_grant (text, e.g. 'Spring 2027').
+- milestone dates (text): nepa, pd_entry, eng_entry, lonp_req, lonp_dec, req_rating_date, proj_rating_date.
+For "what changed / advanced / trend" questions, compare rows across snapshot_date for the same project_name; otherwise use the latest snapshot. Return ONE read-only SELECT, at most 200 rows."""
+
+
+def _cig_nl_to_sql(question, history=None):
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return None
+    import re
+    import anthropic
+    client = anthropic.Anthropic(api_key=key)
+    messages = []
+    for t in (history or [])[-6:]:
+        if t.get("question"):
+            messages.append({"role": "user", "content": t["question"]})
+        if t.get("sql"):
+            messages.append({"role": "assistant", "content": t["sql"]})
+    messages.append({"role": "user", "content": question})
+    msg = client.messages.create(
+        model=os.environ.get("ASK_NTD_MODEL", "claude-haiku-4-5"), max_tokens=600,
+        system="You translate a question into ONE read-only PostgreSQL SELECT over the table below. "
+               "Return ONLY the SQL - no prose, no markdown fences.\n" + CIG_SCHEMA_DOC,
+        messages=messages)
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    return re.sub(r"^```sql|^```|```$", "", text, flags=re.M).strip()
+
+
+class CigAsk(BaseModel):
+    question: str
+    history: Optional[List[Turn]] = None
+
+
+@app.post("/api/cig/ask")
+def cig_ask(a: CigAsk):
+    import re
+    import datetime as _dt
+    from decimal import Decimal
+    sql = _cig_nl_to_sql(a.question, [t.model_dump() for t in (a.history or [])])
+    if not sql:
+        raise HTTPException(400, "Set ANTHROPIC_API_KEY for natural-language CIG search.")
+    if not re.match(r"^\s*SELECT\b", sql, re.I) or re.search(
+            r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|TRUNCATE|COPY|MERGE)\b", sql, re.I):
+        raise HTTPException(400, "Only read-only SELECT queries are allowed.")
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SET TRANSACTION READ ONLY")
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            rows = [list(r) for r in cur.fetchmany(200)]
+    except Exception as e:
+        raise HTTPException(400, f"Query error: {e}")
+
+    def safe(v):
+        if isinstance(v, Decimal):
+            return float(v)
+        if isinstance(v, (_dt.date, _dt.datetime)):
+            return v.isoformat()
+        return v
+    return {"question": a.question, "sql": sql, "columns": cols,
+            "rows": [[safe(v) for v in r] for r in rows]}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -676,6 +747,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   <button class="tab" data-t="sources">Sources</button>
   <button class="tab" data-t="publish">Publish</button>
   <button class="tab" data-t="grants">Grants</button>
+  <button class="tab" data-t="askcig">Ask CIG</button>
 </div>
 <div class="wrap">
   <div class="panel on" id="p-ask">
@@ -723,6 +795,12 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     </details>
     <div class="examples" id="gChips"></div>
     <div id="gOut"></div>
+  </div>
+  <div class="panel" id="p-askcig">
+    <div class="askhead"><div><h2 class="disp">Ask CIG</h2><p class="lead">Ask the Capital Investment Grants pipeline in plain English. Your question becomes a read-only SQL query over cig_projects, run and shown.</p></div></div>
+    <form id="cigAskForm"><input type="text" id="cigQ" placeholder="e.g. BRT projects seeking over $100M rated Medium or better" autocomplete="off"><button class="go" type="submit">Ask</button></form>
+    <div class="examples" id="cigEx"></div>
+    <div id="cigAskOut"></div>
   </div>
 </div>
 <script>
@@ -1063,6 +1141,27 @@ async function loadLoads(){
         return '<tr><td>'+esc(x.loaded_at)+'</td><td>'+esc(x.snapshot_date||"-")+'</td><td>'+esc(GSRC[x.source]||x.source||"-")+'</td><td>'+name+'</td><td class="num">'+(x.projects!=null?x.projects:"-")+'</td><td>'+res+'</td><td>'+pdf+'</td></tr>';
       }).join("")+'</tbody></table></div>';
   }catch(e){box.innerHTML='<div class="err">Could not load the file list.</div>';}
+}
+
+// ---- Ask CIG tab ----
+const CIGEX=["Which projects want the most CIG funding?","BRT projects seeking over $100M","Projects in Engineering rated Medium or better","Projects in Texas"];
+const cigEx=document.getElementById("cigEx");
+CIGEX.forEach(t=>{const b=document.createElement("button");b.className="ex";b.textContent=t;b.onclick=()=>{document.getElementById("cigQ").value=t;cigDoAsk(t);};cigEx.appendChild(b);});
+document.getElementById("cigAskForm").onsubmit=e=>{e.preventDefault();const v=document.getElementById("cigQ").value.trim();if(v)cigDoAsk(v);};
+async function cigDoAsk(q){
+  const out=document.getElementById("cigAskOut");
+  out.innerHTML='<div class="rcard"><div class="loading">Reading \u201c'+esc(q)+'\u201d and running the query...</div></div>';
+  try{
+    const r=await fetch("/api/cig/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q})});
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(await r.text())+'</div></div>';return;}
+    const d=await r.json();
+    const sqlBlock='<details style="margin:6px 18px 14px"><summary style="cursor:pointer;font-family:Archivo,sans-serif;font-size:12px;font-weight:700;color:var(--muted)">View the query it ran</summary><pre style="white-space:pre-wrap;font-family:JetBrains Mono,monospace;font-size:12px;padding:8px 0;color:var(--ink)">'+esc(d.sql||"")+'</pre></details>';
+    if(!d.rows||!d.rows.length){out.innerHTML='<div class="rcard"><div class="rh" style="background:var(--ink);color:var(--panel);padding:11px 18px;font-family:Archivo,sans-serif;font-size:13px">'+esc(q)+' &middot; no rows</div>'+sqlBlock+'</div>';return;}
+    const th=d.columns.map(c=>"<th>"+esc(c)+"</th>").join("");
+    const tb=d.rows.map(row=>"<tr>"+row.map(v=>'<td>'+esc(v==null?"":v)+"</td>").join("")+"</tr>").join("");
+    out.innerHTML='<div class="rcard"><div class="rh" style="background:var(--ink);color:var(--panel);padding:11px 18px;font-family:Archivo,sans-serif;font-size:13px">'+esc(q)+' &middot; '+d.rows.length+' rows</div>'
+      +'<div class="twrap" style="padding:6px 18px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Archivo,sans-serif"><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sqlBlock+'</div>';
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not reach Ask CIG.</div></div>';}
 }
 refreshStatus();setInterval(refreshStatus,15000);
 </script></body></html>"""
