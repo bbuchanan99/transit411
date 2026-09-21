@@ -113,8 +113,8 @@ def find_latest_pdf():
     r = requests.get(CIG_URL, timeout=30, headers={"User-Agent": "Transit411/1.0"})
     if r.status_code == 403:
         raise SystemExit(f"{CIG_URL} refused the request (HTTP 403 - the site blocks automated access).\n"
-                         "Download the dashboard PDF in a browser, copy it into the app folder, and run:\n"
-                         "  docker compose run --rm -v \"$PWD/<file>.pdf:/tmp/dash.pdf\" cig --file /tmp/dash.pdf")
+                         "Download the dashboard PDF in a browser and use Upload dashboard on the Command Center's\n"
+                         "Grants tab (or: docker compose run --rm -v \"$PWD/<file>.pdf:/tmp/dash.pdf\" cig --file /tmp/dash.pdf)")
     r.raise_for_status()
     links = re.findall(r'href="([^"]+\.pdf)"', r.text, flags=re.I)
     dash = [l for l in links if "dashboard" in l.lower()]

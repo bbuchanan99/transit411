@@ -7,7 +7,7 @@ Env: API_URL (default http://api:8000), DATABASE_URL (default postgresql://trans
 import os
 from typing import List, Optional
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -390,6 +390,46 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
     return {"summary": summary, "projects": out}
 
 
+MAX_CIG_PDF = 25 * 1024 * 1024
+
+
+@app.post("/api/cig/upload")
+async def cig_upload(request: Request, filename: str = ""):
+    """Load a CIG dashboard PDF downloaded in a browser (transit.dot.gov blocks automated downloads).
+    The raw PDF is the request body; `filename` supplies the snapshot date (e.g. ...09-11-2026.pdf).
+    Uses cig.py's parser and its safeguard: a PDF that parses to too few projects is refused and the
+    current pipeline is left as it was."""
+    import asyncio
+    import tempfile
+    import cig
+    body = await request.body()
+    if len(body) > MAX_CIG_PDF:
+        raise HTTPException(413, "That file is over 25 MB; the CIG dashboard PDF is much smaller.")
+    if not body.startswith(b"%PDF"):
+        raise HTTPException(400, "That isn't a PDF. Upload the CIG dashboard PDF from transit.dot.gov/CIG.")
+
+    def parse_and_load():
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(body)
+            f.flush()
+            rows = cig.parse_pdf(f.name)
+        snap = cig.date_in(filename)
+        with _db() as c:
+            cig.load(c, rows, snap or cig.snapshot_date(""))
+        return len(rows), snap
+
+    try:
+        n, snap = await asyncio.to_thread(parse_and_load)  # parsing takes a few seconds; keep the server responsive
+    except SystemExit as e:  # cig.load's "too few projects" safeguard
+        raise HTTPException(422, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(422, f"Couldn't read that PDF ({type(e).__name__}: {e}). The current pipeline is unchanged.")
+    return {"projects": n, "snapshot": snap,
+            "note": None if snap else "No date in the file name, so today's date was used as the snapshot date."}
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -512,7 +552,10 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="pPosts"></div>
   </div>
   <div class="panel" id="p-grants">
-    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. Load with the cig job.</p></div><button class="newq" id="gRefresh" type="button">Refresh</button></div>
+    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. FTA updates it about monthly: download the PDF at <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a>, then upload it here.</p></div>
+      <div style="display:flex;gap:8px"><button class="go" style="padding:9px 16px" id="gUploadBtn" type="button">Upload dashboard</button><button class="newq" id="gRefresh" type="button">Refresh</button></div></div>
+    <input type="file" id="gFile" accept="application/pdf,.pdf" hidden>
+    <div id="gMsg"></div>
     <div id="gSummary" style="margin-bottom:14px"></div>
     <div class="examples" id="gChips"></div>
     <div id="gOut"></div>
@@ -759,6 +802,20 @@ document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.
 // ---- CIG Pipeline tab ----
 let gPhase="";
 document.getElementById("gRefresh").onclick=loadCIG;
+// Upload a dashboard PDF downloaded in the browser; the server parses and loads it.
+function gNote(kind,text){document.getElementById("gMsg").innerHTML='<div class="rcard"><div class="'+kind+'">'+esc(text)+'</div></div>';}
+document.getElementById("gUploadBtn").onclick=()=>document.getElementById("gFile").click();
+document.getElementById("gFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;
+  const btn=document.getElementById("gUploadBtn");btn.disabled=true;gNote("loading","Reading "+f.name+"...");
+  try{
+    const r=await fetch("/api/cig/upload?filename="+encodeURIComponent(f.name),{method:"POST",headers:{"Content-Type":"application/pdf"},body:f});
+    const t=await r.text();
+    if(!r.ok){gNote("err","Not loaded: "+errText(t));}
+    else{const d=JSON.parse(t);gNote("loading","Loaded "+d.projects+" projects"+(d.snapshot?" (snapshot "+d.snapshot+")":"")+"."+(d.note?" "+d.note:""));loadCIG();}
+  }catch(err){gNote("err","Couldn't reach the Command Center.");}
+  btn.disabled=false;
+});
 document.querySelector('.tab[data-t="grants"]').addEventListener("click",loadCIG);
 const gChips=document.getElementById("gChips");
 [["","All phases"],["PD","Project Development"],["Eng","Engineering"]].forEach(([k,lbl])=>{
@@ -778,8 +835,11 @@ async function loadCIG(){
     sum.innerHTML='<div class="rcard" style="padding:16px 18px;display:flex;gap:26px;flex-wrap:wrap;align-items:center">'
       +gStat(s.projects||0,"projects")+gStat("$"+(((s.total_cig_musd||0)/1000).toFixed(1))+"B","CIG requested")
       +gStat(bp.PD||0,"in development")+gStat(bp.Eng||0,"in engineering")
-      +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-left:auto">snapshot '+(s.snapshot||"-")+'</div></div>';
-    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">No projects loaded. transit.dot.gov blocks automated downloads, so download the CIG dashboard PDF in a browser (transit.dot.gov/CIG) and load it with: docker compose run --rm -v &quot;$PWD/dashboard.pdf:/tmp/dash.pdf&quot; cig --file /tmp/dash.pdf</div></div>';return;}
+      +(()=>{const age=s.snapshot?Math.floor((Date.now()-new Date(s.snapshot+"T12:00:00"))/864e5):null;const stale=age!=null&&age>45;
+        return '<div style="font-family:Archivo,sans-serif;font-size:11px;margin-left:auto;color:'+(stale?"var(--accent)":"var(--muted)")+'"'
+          +(stale?' title="Download the newest dashboard at transit.dot.gov/CIG and upload it"':'')+'>snapshot '+esc(s.snapshot||"-")
+          +(stale?' &middot; '+age+' days old - time to upload a new one':'')+'</div>';})()+'</div>';
+    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.</div></div>';return;}
     out.innerHTML='<div class="rcard" style="padding:0"><div class="twrap" style="padding:10px 18px">'
       +'<table><thead><tr><th>Project</th><th>Sponsor</th><th>Location</th><th>Mode</th><th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th></tr></thead><tbody>'
       +d.projects.map(gRow).join("")+'</tbody></table></div></div>';
