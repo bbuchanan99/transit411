@@ -596,7 +596,7 @@ Columns:
 For "what changed / advanced / trend" questions, compare rows across snapshot_date for the same project_name; otherwise use the latest snapshot. Return ONE read-only SELECT, at most 200 rows."""
 
 
-def _cig_nl_to_sql(question, history=None):
+def _cig_nl_to_sql(question, history=None, snapshot_dates=None):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         return None
@@ -604,19 +604,61 @@ def _cig_nl_to_sql(question, history=None):
     import anthropic
     client = anthropic.Anthropic(api_key=key)
     messages = []
-    for t in (history or [])[-6:]:
-        if t.get("question"):
-            messages.append({"role": "user", "content": t["question"]})
-        if t.get("sql"):
-            messages.append({"role": "assistant", "content": t["sql"]})
+    # Only complete turns, so user/assistant messages alternate.
+    for t in [t for t in (history or []) if t.get("question") and t.get("sql")][-6:]:
+        messages.append({"role": "user", "content": t["question"][:1000]})
+        messages.append({"role": "assistant", "content": t["sql"][:4000]})
     messages.append({"role": "user", "content": question})
     msg = client.messages.create(
-        model=os.environ.get("ASK_NTD_MODEL", "claude-haiku-4-5"), max_tokens=600,
+        model=os.environ.get("ASK_NTD_MODEL", "claude-haiku-4-5"), max_tokens=2000,
         system="You translate a question into ONE read-only PostgreSQL SELECT over the table below. "
-               "Return ONLY the SQL - no prose, no markdown fences.\n" + CIG_SCHEMA_DOC,
+               "Return ONLY the SQL - no prose, no markdown fences.\n" + CIG_SCHEMA_DOC
+               + ("\nSnapshots loaded (snapshot_date values, newest first): " + ", ".join(snapshot_dates)
+                  + ". Dashboards are dated mid-month, so a month means the snapshot in that month (e.g. "
+                  "date_trunc('month', snapshot_date) = '2026-07-01'); never assume the 1st. For 'between month A "
+                  "and month B' compare those two snapshots." if snapshot_dates else ""),
         messages=messages)
+    if msg.stop_reason == "max_tokens":
+        raise ValueError("The generated query was too long and got cut off; try a narrower question.")
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
     return re.sub(r"^```sql|^```|```$", "", text, flags=re.M).strip()
+
+
+CIG_READER = "cig_reader"  # database role that can read cig_projects and nothing else
+_cig_reader_ready = False
+
+
+def _ensure_cig_reader(cur):
+    """Create the restricted role Ask CIG queries run as (idempotent, once per process)."""
+    global _cig_reader_ready
+    if _cig_reader_ready:
+        return
+    cur.execute(f"""DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{CIG_READER}') THEN
+            CREATE ROLE {CIG_READER} NOLOGIN;
+        END IF; END $$""")
+    cur.execute(f"REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {CIG_READER}")
+    cur.execute(f"GRANT USAGE ON SCHEMA public TO {CIG_READER}")
+    cur.execute(f"GRANT SELECT ON cig_projects TO {CIG_READER}")
+    _cig_reader_ready = True
+
+
+def _check_cig_sql(sql):
+    """One read-only SELECT (or WITH ... SELECT) and nothing that could change role, settings or
+    reach outside the database. The query also runs as cig_reader in a read-only transaction, so
+    this is a first line of defence, not the only one."""
+    import re
+    s = sql.strip()
+    if s.endswith(";"):
+        s = s[:-1].rstrip()
+    if ";" in re.sub(r"'(?:[^']|'')*'", "''", s):
+        raise HTTPException(400, "Only a single query is allowed.")
+    if not re.match(r"^\s*(SELECT|WITH)\b", s, re.I) or re.search(
+            r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|REVOKE|TRUNCATE|COPY|MERGE|SET|RESET|DO|CALL|"
+            r"EXECUTE|PREPARE|LISTEN|NOTIFY|VACUUM|LOCK|set_config|pg_read\w*|pg_ls_dir|pg_sleep\w*|lo_\w+|dblink\w*)\b",
+            s, re.I):
+        raise HTTPException(400, "Only read-only SELECT queries over cig_projects are allowed.")
+    return s
 
 
 class CigAsk(BaseModel):
@@ -629,20 +671,38 @@ def cig_ask(a: CigAsk):
     import re
     import datetime as _dt
     from decimal import Decimal
-    sql = _cig_nl_to_sql(a.question, [t.model_dump() for t in (a.history or [])])
+    import anthropic
+    import cig as cigmod
+    try:
+        with _db() as c:
+            snaps = [s for s, _ in cigmod.snapshots(c)]
+    except Exception:
+        snaps = []
+    try:
+        sql = _cig_nl_to_sql(a.question, [t.model_dump() for t in (a.history or [])], snaps)
+    except anthropic.AnthropicError as e:
+        raise HTTPException(502, f"Anthropic API error: {getattr(e, 'message', None) or e}")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     if not sql:
         raise HTTPException(400, "Set ANTHROPIC_API_KEY for natural-language CIG search.")
-    if not re.match(r"^\s*SELECT\b", sql, re.I) or re.search(
-            r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|GRANT|TRUNCATE|COPY|MERGE)\b", sql, re.I):
-        raise HTTPException(400, "Only read-only SELECT queries are allowed.")
+    sql = _check_cig_sql(sql)
     try:
         with _db() as c, c.cursor() as cur:
+            _ensure_cig_reader(cur)
+            c.commit()
+            # Read-only transaction, as the cig_reader role (cig_projects only), with a time limit.
             cur.execute("SET TRANSACTION READ ONLY")
+            cur.execute(f"SET LOCAL ROLE {CIG_READER}")
+            cur.execute("SET LOCAL statement_timeout = '5s'")
             cur.execute(sql)
             cols = [d[0] for d in cur.description]
             rows = [list(r) for r in cur.fetchmany(200)]
+            c.rollback()
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(400, f"Query error: {e}")
+        raise HTTPException(400, {"error": f"Query error: {e}", "sql": sql})
 
     def safe(v):
         if isinstance(v, Decimal):
@@ -1153,7 +1213,7 @@ async function cigDoAsk(q){
   out.innerHTML='<div class="rcard"><div class="loading">Reading \u201c'+esc(q)+'\u201d and running the query...</div></div>';
   try{
     const r=await fetch("/api/cig/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q})});
-    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(await r.text())+'</div></div>';return;}
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
     const d=await r.json();
     const sqlBlock='<details style="margin:6px 18px 14px"><summary style="cursor:pointer;font-family:Archivo,sans-serif;font-size:12px;font-weight:700;color:var(--muted)">View the query it ran</summary><pre style="white-space:pre-wrap;font-family:JetBrains Mono,monospace;font-size:12px;padding:8px 0;color:var(--ink)">'+esc(d.sql||"")+'</pre></details>';
     if(!d.rows||!d.rows.length){out.innerHTML='<div class="rcard"><div class="rh" style="background:var(--ink);color:var(--panel);padding:11px 18px;font-family:Archivo,sans-serif;font-size:13px">'+esc(q)+' &middot; no rows</div>'+sqlBlock+'</div>';return;}
