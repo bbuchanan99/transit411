@@ -45,33 +45,45 @@ def freshness(published, deadline=None, evergreen=False, now=None):
     return (status, score)
 
 
+# (name, url, pillar, type, method, trust, notes). Only method 'RSS' is fetched by --run.
+# Sites that refuse automated requests (HTTP 403 bot protection) are 'Manual': we don't try to get
+# around those blocks. Checked from the NAS on 2026-09-21.
+BLOCKED = "Returns HTTP 403 to automated requests (bot protection), checked 2026-09-21. Review manually."
 SOURCES = [
-    ("FTA Newsroom", "https://www.transit.dot.gov/about/news", "Funding", "Official", "RSS", "High"),
-    ("Grants.gov", "https://www.grants.gov", "Funding", "Official", "API", "High"),
-    ("SAM.gov Contract Opportunities", "https://sam.gov/content/opportunities", "Procurement", "Official", "API", "High"),
-    ("Federal Register (DOT/FTA)", "https://www.federalregister.gov", "Policy", "Official", "API", "High"),
-    ("Mass Transit Magazine", "https://www.masstransitmag.com/rss", "Funding", "Trade", "RSS", "High"),
-    ("METRO Magazine", "https://www.metro-magazine.com/rss", "Funding", "Trade", "RSS", "High"),
-    ("Railway Age", "https://www.railwayage.com/feed", "Funding", "Trade", "RSS", "High"),
-    ("Progressive Railroading", "https://www.progressiverailroading.com/rss", "Procurement", "Trade", "RSS", "Med"),
-    ("Smart Cities Dive", "https://www.smartcitiesdive.com/feeds/news/", "Policy", "Trade", "RSS", "Med"),
-    ("APTA", "https://www.apta.com/feed/", "Policy", "Association", "RSS", "High"),
-    ("Eno Center for Transportation", "https://enotrans.org/feed/", "Policy", "Association", "RSS", "Med"),
+    ("FTA Newsroom", "https://www.transit.dot.gov/about/news", "Funding", "Official", "Manual", "High",
+     "News web page, not a feed. " + BLOCKED),
+    ("Grants.gov", "https://www.grants.gov", "Funding", "Official", "API", "High", None),
+    ("SAM.gov Contract Opportunities", "https://sam.gov/content/opportunities", "Procurement", "Official", "API", "High", None),
+    ("Federal Register (DOT/FTA)", "https://www.federalregister.gov", "Policy", "Official", "API", "High", None),
+    ("Mass Transit Magazine",
+     "https://www.masstransitmag.com/__rss/website-scheduled-content.xml?input=%7B%22sectionAlias%22%3A%22home%22%7D",
+     "Funding", "Trade", "RSS", "High", "Feed advertised on the site's home page (/rss is a 404)."),
+    ("METRO Magazine", "https://www.metro-magazine.com/rss", "Funding", "Trade", "RSS", "High", None),
+    ("Railway Age", "https://www.railwayage.com/feed", "Funding", "Trade", "Manual", "High", BLOCKED),
+    ("Progressive Railroading", "https://www.progressiverailroading.com/rss/", "Procurement", "Trade", "Manual", "Med",
+     "/rss/ is a page listing the site's feeds, not a feed; pick a specific feed URL to automate."),
+    ("Smart Cities Dive", "https://www.smartcitiesdive.com/feeds/news/", "Policy", "Trade", "RSS", "Med", None),
+    ("APTA", "https://www.apta.com/feed/", "Policy", "Association", "Manual", "High", BLOCKED),
+    ("Eno Center for Transportation", "https://enotrans.org/feed/", "Policy", "Association", "Manual", "Med", BLOCKED),
 ]
 
 
 def seed_sources(conn):
-    """Add registry sources not already present (matched by URL), so re-running --seed is safe."""
-    added = 0
+    """Sync the registry into Postgres by source name: add new sources and update existing ones
+    (URL, method, notes...), so corrections here reach the database. Safe to re-run."""
+    added = updated = 0
     with conn.cursor() as cur:
-        for name, url, pillar, typ, method, trust in SOURCES:
-            cur.execute(
-                "INSERT INTO sources (name, url, pillar, type, method, trust) "
-                "SELECT %s,%s,%s,%s,%s,%s WHERE NOT EXISTS (SELECT 1 FROM sources WHERE url = %s)",
-                (name, url, pillar, typ, method, trust, url))
-            added += cur.rowcount
+        for name, url, pillar, typ, method, trust, notes in SOURCES:
+            cur.execute("UPDATE sources SET url=%s, pillar=%s, type=%s, method=%s, trust=%s, notes=%s "
+                        "WHERE name=%s", (url, pillar, typ, method, trust, notes, name))
+            if cur.rowcount:
+                updated += 1
+            else:
+                cur.execute("INSERT INTO sources (name, url, pillar, type, method, trust, notes) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s)", (name, url, pillar, typ, method, trust, notes))
+                added += 1
     conn.commit()
-    return added
+    return added, updated
 
 
 def classify(entry):
@@ -101,9 +113,32 @@ def classify(entry):
         return None
 
 
+USER_AGENT = "Mozilla/5.0 (compatible; Transit411FeedReader/1.0; +https://github.com/bbuchanan99/transit411)"
+
+
+class FetchError(Exception):
+    pass
+
+
 def fetch_source(url, limit=15):
+    """Return up to `limit` entries; raise FetchError with a readable reason when the source
+    is blocked, missing, or not actually a feed (instead of silently returning nothing)."""
     import feedparser
-    feed = feedparser.parse(url)
+    import requests
+    try:
+        r = requests.get(url, timeout=30, headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8"})
+    except requests.RequestException as e:
+        raise FetchError(f"request failed: {type(e).__name__}")
+    if r.status_code == 403:
+        raise FetchError("HTTP 403 - site blocks automated requests")
+    if r.status_code >= 400:
+        raise FetchError(f"HTTP {r.status_code}")
+    feed = feedparser.parse(r.content)
+    if not feed.entries and feed.bozo:
+        ctype = r.headers.get("content-type", "unknown").split(";")[0]
+        raise FetchError(f"not a feed (got {ctype})")
     out = []
     for e in feed.entries[:limit]:
         published = None
@@ -137,24 +172,39 @@ def run(conn, limit_sources=None):
         sources = cur.fetchall()
     if limit_sources:
         sources = sources[:limit_sources]
-    added = 0
+    added, failed = 0, []
     for name, url in sources:
         try:
             entries = fetch_source(url)
-        except Exception as e:
-            print(f"  ! {name}: fetch failed ({e})")
+        except FetchError as e:
+            print(f"  ! {name}: FAILED - {e}")
+            failed.append(name)
             continue
+        new = low = errors = kept = 0
         for e in entries:
             if not e["link"] or item_exists(conn, e["link"]):
                 continue
-            c = classify(e)
-            if not c or c.get("relevance") == "low":
+            new += 1
+            try:
+                c = classify(e)
+            except Exception as ex:  # one bad model call shouldn't stop the whole run
+                errors += 1
+                print(f"    - classify failed for {e['link']}: {type(ex).__name__}")
+                continue
+            if not c:
+                errors += 1
+                continue
+            if c.get("relevance") == "low":
+                low += 1
                 continue
             insert_item(conn, c.get("pillar"), c.get("headline") or e["title"],
                         c.get("summary"), name, e["link"], e["published"], c.get("relevance", "med"))
-            added += 1
-        print(f"  {name}: processed")
-    print(f"Added {added} pending items.")
+            kept += 1
+        added += kept
+        print(f"  {name}: {len(entries)} in feed, {new} new, {kept} queued, {low} low relevance"
+              + (f", {errors} not classified" if errors else ""))
+    print(f"Added {added} pending items from {len(sources) - len(failed)} of {len(sources)} sources."
+          + (f" Failed: {', '.join(failed)}." if failed else ""))
     return added
 
 
@@ -168,7 +218,8 @@ def main():
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
     with psycopg.connect(dsn) as conn:
         if a.seed:
-            print(f"Seeded {seed_sources(conn)} new sources ({len(SOURCES)} in the registry).")
+            added, updated = seed_sources(conn)
+            print(f"Sources: {added} added, {updated} updated ({len(SOURCES)} in the registry).")
         if a.run:
             run(conn, a.limit)
         if not (a.seed or a.run):
