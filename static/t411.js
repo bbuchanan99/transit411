@@ -26,13 +26,25 @@
   // CIG pipeline table. `projects` is the array from /api/cig. Clicking a row shows its milestone
   // dates; "Show snapshot history" loads its month-by-month changes. opts.fetchHistory(project) can
   // supply history from another endpoint (default: /api/cig/history on the same host).
+  // FTA's dashboard has no mode column, so cig.py infers mode (from the exclusive-BRT column and the
+  // project name). Until modes come from an authoritative FTA source, the table says so. Set this to
+  // false (or pass opts.modeInferred=false) once most modes are sourced.
+  const MODE_INFERRED = true;
+  const MODE_NOTE = "Mode is inferred: FTA's CIG dashboard has no mode column, so modes come from its exclusive-BRT "
+    + "column and each project's name, and some are missing or approximate (e.g. “Rail”).";
+
   function renderCigTable(el, projects, opts) {
     opts = opts || {};
     if (!projects || !projects.length) { el.innerHTML = '<div class="t411-empty">' + esc(opts.emptyText || "No projects.") + '</div>'; return; }
     el._t411 = { projects: projects, fetchHistory: opts.fetchHistory || defaultHistory };
+    const inferred = opts.modeInferred ?? MODE_INFERRED;
     el.innerHTML = '<div class="t411-card"><div class="t411-scroll"><table class="t411-table"><thead><tr>'
-      + '<th>Project</th><th>Sponsor</th><th>Location</th><th>Mode</th><th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th>'
-      + '</tr></thead><tbody>' + projects.map(cigRow).join("") + '</tbody></table></div></div>';
+      + '<th>Project</th><th>Sponsor</th><th>Location</th>'
+      + (inferred ? '<th title="' + esc(MODE_NOTE) + '">Mode (inferred)<sup class="t411-fn">*</sup></th>' : '<th>Mode</th>')
+      + '<th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th>'
+      + '</tr></thead><tbody>' + projects.map(cigRow).join("") + '</tbody></table></div>'
+      + (inferred ? '<div class="t411-footnote"><sup class="t411-fn">*</sup> ' + esc(MODE_NOTE) + '</div>' : '')
+      + '</div>';
     if (el._t411Bound) return;
     el._t411Bound = true;
     el.addEventListener("click", function (e) {
