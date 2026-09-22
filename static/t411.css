@@ -17,6 +17,11 @@
 .t411-fn{color:var(--accent,#c0341f);font-weight:800;margin-left:1px}
 .t411-unspec{color:var(--muted,#666);font-style:italic}
 .t411-prof{display:inline-block;margin:6px 0 2px;font-family:'Archivo',system-ui,sans-serif;font-size:12px;font-weight:600;color:var(--accent,#c0341f)}
+.t411-sort{font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;background:none;border:none;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.t411-sort:hover,.t411-sort.on{color:var(--accent,#c0341f)}
+.t411-sort:focus-visible{outline:2px solid var(--accent,#c0341f);outline-offset:2px}
+.t411-sort-ic{font-size:9px;opacity:.55}
+.t411-sort.on .t411-sort-ic{opacity:1}
 .t411-prof-links{display:flex;gap:16px;flex-wrap:wrap}
 .t411-pv{margin-top:12px;font-family:'Archivo',system-ui,sans-serif;font-size:12px}
 .t411-pv-row{padding:6px 0;border-top:1px solid var(--line,#ddd)}

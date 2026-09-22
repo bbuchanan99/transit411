@@ -246,10 +246,13 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - Shared component bundle. ✅
 - Public Astro site on Cloudflare Pages (homepage + sections + data hub), **reading live posts and CIG figures from the API at build time**. ✅
 - Read-only public API + Cloudflare Tunnel, secured by allowlist; `api.transit411.net` live. ✅
+- Public site's **Ask NTD** and **Ask CIG** pages, plus **CIG Pipeline** (`/cig`: phase filter, sortable table, milestones, history, What changed). ✅
+- CIG **mode from FTA sources only** (BRT column + profile), "Unspecified" otherwise; each project linked to its FTA profile PDF and page. ✅
+- CIG **profile archive**: versioned profiles with text diffs, listing snapshots, a To download list, and the browser-assisted refresh. ✅
+- **Sortable CIG table** (every column; blanks last; third click restores the default order), on the Grants tab and `/cig`. ✅
 
 **Pending / next:**
 - **Publish all** button on the Command Center's Publish tab: publish every item in "Ready to publish" in one go (with a confirm showing the count), then trigger a single site rebuild rather than one per item.
-- Build the Ask NTD / Ask CIG pages on the site using the shared bundle (the public **CIG Pipeline** page at `/cig` is live, with What changed, phase filter, table, milestones and history).
 - Add a **Mode filter** to `/cig` and the Grants tab. Modes are now FTA-sourced (§3.4), with "Unspecified" as its own option. Refresh the profile PDFs as projects enter Engineering, since their profiles then state a mode.
 - Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
@@ -269,7 +272,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 
 ## 12. Security notes
 
-- The **read-only API allowlist** is the public boundary — only 6 read/ask endpoints are reachable; all writes are 404. Keep it tight if adding public endpoints.
+- The **read-only API allowlist** is the public boundary — only 7 read/ask endpoints are reachable (the 6 above plus `GET /api/cig/profile`, which serves only the FTA profile PDFs in the committed lookup); all writes and the profile archive are 404. Keep it tight if adding public endpoints.
 - The **public ask endpoints spend money** (an Anthropic call each): keep the per-visitor and daily limits on, and set `PUBLIC_ASK_ENABLED=false` if usage looks wrong. Also set a spending limit in the Anthropic Console.
 - The **tunnel is network-isolated**: `cloudflared` can reach only `readonly-api`, even if a dashboard hostname is misconfigured.
 - **Secrets live only in `.env`** on the NAS (git-ignored). Never commit keys or tokens, and don't paste them into chat.

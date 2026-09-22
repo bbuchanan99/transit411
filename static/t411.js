@@ -37,23 +37,83 @@
   const MODE_NOTE = "Mode from FTA sources (the dashboard's exclusive-BRT column or the project's FTA profile); "
     + "Unspecified where they don't state it.";
 
+  // Sortable columns: [header, key, value(project) for sorting, first-click direction]. Blank values
+  // (TBD, unrated, Unspecified) always sort last. Default order is the API's (largest CIG request first).
+  const RATING_RANK = { H: 5, MH: 4, M: 3, ML: 2, L: 1 };
+  const PHASE_RANK = { PD: 1, Eng: 2, Const: 3, FFGA: 4, CGA: 5 };
+  const SEASON = { early: 0.15, winter: 0.1, spring: 0.3, mid: 0.5, summer: 0.55, fall: 0.75, autumn: 0.75, late: 0.9 };
+  const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  function grantWhen(s) {  // "Spring 2027" -> 2027.3, "August 2026" -> 2026.6, "2028" -> 2028.5, TBD -> null
+    const m = /(20\d\d)/.exec(s || "");
+    if (!m) return null;
+    const w = (s || "").toLowerCase(), mi = MONTHS.findIndex(x => w.includes(x));
+    const season = Object.keys(SEASON).find(k => w.includes(k));
+    return +m[1] + (mi >= 0 ? (mi + 0.5) / 12 : season ? SEASON[season] : 0.5);
+  }
+  function pct(s) { const m = /(\d+(\.\d+)?)\s*%/.exec(s || ""); return m ? +m[1] : null; }
+  const CIG_COLS = [
+    ["Project", "project_name", p => (p.project_name || "").toLowerCase(), "asc"],
+    ["Sponsor", "sponsor", p => (p.sponsor || "").toLowerCase() || null, "asc"],
+    ["Location", "location", p => ((p.state || "") + " " + (p.city || "")).toLowerCase().trim() || null, "asc"],
+    ["Mode", "mode", p => p.mode ? p.mode.toLowerCase() : null, "asc"],
+    ["Phase", "phase", p => PHASE_RANK[p.phase] || null, "asc"],
+    ["Cost", "cost_musd", p => p.cost_musd, "desc"],
+    ["CIG", "cig_request_musd", p => p.cig_request_musd, "desc"],
+    ["Share", "cig_share", p => pct(p.cig_share), "desc"],
+    ["Rating", "rating", p => RATING_RANK[p.rating] || null, "desc"],
+    ["Est. grant", "est_grant", p => grantWhen(p.est_grant), "asc"],
+  ];
+  function sortProjects(list, key, dir) {
+    const col = CIG_COLS.find(c => c[1] === key);
+    if (!col) return list.slice();
+    const f = col[2], s = dir === "desc" ? -1 : 1;
+    return list.map((p, i) => [p, f(p), i]).sort((a, b) => {
+      const x = a[1], y = b[1];
+      if (x == null || x === "") return (y == null || y === "") ? a[2] - b[2] : 1;
+      if (y == null || y === "") return -1;
+      return (x < y ? -1 : x > y ? 1 : a[2] - b[2]) * s;  // ties keep the default order
+    }).map(t => t[0]);
+  }
+
   function renderCigTable(el, projects, opts) {
     opts = opts || {};
     if (!projects || !projects.length) { el.innerHTML = '<div class="t411-empty">' + esc(opts.emptyText || "No projects.") + '</div>'; return; }
+    // Keep the chosen sort across re-renders (e.g. a phase filter or a live refresh).
+    const sort = (el._t411 && el._t411.sort) || null;
+    const original = projects;
+    if (sort) projects = sortProjects(projects, sort.key, sort.dir);
     // opts.profileVersions(project) -> Promise of /api/cig/profile-versions data (Command Center only):
     // adds a "Profile versions" button to each project and a "profile updated" badge.
-    el._t411 = { projects: projects, fetchHistory: opts.fetchHistory || defaultHistory, apiBase: opts.apiBase || "",
+    el._t411 = { projects: projects, original: original, opts: opts, sort: sort,
+                 fetchHistory: opts.fetchHistory || defaultHistory, apiBase: opts.apiBase || "",
                  profileVersions: opts.profileVersions, profileOpts: opts.profileOpts || {} };
+    const heads = CIG_COLS.map(c => {
+      const on = sort && sort.key === c[1];
+      const label = c[1] === "mode" ? 'Mode<sup class="t411-fn">*</sup>' : esc(c[0]);
+      return '<th aria-sort="' + (on ? (sort.dir === "asc" ? "ascending" : "descending") : "none") + '"'
+        + (c[1] === "mode" ? ' title="' + esc(MODE_NOTE) + '"' : '')
+        + '><button type="button" class="t411-sort' + (on ? " on" : "") + '" data-sort="' + c[1] + '">' + label
+        + '<span class="t411-sort-ic" aria-hidden="true">' + (on ? (sort.dir === "asc" ? "▲" : "▼") : "↕") + '</span></button></th>';
+    }).join("");
     el.innerHTML = '<div class="t411-card"><div class="t411-scroll"><table class="t411-table"><thead><tr>'
-      + '<th>Project</th><th>Sponsor</th><th>Location</th><th title="' + esc(MODE_NOTE) + '">Mode<sup class="t411-fn">*</sup></th>'
-      + '<th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th>'
-      + '</tr></thead><tbody>' + projects.map((p, i) => cigRow(p, i, opts)).join("") + '</tbody></table></div>'
+      + heads + '</tr></thead><tbody>' + projects.map((p, i) => cigRow(p, i, opts)).join("") + '</tbody></table></div>'
       + '<div class="t411-footnote"><sup class="t411-fn">*</sup> ' + esc(MODE_NOTE) + '</div>'
       + '</div>';
     if (el._t411Bound) return;
     el._t411Bound = true;
     el.addEventListener("click", function (e) {
       const st = el._t411;
+      const sb = e.target.closest("[data-sort]");
+      if (sb) {  // first click: the column's natural direction; again: reverse; third: back to default
+        const col = CIG_COLS.find(c => c[1] === sb.dataset.sort), cur = st.sort;
+        let next = { key: col[1], dir: col[3] };
+        if (cur && cur.key === col[1]) next = cur.dir === col[3] ? { key: col[1], dir: col[3] === "asc" ? "desc" : "asc" } : null;
+        st.sort = next;
+        renderCigTable(el, st.original, st.opts);
+        const b = el.querySelector('[data-sort="' + col[1] + '"]');
+        if (b) b.focus();
+        return;
+      }
       const vb = e.target.closest("[data-pv]");
       if (vb && st.profileVersions) {
         const p = st.projects[+vb.dataset.pv], box = vb.parentElement.querySelector(".t411-pv-box");
@@ -320,6 +380,6 @@
   }
 
   window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
-                  renderCigProfileVersions,
+                  renderCigProfileVersions, sortCigProjects: sortProjects,
                   colLabel, colKind, fmtCell, errorText, askCardHtml };
 })();
