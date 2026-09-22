@@ -300,35 +300,72 @@ def publish_ready():
     return {"items": items}
 
 
-@app.post("/api/publish/{item_id}")
-def publish_item(item_id: int):
+def _publish_one(cur, item_id):
+    """Turn one approved collected item into a published post. Returns the post id, or None if the item
+    isn't (or is no longer) approved. The caller commits."""
     import re
+    cur.execute("SELECT pillar, headline, summary, source_name, source_url, "
+                "agencies, mode, programs, tags, state "
+                "FROM collected_items WHERE id=%s AND status='approved' FOR UPDATE", (item_id,))
+    row = cur.fetchone()
+    if not row:
+        return None
+    pillar, headline, summary, source_name, source_url, agencies, mode, programs, tags, state = row
+    base = re.sub(r"[^a-z0-9]+", "-", (headline or "post").lower()).strip("-")[:60] or "post"
+    slug = f"{base}-{item_id}"
+    body = summary or ""
+    if source_url:
+        body += f"\n\nSource: {source_name or ''} - {source_url}"
+    _ensure_posts_link(cur)
+    cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at, item_id, "
+                "source_name, source_url, agencies, mode, programs, tags, state) "
+                "VALUES (%s,%s,%s,%s,'published', now(), %s, %s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now(), "
+                "item_id=EXCLUDED.item_id, source_name=EXCLUDED.source_name, source_url=EXCLUDED.source_url, "
+                "agencies=EXCLUDED.agencies, mode=EXCLUDED.mode, programs=EXCLUDED.programs, "
+                "tags=EXCLUDED.tags, state=EXCLUDED.state RETURNING id",
+                (slug, pillar, headline, body, item_id, source_name, source_url,
+                 agencies or [], mode or [], programs or [], tags or [], state))
+    post_id = cur.fetchone()[0]
+    cur.execute("UPDATE collected_items SET status='published' WHERE id=%s", (item_id,))
+    return post_id
+
+
+class PublishAll(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/publish-all")
+def publish_all(p: PublishAll):
+    """The Publish tab's "Publish all": publish exactly the items the page showed (so anything approved
+    after it loaded waits for the next look), in one transaction, with a single site rebuild."""
+    ids = list(dict.fromkeys(p.ids))[:200]
+    if not ids:
+        raise HTTPException(400, "Nothing to publish.")
+    published, skipped = [], []
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("SELECT pillar, headline, summary, source_name, source_url, "
-                        "agencies, mode, programs, tags, state "
-                        "FROM collected_items WHERE id=%s AND status='approved'", (item_id,))
-            row = cur.fetchone()
-            if not row:
+            for item_id in ids:
+                post_id = _publish_one(cur, item_id)
+                if post_id:
+                    published.append({"item_id": item_id, "post_id": post_id})
+                else:
+                    skipped.append(item_id)  # already published, skipped or unapproved meanwhile
+            c.commit()
+    except Exception as e:
+        raise HTTPException(502, f"DB error (nothing was published): {e}")
+    if published:
+        _request_site_rebuild(f"{len(published)} posts published")
+    return {"published": len(published), "skipped": skipped, "posts": published, "rebuild": _rebuild_state()}
+
+
+@app.post("/api/publish/{item_id}")
+def publish_item(item_id: int):
+    try:
+        with _db() as c, c.cursor() as cur:
+            post_id = _publish_one(cur, item_id)
+            if not post_id:
                 raise HTTPException(404, "no approved item with that id")
-            pillar, headline, summary, source_name, source_url, agencies, mode, programs, tags, state = row
-            base = re.sub(r"[^a-z0-9]+", "-", (headline or "post").lower()).strip("-")[:60] or "post"
-            slug = f"{base}-{item_id}"
-            body = summary or ""
-            if source_url:
-                body += f"\n\nSource: {source_name or ''} - {source_url}"
-            _ensure_posts_link(cur)
-            cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at, item_id, "
-                        "source_name, source_url, agencies, mode, programs, tags, state) "
-                        "VALUES (%s,%s,%s,%s,'published', now(), %s, %s,%s,%s,%s,%s,%s,%s) "
-                        "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now(), "
-                        "item_id=EXCLUDED.item_id, source_name=EXCLUDED.source_name, source_url=EXCLUDED.source_url, "
-                        "agencies=EXCLUDED.agencies, mode=EXCLUDED.mode, programs=EXCLUDED.programs, "
-                        "tags=EXCLUDED.tags, state=EXCLUDED.state RETURNING id",
-                        (slug, pillar, headline, body, item_id, source_name, source_url,
-                         agencies or [], mode or [], programs or [], tags or [], state))
-            post_id = cur.fetchone()[0]
-            cur.execute("UPDATE collected_items SET status='published' WHERE id=%s", (item_id,))
             c.commit()
     except HTTPException:
         raise
@@ -430,7 +467,7 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
         state: Optional[str] = None, sponsor: Optional[str] = None):
     """The latest snapshot of the CIG pipeline (older snapshots are history, see /api/cig/history)."""
     import cig as cigmod
-    empty = {"summary": {"snapshot": None, "projects": 0, "total_cig_musd": 0.0, "by_phase": {},
+    empty = {"summary": {"snapshot": None, "projects": 0, "total_cig_musd": 0.0, "by_phase": {}, "by_mode": {},
                          "snapshots": 0}, "projects": []}
     out = []
     try:
@@ -446,6 +483,8 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
             if not snap:
                 return empty
             where, params = ["p.snapshot_date=%s"], [snap]
+            if mode == "Unspecified":  # FTA's sources don't state one (mode IS NULL)
+                where.append("p.mode IS NULL"); mode = None
             for col, val in (("phase", phase), ("mode", mode), ("rating", rating), ("state", state)):
                 if val:
                     where.append(f"p.{col}=%s"); params.append(val)
@@ -456,6 +495,9 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
             total_projects, total_cig = cur.fetchone()
             cur.execute("SELECT phase, count(*) FROM cig_projects WHERE snapshot_date=%s GROUP BY phase", (snap,))
             by_phase = {ph: n for ph, n in cur.fetchall()}
+            cur.execute("SELECT coalesce(mode,'Unspecified'), count(*) FROM cig_projects WHERE snapshot_date=%s "
+                        "GROUP BY 1 ORDER BY 2 DESC, 1", (snap,))
+            by_mode = {m: n for m, n in cur.fetchall()}
             # profile_url = the project's page on FTA's Current CIG Projects list (cig_profile_pages);
             # profile_versions / profile_changed_at summarize its archived profile versions.
             cur.execute("SELECT p.id, p.project_name, p.sponsor, p.city, p.state, p.mode, p.phase, p.cost_musd, "
@@ -482,7 +524,7 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return {"summary": {"snapshot": snap.isoformat(), "projects": total_projects, "total_cig_musd": float(total_cig),
-                        "by_phase": by_phase, "snapshots": n_snaps}, "projects": out}
+                        "by_phase": by_phase, "by_mode": by_mode, "snapshots": n_snaps}, "projects": out}
 
 
 @app.get("/api/cig/history")
@@ -1100,7 +1142,8 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   <div class="panel" id="p-publish">
     <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads - and the site rebuilds itself about a minute later.</p></div><div style="display:flex;gap:8px"><button class="newq" id="pRebuild" type="button">Rebuild site now</button><button class="newq" id="pRefresh" type="button">Refresh</button></div></div>
     <div id="pSite" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 14px"></div>
-    <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:6px 0 10px">Ready to publish</div>
+    <div style="display:flex;align-items:center;gap:12px;margin:6px 0 10px"><div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">Ready to publish <span id="pReadyCount"></span></div>
+      <button class="go" id="pPubAll" type="button" style="padding:7px 14px;margin-left:auto" hidden>Publish all</button></div>
     <div id="pReady"></div>
     <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 0 10px">Published</div>
     <div id="pPosts"></div>
@@ -1129,7 +1172,9 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
       <summary style="padding:13px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px;cursor:pointer">Dashboard files <span id="gLoadsCount" style="font-weight:600;color:var(--muted)"></span></summary>
       <div id="gLoads" style="padding-bottom:12px"></div>
     </details>
-    <div class="examples" id="gChips"></div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div class="examples" id="gChips"></div>
+      <label style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin-bottom:10px">Mode
+        <select id="gMode" title="Mode from FTA sources; Unspecified where they don't state it" style="font-family:Archivo,sans-serif;font-size:12px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)"><option value="">All modes</option></select></label></div>
     <div id="gOut"></div>
     <div id="gChanges" style="margin-top:18px"></div>
   </div>
@@ -1368,12 +1413,32 @@ document.getElementById("pRebuild").onclick=async()=>{
   loadSiteStatus();
 };
 document.querySelector('.tab[data-t="publish"]').addEventListener("click",loadPublish);
+// Publish all: exactly the items shown (ids captured at load), in one request, one site rebuild.
+var pReadyIds=[];
+document.getElementById("pPubAll").onclick=async()=>{
+  const b=document.getElementById("pPubAll"),n=pReadyIds.length;if(!n)return;
+  if(!confirm("Publish all "+n+" items in Ready to publish? They go live on the site after one rebuild (about 2-3 minutes)."))return;
+  b.disabled=true;b.textContent="Publishing "+n+"...";
+  try{
+    const r=await fetch("/api/publish-all",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ids:pReadyIds})});
+    const t=await r.text();
+    if(!r.ok)alert("Couldn't publish: "+errText(t));
+    else{const d=JSON.parse(t);if(d.skipped&&d.skipped.length)alert("Published "+d.published+". "+d.skipped.length+" were no longer approved and were skipped.");}
+  }catch(e){alert("Couldn't reach the Command Center.");}
+  loadPublish();
+};
 async function loadPublish(){
   const ready=document.getElementById("pReady"),posts=document.getElementById("pPosts");
   ready.innerHTML='<div class="rcard"><div class="loading">Loading...</div></div>';
   loadSiteStatus();
+  const all=document.getElementById("pPubAll"),cnt=document.getElementById("pReadyCount");
+  pReadyIds=[];all.hidden=true;cnt.textContent="";
   try{const d=await (await fetch("/api/publish/ready")).json();
-    ready.innerHTML=(d.items&&d.items.length)?d.items.map(pReadyCard).join(""):'<div class="rcard"><div class="loading">Nothing approved yet - approve items in the Collection tab.</div></div>';
+    const items=d.items||[];
+    pReadyIds=items.map(it=>it.id);
+    cnt.textContent=items.length?"("+items.length+")":"";
+    all.hidden=items.length<2;all.disabled=false;all.textContent="Publish all "+items.length;
+    ready.innerHTML=items.length?items.map(pReadyCard).join(""):'<div class="rcard"><div class="loading">Nothing approved yet - approve items in the Collection tab.</div></div>';
   }catch(e){ready.innerHTML='<div class="rcard"><div class="err">Could not load approved items.</div></div>';}
   try{const d=await (await fetch("/api/posts")).json();
     posts.innerHTML=(d.posts&&d.posts.length)?d.posts.map(pPostRow).join(""):'<div class="rcard"><div class="loading">No published posts yet.</div></div>';
@@ -1402,8 +1467,16 @@ async function pPost(url,what,b){ // POST, and say so if it didn't work instead 
 document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
 // ---- CIG Pipeline tab ----
-let gPhase="";
+let gPhase="",gMode="";
 document.getElementById("gRefresh").onclick=loadCIG;
+document.getElementById("gMode").onchange=e=>{gMode=e.target.value;loadCIG();};
+// Mode options with counts, in a fixed order (Unspecified last); only modes present in the snapshot.
+const G_MODES=["BRT","Light Rail","Heavy Rail","Commuter Rail","Streetcar","Unspecified"];
+function gModeOptions(byMode){
+  const sel=document.getElementById("gMode"),keys=Object.keys(byMode||{});
+  const order=G_MODES.filter(m=>keys.includes(m)).concat(keys.filter(m=>!G_MODES.includes(m)).sort());
+  sel.innerHTML='<option value="">All modes</option>'+order.map(m=>'<option value="'+esc(m)+'"'+(m===gMode?" selected":"")+'>'+esc(m)+' ('+byMode[m]+')</option>').join("");
+}
 // Upload a dashboard PDF downloaded in the browser; the server parses and loads it.
 function gNote(kind,text){document.getElementById("gMsg").innerHTML='<div class="rcard"><div class="'+kind+'">'+esc(text)+'</div></div>';}
 document.getElementById("gUploadBtn").onclick=()=>document.getElementById("gFile").click();
@@ -1443,9 +1516,10 @@ async function loadCIG(){
   out.innerHTML='<div class="rcard"><div class="loading">Loading the pipeline...</div></div>';
   loadChanges();loadLoads();loadProfStatus();
   try{
-    const q=gPhase?("?phase="+encodeURIComponent(gPhase)):"";
-    const d=await (await fetch("/api/cig"+q)).json();
+    const qs=new URLSearchParams();if(gPhase)qs.set("phase",gPhase);if(gMode)qs.set("mode",gMode);
+    const d=await (await fetch("/api/cig"+(qs.toString()?"?"+qs:""))).json();
     const s=d.summary||{},bp=s.by_phase||{};
+    gModeOptions(s.by_mode);
     sum.innerHTML='<div class="rcard" style="padding:16px 18px;display:flex;gap:26px;flex-wrap:wrap;align-items:center">'
       +gStat(s.projects||0,"projects")+gStat("$"+(((s.total_cig_musd||0)/1000).toFixed(1))+"B","CIG requested")
       +gStat(bp.PD||0,"in development")+gStat(bp.Eng||0,"in engineering")
@@ -1454,7 +1528,7 @@ async function loadCIG(){
           +(stale?' title="Download the newest dashboard at transit.dot.gov/CIG and upload it"':'')+'>snapshot '+esc(s.snapshot||"-")
           +(stale?' &middot; '+age+' days old - time to upload a new one':'')
           +(s.snapshots>1?' &middot; '+s.snapshots+' months of history':'')+'</div>';})()+'</div>';
-    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">'+(s.projects?'No projects in this phase.':'No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.')+'</div></div>';return;}
+    if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">'+(s.projects?'No projects match this phase and mode.':'No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.')+'</div></div>';return;}
     // Shared component (static/t411.js): the same table, milestones and history the public site uses,
     // plus (here only) each project's archived profile versions and diffs.
     T411.renderCigTable(out, d.projects, {
@@ -1557,7 +1631,7 @@ async function loadChanges(){
       +older.map(s=>'<option value="'+esc(s)+'"'+(s===d.from?" selected":"")+'>'+esc(s)+(s===older[0]?" (previous)":"")+'</option>').join("")+'</select></label>':"";
     T411.renderCigChanges(box,d,{headerExtra:sel,onProject:(name,sponsor)=>{
       if(!T411.openCigProject(document.getElementById("gOut"),name,sponsor))
-        gNote("loading",name+" isn't in the current table"+(gPhase?" (try All phases)":" (it was dropped from the latest dashboard)")+".");
+        gNote("loading",name+" isn't in the current table"+(gPhase||gMode?" (try All phases and All modes)":" (it was dropped from the latest dashboard)")+".");
     }});
     const s=document.getElementById("gSince");if(s)s.onchange=e=>{gSince=e.target.value;loadChanges();};
   }catch(e){box.innerHTML="";}

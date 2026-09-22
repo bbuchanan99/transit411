@@ -251,9 +251,11 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - CIG **profile archive**: versioned profiles with text diffs, listing snapshots, a To download list, and the browser-assisted refresh. ✅
 - **Sortable CIG table** (every column; blanks last; third click restores the default order), on the Grants tab and `/cig`. ✅
 
+- **Mode filter** on `/cig` (chips with counts) and the Grants tab (a dropdown), combinable with the phase filter. "Unspecified" is its own option; `/api/cig?mode=Unspecified` returns projects with no FTA-stated mode, and the summary carries `by_mode`. ✅
+- **Publish all** on the Publish tab: shown when 2+ items are ready. After a confirm with the count, it publishes exactly the items on screen (anything approved after the page loaded waits) in one transaction via `POST /api/publish-all`, with a single site rebuild. ✅
+
 **Pending / next:**
-- **Publish all** button on the Command Center's Publish tab: publish every item in "Ready to publish" in one go (with a confirm showing the count), then trigger a single site rebuild rather than one per item.
-- Add a **Mode filter** to `/cig` and the Grants tab. Modes are now FTA-sourced (§3.4), with "Unspecified" as its own option. Refresh the profile PDFs as projects enter Engineering, since their profiles then state a mode.
+- Refresh the profile PDFs as projects enter Engineering, since their profiles then state a mode (fewer Unspecified).
 - Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
 

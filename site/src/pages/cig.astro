@@ -57,6 +57,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       <button type="button" class="cig-chip" data-phase="PD">Project Development</button>
       <button type="button" class="cig-chip" data-phase="Eng">Engineering</button>
     </div>
+    <div class="cig-filters" id="cig-modes" role="group" aria-label="Filter by mode"></div>
     <div id="cig-table" data-api={API_BASE}>
       <noscript><div class="empty"><strong>This table needs JavaScript.</strong></div></noscript>
     </div>
@@ -76,6 +77,32 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
   const api = el.dataset.api;
   let data = JSON.parse(document.getElementById("cig-data").textContent || "null");
   let phase = "";
+  let mode = "";  // "" = all; "Unspecified" = FTA's sources don't state one
+  const MODE_ORDER = ["BRT", "Light Rail", "Heavy Rail", "Commuter Rail", "Streetcar", "Unspecified"];
+  const modeOf = (p) => p.mode || "Unspecified";
+
+  // Mode chips with counts, only for modes in the current pipeline (Unspecified last).
+  function renderModeChips() {
+    const box = document.getElementById("cig-modes");
+    const counts = {};
+    ((data && data.projects) || []).forEach((p) => { counts[modeOf(p)] = (counts[modeOf(p)] || 0) + 1; });
+    const keys = Object.keys(counts);
+    if (keys.length < 2) { box.innerHTML = ""; return; }
+    const order = MODE_ORDER.filter((m) => keys.includes(m)).concat(keys.filter((m) => !MODE_ORDER.includes(m)).sort());
+    if (mode && !counts[mode]) mode = "";
+    const esc = window.T411 ? window.T411.esc : (s) => s;
+    box.innerHTML = `<button type="button" class="cig-chip${mode ? "" : " on"}" data-mode="">All modes</button>`
+      + order.map((m) => `<button type="button" class="cig-chip${m === mode ? " on" : ""}" data-mode="${esc(m)}"`
+        + (m === "Unspecified" ? ' title="FTA\'s dashboard and project profile don\'t state a mode"' : "")
+        + `>${esc(m)} <span class="cig-chip-n">${counts[m]}</span></button>`).join("");
+  }
+  document.getElementById("cig-modes").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-mode]");
+    if (!b) return;
+    mode = b.dataset.mode;
+    renderModeChips();
+    render();
+  });
 
   // Snapshot history comes from the public API, not a path on this site.
   const fetchHistory = (p) =>
@@ -90,11 +117,11 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       return;
     }
     const all = (data && data.projects) || [];
-    const rows = phase ? all.filter((p) => p.phase === phase) : all;
+    const rows = all.filter((p) => (!phase || p.phase === phase) && (!mode || modeOf(p) === mode));
     T411.renderCigTable(el, rows, {
       fetchHistory,
       apiBase: api,  // FTA profile PDFs are served by the public API
-      emptyText: all.length ? "No projects in this phase." : "The pipeline isn't available right now. Please check back soon.",
+      emptyText: all.length ? "No projects match this phase and mode." : "The pipeline isn't available right now. Please check back soon.",
     });
   }
 
@@ -110,10 +137,10 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
 
   function setPhase(p) {
     phase = p;
-    document.querySelectorAll(".cig-chip").forEach((x) => x.classList.toggle("on", x.dataset.phase === p));
+    document.querySelectorAll(".cig-chip[data-phase]").forEach((x) => x.classList.toggle("on", x.dataset.phase === p));
     render();
   }
-  document.querySelectorAll(".cig-chip").forEach((b) => b.addEventListener("click", () => setPhase(b.dataset.phase)));
+  document.querySelectorAll(".cig-chip[data-phase]").forEach((b) => b.addEventListener("click", () => setPhase(b.dataset.phase)));
 
   // ---- What changed (shared component) ----
   const chEl = document.getElementById("cig-changes");
@@ -121,7 +148,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
 
   function openProject(name, sponsor) {
     if (window.T411.openCigProject(el, name, sponsor)) return;
-    if (phase) { setPhase(""); if (window.T411.openCigProject(el, name, sponsor)) return; }
+    if (phase || mode) { mode = ""; renderModeChips(); setPhase(""); if (window.T411.openCigProject(el, name, sponsor)) return; }
     const note = chEl.querySelector(".cig-ch-note");
     if (note) note.textContent = `${name} is no longer in the pipeline, so it isn't in the table above.`;
   }
@@ -149,6 +176,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       .catch(() => {});
   }
 
+  renderModeChips();
   render();
   renderChanges();
   if (!changes) loadChanges();  // not in this build (e.g. API was down): fetch it live
@@ -161,6 +189,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       if (data?.summary?.snapshot === live.summary.snapshot && data.projects.length === live.projects.length) return;
       data = live;
       fmtStats(live.summary);
+      renderModeChips();
       render();
       loadChanges();  // a newer dashboard means newer changes too
     })
