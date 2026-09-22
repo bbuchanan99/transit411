@@ -26,7 +26,9 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
   <div class="wire-ticker">
     <span class="wire-label">Wire</span>
     {latest
-      ? <span>{latest.pillar}: {latest.url ? <a href={latest.url} target="_blank" rel="noopener noreferrer" style="color:inherit">{latest.title}</a> : latest.title}</span>
+      ? <span>{latest.pillar}: {latest.href
+          ? <a href={latest.href} style="color:inherit">{latest.title}</a>
+          : latest.url ? <a href={latest.url} target="_blank" rel="noopener noreferrer" style="color:inherit">{latest.title}</a> : latest.title}</span>
       : <span>Funding, procurement, people &amp; policy &mdash; the wire fills as stories are published</span>}
   </div>
   <div class="dateline">

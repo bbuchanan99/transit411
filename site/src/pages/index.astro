@@ -26,7 +26,9 @@ const stats = [
       <div class="lead">
         <span class="kicker">Lead &mdash; {lead.pillar}</span>
         <h1 class="disp">
-          {lead.url ? <a href={lead.url} target="_blank" rel="noopener noreferrer" class="lead-link">{lead.title}</a> : lead.title}
+          {lead.href
+            ? <a href={lead.href} class="lead-link">{lead.title}</a>
+            : lead.url ? <a href={lead.url} target="_blank" rel="noopener noreferrer" class="lead-link">{lead.title}</a> : lead.title}
         </h1>
         {lead.deck && <p class="deck">{lead.deck}</p>}
         <div class="byline">{[lead.date, lead.source && `Source: ${lead.source}`].filter(Boolean).join(" · ")}</div>
@@ -65,7 +67,9 @@ const stats = [
           {wire.map((p) => (
             <div class="cell">
               <div class="k">{p.pillar}</div>
-              <h3>{p.url ? <a href={p.url} target="_blank" rel="noopener noreferrer">{p.title}</a> : p.title}</h3>
+              <h3>{p.href
+                ? <a href={p.href}>{p.title}</a>
+                : p.url ? <a href={p.url} target="_blank" rel="noopener noreferrer">{p.title}</a> : p.title}</h3>
             </div>
           ))}
         </div>
