@@ -1,0 +1,25 @@
+---
+// One published post in a list. `post` comes from getPosts() in src/lib/content.js.
+// There are no article pages yet, so the headline links to the original source.
+const { post, size = "full" } = Astro.props;
+const meta = [post.date, post.source].filter(Boolean).join(" · ");
+const chips = [...(post.state ? [post.state] : []), ...post.agencies].slice(0, 5);
+---
+<article class={`post post-${size}`}>
+  <div class="post-k">
+    {post.pillar}
+    {post.featured && <span class="post-flag">{post.sponsor ? `Featured · ${post.sponsor}` : "Featured"}</span>}
+  </div>
+  <h2 class="post-title">
+    {post.url
+      ? <a href={post.url} target="_blank" rel="noopener noreferrer">{post.title}</a>
+      : post.title}
+  </h2>
+  {size === "full" && post.deck && <p class="post-deck">{post.deck}</p>}
+  {(meta || chips.length > 0) && (
+    <div class="post-meta">
+      {meta && <span>{meta}</span>}
+      {size === "full" && chips.map((c) => <span class="chip">{c}</span>)}
+    </div>
+  )}
+</article>

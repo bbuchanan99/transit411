@@ -1,6 +1,8 @@
 ---
 import "../styles/dispatch.css";
+import { getPosts } from "../lib/content.js";
 const { title = "Transit411 — Transit funding, procurement & talent" } = Astro.props;
+const latest = (await getPosts())[0];
 const sections = ["News", "Funding", "Procurement", "People", "Policy", "Data"];
 const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
 ---
@@ -19,7 +21,9 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
 <body>
   <div class="wire-ticker">
     <span class="wire-label">Wire</span>
-    <span>Preview build — the live funding &amp; procurement wire connects when the API goes online</span>
+    {latest
+      ? <span>{latest.pillar}: {latest.url ? <a href={latest.url} target="_blank" rel="noopener noreferrer" style="color:inherit">{latest.title}</a> : latest.title}</span>
+      : <span>Funding, procurement, people &amp; policy &mdash; the wire fills as stories are published</span>}
   </div>
   <div class="dateline">
     <span>{today} &middot; Weekly Intelligence</span>

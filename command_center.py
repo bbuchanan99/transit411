@@ -286,7 +286,7 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
     live = "(COALESCE(featured, false) AND (featured_until IS NULL OR featured_until > now()))"
     if featured is not None:
         where.append(f"{live} = %s"); params.append(featured)
-    sql = ("SELECT id, slug, pillar, title, status, publish_at, source_name, source_url, "
+    sql = ("SELECT id, slug, pillar, title, status, publish_at, body, source_name, source_url, "
            f"agencies, mode, programs, tags, state, {live} AS featured, featured_until, sponsor FROM content_posts "
            "WHERE " + " AND ".join(where) + f" ORDER BY {live} DESC, publish_at DESC NULLS LAST LIMIT 200")
     out = []
@@ -298,6 +298,8 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
                 p = dict(zip(names, row))
                 p["publish_at"] = p["publish_at"].isoformat() if p.get("publish_at") else None
                 p["featured_until"] = p["featured_until"].isoformat() if p.get("featured_until") else None
+                # body is the summary plus a trailing "Source: name - url" line (source fields are separate).
+                p["summary"] = (p.get("body") or "").split("\n\nSource:")[0].strip() or None
                 out.append(p)
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")

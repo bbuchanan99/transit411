@@ -1,49 +1,50 @@
 ---
 import Base from "../layouts/Base.astro";
+import PostItem from "../components/PostItem.astro";
+import { getPosts, getCigSummary } from "../lib/content.js";
 
-// Sample content for the preview build. At launch this is replaced by a fetch of
-// published posts from `${import.meta.env.PUBLIC_API_BASE}/api/posts`.
-const lead = {
-  pillar: "Funding",
-  title: "The week's biggest transit funding story headlines the wire",
-  deck: "This is placeholder content for the preview build. At launch the homepage reads your published posts from the live API, and this becomes the top funding story of the week — written for agency staff, consultants, and contractors.",
-};
-const also = [
-  { pillar: "Procurement", title: "Agency releases a progressive design-build RFQ for a rail extension" },
-  { pillar: "People", title: "New chief program officer named at a major transit authority" },
-  { pillar: "Policy", title: "Surface transportation reauthorization advances out of committee" },
-];
+// Live content, fetched at build time (featured placements first, then newest).
+const posts = await getPosts();
+const [lead, ...rest] = posts;
+const also = rest.slice(0, 3);
+const wire = rest.slice(3, 11);
+
+// CIG pipeline figures from the latest loaded dashboard; "—" if the API is unavailable.
+const cig = await getCigSummary();
+const snapLabel = cig?.snapshot
+  ? new Date(cig.snapshot + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+  : null;
 const stats = [
-  { l: "Active CIG projects", v: "47", s: "In the FTA pipeline" },
-  { l: "CIG requested", v: "$28.2B", s: "Total across the pipeline" },
-  { l: "In Engineering", v: "7", s: "Advanced past Project Development" },
-];
-const wire = [
-  { pillar: "Funding", title: "A funding item headline goes here for the preview" },
-  { pillar: "Procurement", title: "A procurement notice headline for the preview" },
-  { pillar: "People", title: "A people-on-the-move headline for the preview" },
-  { pillar: "Policy", title: "A policy headline for the preview build" },
+  { l: "Active CIG projects", v: cig ? String(cig.projects) : "—", s: "In the FTA pipeline" },
+  { l: "CIG requested", v: cig ? `$${(cig.total_cig_musd / 1000).toFixed(1)}B` : "—", s: "Total across the pipeline" },
+  { l: "In Engineering", v: cig ? String(cig.by_phase?.Eng ?? 0) : "—", s: "Advanced past Project Development" },
 ];
 ---
 <Base>
-  <section class="lead-wrap wrap" style="padding-left:0;padding-right:0">
-    <div class="lead">
-      <span class="kicker">Lead &mdash; {lead.pillar}</span>
-      <h1 class="disp">{lead.title}</h1>
-      <div class="photo">[ Lead photo ]</div>
-      <p class="deck">{lead.deck}</p>
-      <div class="byline">By Transit411 &middot; <span class="preview-note">Preview &middot; sample content</span></div>
-    </div>
-    <div class="rail">
-      <div class="rail-h">Also this week</div>
-      {also.map((a) => (
-        <div class="rail-item">
-          <h3>{a.title}</h3>
-          <div class="k">{a.pillar}</div>
-        </div>
-      ))}
-    </div>
-  </section>
+  {lead ? (
+    <section class="lead-wrap wrap" style="padding-left:0;padding-right:0">
+      <div class="lead">
+        <span class="kicker">Lead &mdash; {lead.pillar}</span>
+        <h1 class="disp">
+          {lead.url ? <a href={lead.url} target="_blank" rel="noopener noreferrer" class="lead-link">{lead.title}</a> : lead.title}
+        </h1>
+        {lead.deck && <p class="deck">{lead.deck}</p>}
+        <div class="byline">{[lead.date, lead.source && `Source: ${lead.source}`].filter(Boolean).join(" · ")}</div>
+      </div>
+      <div class="rail">
+        <div class="rail-h">Also this week</div>
+        {also.map((p) => <PostItem post={p} size="compact" />)}
+        {also.length === 0 && <p class="rail-empty">More stories coming soon.</p>}
+      </div>
+    </section>
+  ) : (
+    <section class="wrap">
+      <div class="empty empty-lead">
+        <strong>No stories published yet.</strong>
+        <span>The first funding, procurement, people and policy stories will appear here as they're published. <a href="#newsletter">Subscribe</a> to get them each week.</span>
+      </div>
+    </section>
+  )}
 
   <section class="stats wrap" style="padding-left:0;padding-right:0">
     {stats.map((st) => (
@@ -54,17 +55,22 @@ const wire = [
       </div>
     ))}
   </section>
+  {snapLabel && <p class="wrap stats-note">From the FTA Capital Investment Grants dashboard of {snapLabel}.</p>}
 
   <div class="wrap">
-    <h2 class="section-h">More from the wire</h2>
-    <div class="grid">
-      {wire.map((w) => (
-        <div class="cell">
-          <div class="k">{w.pillar}</div>
-          <h3>{w.title}</h3>
+    {wire.length > 0 && (
+      <>
+        <h2 class="section-h">More from the wire</h2>
+        <div class="grid">
+          {wire.map((p) => (
+            <div class="cell">
+              <div class="k">{p.pillar}</div>
+              <h3>{p.url ? <a href={p.url} target="_blank" rel="noopener noreferrer">{p.title}</a> : p.title}</h3>
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      </>
+    )}
 
     <section id="newsletter" class="newsletter">
       <div>

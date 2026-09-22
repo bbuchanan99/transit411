@@ -75,7 +75,8 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 ### 3.7 Public site (Astro)
 - **`/site`** — an **Astro** static site deploying to **Cloudflare Pages**. Design is **"Dispatch"** (bold editorial newspaper: near-black + red, Archivo + Spectral).
 - Pages: homepage (`index.astro`), section pages (`[section].astro` → News/Funding/Procurement/People/Policy), a **Data hub** (`data.astro`).
-- **`src/lib/content.js`** — central content source. Currently returns **sample content** so the site builds before the API is wired; swapping to live data (`${PUBLIC_API_BASE}/api/posts`) is a one-function change (the live version is written in a comment there).
+- **`src/lib/content.js`** — central content source. At **build time** it fetches published posts from `${PUBLIC_API_BASE}/api/posts` and the CIG summary from `/api/cig` (`PUBLIC_API_BASE` defaults to `https://api.transit411.net`; see `site/.env.example`). The homepage shows the lead story, "Also this week" and the wire, plus live CIG figures; section pages filter by pillar. Headlines link to the original source (no article pages yet). If the API is down or slow (8 s timeout) the build still succeeds and pages show a "no stories yet" state.
+- **Static output:** newly published posts appear on the site after the **next Pages build** (a push, a manual redeploy, or a Pages deploy hook). `site/.nvmrc` pins Node 22 for the build.
 - Lives at **`transit411.pages.dev`** (domain stays dark until launch).
 
 ### 3.8 Read-only public API + Cloudflare Tunnel
@@ -219,11 +220,12 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - CIG pipeline: versioned snapshots, milestones, history, change detection, load history; Grants tab; Ask CIG. ✅
 - Command Center dashboard (all tabs). ✅
 - Shared component bundle. ✅
-- Public Astro site on Cloudflare Pages (homepage + sections + data hub, **sample content**). ✅
+- Public Astro site on Cloudflare Pages (homepage + sections + data hub), **reading live posts and CIG figures from the API at build time**. ✅
 - Read-only public API + Cloudflare Tunnel, secured by allowlist; `api.transit411.net` live. ✅
 
 **Pending / next:**
-- Wire the site to **live data** (`PUBLIC_API_BASE=https://api.transit411.net`): real published posts on homepage/sections; build the CIG pipeline page and Ask NTD/CIG pages using the shared bundle.
+- Rebuild the site automatically when posts are published (a Cloudflare Pages deploy hook called from the Publish tab, or a scheduled rebuild).
+- Build the CIG pipeline page and Ask NTD/CIG pages on the site using the shared bundle.
 - Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
 

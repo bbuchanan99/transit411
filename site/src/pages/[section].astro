@@ -1,5 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
+import PostItem from "../components/PostItem.astro";
 import { SECTIONS, getPosts } from "../lib/content.js";
 
 export function getStaticPaths() {
@@ -8,21 +9,20 @@ export function getStaticPaths() {
 
 const { section } = Astro.params;
 const meta = SECTIONS[section];
-const posts = getPosts(meta.pillar);
+const posts = await getPosts(meta.pillar);
 ---
 <Base title={meta.label + " — Transit411"}>
   <div class="wrap section-page">
     <h1 class="section-title disp">{meta.label}</h1>
     <p class="section-blurb">{meta.blurb}</p>
     <div class="post-list">
-      {posts.map((p) => (
-        <article class="post">
-          <div class="post-k">{p.pillar}</div>
-          <h2 class="post-title"><a href="#">{p.title}</a></h2>
-          <p class="post-deck">{p.deck}</p>
-        </article>
-      ))}
-      {posts.length === 0 && <p class="section-blurb">No items yet.</p>}
+      {posts.map((p) => <PostItem post={p} />)}
+      {posts.length === 0 && (
+        <div class="empty">
+          <strong>No {section === "news" ? "stories" : meta.label.toLowerCase() + " stories"} yet.</strong>
+          <span>New items appear here as they're published. <a href="#newsletter">Subscribe</a> to get them each week.</span>
+        </div>
+      )}
     </div>
   </div>
 </Base>
