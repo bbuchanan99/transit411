@@ -237,6 +237,15 @@ def _mark(conn, email, status, detail):
         cmod.set_status(conn, row[0], status, event=status, detail=detail)
 
 
+
+def _note_issue(message_id, conn, status, detail):
+    """If the message came from a newsletter issue, mark that recipient row too."""
+    try:
+        import newsletter
+        newsletter.note_delivery_event(conn, message_id, status, detail)
+    except Exception:
+        pass      # feedback handling must never fail because of the issue log
+
 def handle_sns(conn, msg):
     """Process a verified SNS message. Hard bounces and complaints suppress the address for good."""
     import json
@@ -252,6 +261,7 @@ def handle_sns(conn, msg):
     if kind != "Notification":
         return {"handled": "ignored", "type": kind}
     body = json.loads(msg.get("Message") or "{}")
+    orig_id = (body.get("mail") or {}).get("messageId")
     what = body.get("notificationType") or body.get("eventType")
     done = []
     if what == "Bounce":
@@ -264,6 +274,7 @@ def handle_sns(conn, msg):
             detail = (str(b.get("bounceType")) + "/" + str(b.get("bounceSubType")) + ": "
                       + str(r.get("diagnosticCode") or ""))[:300]
             log_event(conn, email, "bounce", detail=detail)
+            _note_issue(orig_id, conn, "bounced", detail)
             if hard:
                 _mark(conn, email, "bounced", detail)
             done.append({"email": email, "bounce": b.get("bounceType"), "suppressed": hard})
@@ -275,6 +286,7 @@ def handle_sns(conn, msg):
                 continue
             detail = ("complaint: " + str(c.get("complaintFeedbackType") or "unknown"))[:300]
             log_event(conn, email, "complaint", detail=detail)
+            _note_issue(orig_id, conn, "complained", detail)
             _mark(conn, email, "complained", detail)
             done.append({"email": email, "complaint": c.get("complaintFeedbackType"), "suppressed": True})
     elif what == "Delivery":

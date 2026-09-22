@@ -1076,6 +1076,158 @@ async def email_test(t: TestEmail):
         raise HTTPException(502, f"SES error: {type(e).__name__}: {e}")
 
 
+# ---- Newsletter: draft an issue from published posts, preview it, then send (newsletter.py) -------
+class IssueDraft(BaseModel):
+    days: Optional[int] = 7
+    since: Optional[str] = None
+    until: Optional[str] = None
+    tag: Optional[str] = None
+    intro: Optional[str] = None
+
+
+class IssueEdit(BaseModel):
+    subject: Optional[str] = None
+    html: Optional[str] = None
+    text: Optional[str] = None
+    preheader: Optional[str] = None
+
+
+class IssueSend(BaseModel):
+    tag: Optional[str] = None
+    limit: Optional[int] = None
+    confirm: bool = False
+
+
+@app.get("/api/newsletter/issues")
+def list_issues():
+    import newsletter
+    try:
+        with _db() as c:
+            return {"issues": newsletter.listing(c)}
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.get("/api/newsletter/issues/{issue_id}")
+def get_issue(issue_id: int):
+    import newsletter
+    try:
+        with _db() as c:
+            d = newsletter.get(c, issue_id)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not d:
+        raise HTTPException(404, "No such issue.")
+    return d
+
+
+@app.get("/api/newsletter/issues/{issue_id}/preview")
+def preview_issue(issue_id: int):
+    """The issue exactly as a subscriber sees it (the unsubscribe link is a placeholder here)."""
+    from fastapi.responses import HTMLResponse
+    import newsletter
+    try:
+        with _db() as c:
+            d = newsletter.get(c, issue_id)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not d:
+        raise HTTPException(404, "No such issue.")
+    return HTMLResponse((d["html"] or "").replace("{unsub}", "#unsubscribe-link"))
+
+
+@app.post("/api/newsletter/draft")
+def draft_issue(d: IssueDraft):
+    """Draft an issue from the posts published in a period. Nothing is sent."""
+    import newsletter
+    try:
+        with _db() as c:
+            return newsletter.draft(c, d.since or None, d.until or None, d.tag, max(1, min(d.days or 7, 90)), d.intro)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't draft that issue: {type(e).__name__}: {e}")
+
+
+@app.put("/api/newsletter/issues/{issue_id}")
+def edit_issue(issue_id: int, e: IssueEdit):
+    import newsletter
+    try:
+        with _db() as c:
+            d = newsletter.update(c, issue_id, e.subject, e.html, e.text, e.preheader)
+    except ValueError as ex:
+        raise HTTPException(409, str(ex))
+    except Exception as ex:
+        raise HTTPException(502, f"DB error: {ex}")
+    if not d:
+        raise HTTPException(404, "No such issue.")
+    return d
+
+
+@app.post("/api/newsletter/issues/{issue_id}/test")
+async def test_issue(issue_id: int, t: TestEmail):
+    """Send the draft to one address, subject prefixed [TEST]. Doesn't change the issue."""
+    import asyncio
+    import contacts as cmod
+    import email_sender as sender
+    import newsletter
+    to = cmod.normalize(t.email)
+    if not to:
+        raise HTTPException(400, "That doesn't look like an email address.")
+
+    def work():
+        with _db() as c:
+            return newsletter.send_test(c, issue_id, to)
+    try:
+        mid = await asyncio.to_thread(work)
+    except sender.NotConfigured as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"SES error: {type(e).__name__}: {e}")
+    if not mid:
+        raise HTTPException(404, "No such issue.")
+    return {"sent": True, "email": to, "message_id": mid}
+
+
+@app.post("/api/newsletter/issues/{issue_id}/send")
+async def send_issue_now(issue_id: int, s: IssueSend):
+    """Send to confirmed subscribers (optionally one tag). Requires confirm=true, sends once, and
+    skips anyone suppressed at the moment of sending."""
+    import asyncio
+    import email_sender as sender
+    import newsletter
+    if not s.confirm:
+        raise HTTPException(400, "Set confirm=true to send to the list.")
+
+    def work():
+        with _db() as c:
+            return newsletter.send_issue(c, issue_id, s.tag, s.limit)
+    try:
+        out = await asyncio.to_thread(work)
+    except sender.NotConfigured as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Send failed: {type(e).__name__}: {e}")
+    if not out:
+        raise HTTPException(404, "No such issue.")
+    return out
+
+
+@app.get("/api/newsletter/issues/{issue_id}/recipients")
+def issue_recipients(issue_id: int):
+    """Per-recipient outcome for a sent issue, including bounces/complaints matched back from SNS."""
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT email, status, coalesce(detail,''), to_char(at AT TIME ZONE 'America/New_York',"
+                        "'YYYY-MM-DD HH24:MI') FROM issue_recipients WHERE issue_id=%s ORDER BY id", (issue_id,))
+            rows = [dict(zip(("email", "status", "detail", "at"), r)) for r in cur.fetchall()]
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"issue_id": issue_id, "recipients": rows}
+
+
 # ---- Sources tab: the collector's registry (sources table), editable here ------------------------
 # Command Center only (not in readonly-api's allowlist). collection.py reads the table fresh on every
 # run, so changes apply to the next run; --seed leaves rows edited, added or deleted here alone.
@@ -1766,6 +1918,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   <button class="tab" data-t="collect">Collection</button>
   <button class="tab" data-t="sources">Sources</button>
   <button class="tab" data-t="contacts">Contacts</button>
+  <button class="tab" data-t="newsletter">Newsletter</button>
   <button class="tab" data-t="publish">Publish</button>
   <button class="tab" data-t="grants">Grants</button>
   <button class="tab" data-t="askcig">Ask CIG</button>
@@ -1814,6 +1967,19 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="kForm"></div>
     <div id="kMsg"></div>
     <div id="kOut"></div>
+  </div>
+  <div class="panel" id="p-newsletter">
+    <div class="askhead"><div><h2 class="disp">Newsletter</h2><p class="lead">Draft an issue from what you've published, edit it, preview it, send yourself a test &mdash; then send it to confirmed subscribers. Every headline links to its article page on the site, and each recipient gets their own unsubscribe link.</p></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="nDraft" type="button">Draft issue</button><button class="newq" id="nRefresh" type="button">Refresh</button></div></div>
+    <form class="csearch" id="nDraftForm" style="align-items:center">
+      <label style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">Period
+        <select id="nDays" style="font-family:Archivo,sans-serif;font-size:12px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)">
+          <option value="7">last 7 days</option><option value="14">last 14 days</option><option value="30">last 30 days</option></select></label>
+      <input type="text" id="nIntro" placeholder="Optional intro line for this issue" aria-label="Intro">
+    </form>
+    <div id="nMsg"></div>
+    <div id="nEditor"></div>
+    <div id="nList"></div>
   </div>
   <div class="panel" id="p-publish">
     <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads - and the site rebuilds itself about a minute later.</p></div><div style="display:flex;gap:8px"><button class="newq" id="pRebuild" type="button">Rebuild site now</button><button class="newq" id="pRefresh" type="button">Refresh</button></div></div>
@@ -2142,6 +2308,102 @@ async function pPost(url,what,b){ // POST, and say so if it didn't work instead 
 }
 document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
+// ---- Newsletter tab: draft from published posts, edit, preview, test, send ----
+let nIssues=[],nCurrent=null;
+document.querySelector('.tab[data-t="newsletter"]').addEventListener("click",loadIssues);
+document.getElementById("nRefresh").onclick=loadIssues;
+function nMsg(kind,html){document.getElementById("nMsg").innerHTML=html?'<div class="rcard"><div class="'+kind+'">'+html+'</div></div>':"";}
+const NSTATUS={draft:["Draft","var(--muted)"],sending:["Sending","var(--ink)"],sent:["Sent","#1F6B4A"],failed:["Failed","var(--accent)"]};
+document.getElementById("nDraft").onclick=async()=>{
+  const b=document.getElementById("nDraft");b.disabled=true;nMsg("loading","Drafting from what you've published...");
+  try{
+    const r=await fetch("/api/newsletter/draft",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({days:parseInt(document.getElementById("nDays").value,10)||7,intro:document.getElementById("nIntro").value.trim()||null})});
+    const t=await r.text();
+    if(!r.ok){nMsg("err","Couldn't draft: "+errText(t));}
+    else{const d=JSON.parse(t);
+      if(!d.posts)nMsg("err","Nothing published in that period, so the issue would be empty. Pick a longer period or publish some posts first.");
+      else{nMsg("loading","Drafted issue #"+d.id+" from "+d.posts+" post"+(d.posts===1?"":"s")+" ("+d.period_from+" to "+d.period_to+").");}
+      await loadIssues();openIssue(d.id);}
+  }catch(e){nMsg("err","Couldn't reach the Command Center.");}
+  b.disabled=false;
+};
+async function loadIssues(){
+  const box=document.getElementById("nList");
+  try{
+    const r=await fetch("/api/newsletter/issues");if(!r.ok){box.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
+    nIssues=(await r.json()).issues||[];
+    box.innerHTML='<div class="rcard"><div style="padding:12px 18px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px">Issues</div>'
+      +'<div class="t411-scroll"><table class="t411-table"><thead><tr><th>#</th><th>Subject</th><th>Status</th><th>Posts</th><th>Sent</th><th>Created</th><th></th></tr></thead><tbody>'
+      +(nIssues.length?nIssues.map(x=>{const st=NSTATUS[x.status]||[x.status,"var(--muted)"];
+        return '<tr><td>'+x.id+'</td><td style="font-weight:600;white-space:normal">'+esc(x.subject)+'</td>'
+          +'<td><span style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;color:'+st[1]+'">'+esc(st[0])+'</span></td>'
+          +'<td class="num">'+x.posts+'</td><td class="num">'+(x.status==="sent"?x.sent_count+" of "+x.recipients+(x.failed_count?" ("+x.failed_count+" failed)":""):"-")+'</td>'
+          +'<td>'+esc(x.sent_at||x.created_at)+'</td>'
+          +'<td style="white-space:nowrap"><button class="t411-linkbtn" data-nopen="'+x.id+'">Open</button> '
+          +'<a href="/api/newsletter/issues/'+x.id+'/preview" target="_blank" rel="noopener">Preview</a>'
+          +(x.status==="sent"?' <button class="t411-linkbtn" data-nrecip="'+x.id+'">Recipients</button>':'')+'</td></tr>';}).join("")
+        :'<tr><td colspan="7" style="color:var(--muted)">No issues yet - press Draft issue.</td></tr>')
+      +'</tbody></table></div></div>';
+  }catch(e){box.innerHTML='<div class="rcard"><div class="err">Could not load issues.</div></div>';}
+}
+async function openIssue(id){
+  const box=document.getElementById("nEditor");
+  box.innerHTML='<div class="rcard"><div class="loading">Loading issue...</div></div>';
+  try{
+    const r=await fetch("/api/newsletter/issues/"+id);
+    if(!r.ok){box.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
+    nCurrent=await r.json();
+    const sent=nCurrent.status==="sent";
+    const inp='style="padding:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:15px;font-family:Spectral,serif;border-radius:8px;width:100%"';
+    box.innerHTML='<div class="rcard" style="padding:16px 18px">'
+      +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="font-family:Archivo,sans-serif;font-weight:800;font-size:14px">Issue #'+nCurrent.id+'</div>'
+      +'<span style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted)">'+esc(nCurrent.period_from||"")+' to '+esc(nCurrent.period_to||"")+' · '+(nCurrent.post_ids||[]).length+' posts'+(sent?" · sent "+esc(nCurrent.sent_at||""):"")+'</span>'
+      +'<button class="newq" id="nClose" type="button" style="margin-left:auto">Close</button></div>'
+      +'<label style="font-family:Archivo,sans-serif;font-size:11px;font-weight:700;color:var(--muted)">Subject<input id="nSubject" type="text" '+inp+' value="'+esc(nCurrent.subject)+'"'+(sent?" disabled":"")+'></label>'
+      +'<details style="margin-top:12px"><summary style="cursor:pointer;font-family:Archivo,sans-serif;font-size:12px;font-weight:700;color:var(--muted)">Edit the HTML body</summary>'
+      +'<textarea id="nHtml" spellcheck="false" style="width:100%;height:260px;margin-top:8px;padding:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:JetBrains Mono,monospace;font-size:12px;border-radius:8px"'+(sent?" disabled":"")+'>'+esc(nCurrent.html||"")+'</textarea>'
+      +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-top:4px">{unsub} is replaced with each recipient\'s own unsubscribe link.</div></details>'
+      +'<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">'
+      +(sent?"":'<button class="newq" id="nSave" type="button">Save</button>')
+      +'<a class="newq" href="/api/newsletter/issues/'+nCurrent.id+'/preview" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block">Preview</a>'
+      +'<button class="newq" id="nTest" type="button">Send test to me</button>'
+      +(sent?"":'<button class="go" id="nSend" type="button" style="padding:9px 18px;margin-left:auto">Send to subscribers</button>')
+      +'</div><div id="nEditMsg" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin-top:8px"></div></div>';
+    document.getElementById("nClose").onclick=()=>{box.innerHTML="";nCurrent=null;};
+    const em=(t,err)=>{const e=document.getElementById("nEditMsg");e.textContent=t;e.style.color=err?"var(--accent)":"var(--muted)";};
+    if(!sent)document.getElementById("nSave").onclick=async()=>{
+      const body={subject:document.getElementById("nSubject").value,html:document.getElementById("nHtml").value};
+      const r=await fetch("/api/newsletter/issues/"+nCurrent.id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      em(r.ok?"Saved.":"Couldn't save: "+errText(await r.text()),!r.ok);loadIssues();
+    };
+    document.getElementById("nTest").onclick=async()=>{
+      const to=prompt("Send this issue as a test to (must be verified in SES while the account is in the sandbox):","");
+      if(!to)return;em("Sending test to "+to+"...");
+      const r=await fetch("/api/newsletter/issues/"+nCurrent.id+"/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:to})});
+      const t=await r.text();em(r.ok?"Test sent to "+to+".":"Not sent: "+errText(t),!r.ok);
+    };
+    if(!sent)document.getElementById("nSend").onclick=async()=>{
+      const c=await (await fetch("/api/contacts")).json().catch(()=>null);
+      const n=c&&c.counts?c.counts.mailable:"?";
+      if(!confirm("Send issue #"+nCurrent.id+" to "+n+" confirmed subscriber(s)?\n\nThis sends real email and can't be undone."))return;
+      em("Sending...");
+      const r=await fetch("/api/newsletter/issues/"+nCurrent.id+"/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirm:true})});
+      const t=await r.text();
+      if(!r.ok)em("Not sent: "+errText(t),true);
+      else{const d=JSON.parse(t);em("Sent to "+d.sent+" of "+d.recipients+(d.failed?", "+d.failed+" failed":"")+(d.skipped?", "+d.skipped+" skipped (suppressed)":"")+".");}
+      loadIssues();openIssue(nCurrent.id);
+    };
+  }catch(e){box.innerHTML='<div class="rcard"><div class="err">Could not load that issue.</div></div>';}
+}
+document.getElementById("p-newsletter").addEventListener("click",async e=>{
+  const o=e.target.closest("[data-nopen]");if(o){openIssue(+o.dataset.nopen);return;}
+  const rc=e.target.closest("[data-nrecip]");
+  if(rc){const r=await fetch("/api/newsletter/issues/"+rc.dataset.nrecip+"/recipients");
+    if(!r.ok)return;const d=await r.json();
+    nMsg("loading","Issue #"+d.issue_id+": "+(d.recipients||[]).map(x=>esc(x.email)+" — "+esc(x.status)+(x.detail?" ("+esc(x.detail)+")":"")).join("<br>"));}
+});
+
 // ---- Contacts tab: the newsletter list (contacts + suppressions) ----
 let kData=null,kFilter={q:"",status:"",tag:""};
 document.querySelector('.tab[data-t="contacts"]').addEventListener("click",loadContacts);
