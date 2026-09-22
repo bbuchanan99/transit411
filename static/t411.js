@@ -10,7 +10,8 @@
   function cigRow(p, i) {
     const rt = p.rating ? ('<span title="' + esc(RATING[p.rating] || "") + '">' + esc(p.rating) + '</span>') : '-';
     return '<tr class="t411-row" data-i="' + i + '" title="Show milestone dates"><td style="font-weight:600">' + esc(p.project_name) + '</td><td>' + esc(p.sponsor) + '</td>'
-      + '<td>' + esc(p.city || "") + ', ' + esc(p.state || "") + '</td><td>' + esc(p.mode || "-") + '</td><td>' + esc(p.phase) + '</td>'
+      + '<td>' + esc(p.city || "") + ', ' + esc(p.state || "") + '</td>' + (p.mode ? '<td title="' + esc(p.mode_source ? "Source: " + p.mode_source : "") + '">' + esc(p.mode) + '</td>'
+        : '<td class="t411-unspec" title="' + esc(p.mode_source ? "Not stated: " + p.mode_source : "Not stated by FTA sources") + '">Unspecified</td>') + '<td>' + esc(p.phase) + '</td>'
       + '<td class="num">' + amt(p.cost_musd, p.cost_raw) + '</td><td class="num">' + amt(p.cig_request_musd, p.cig_request_raw) + '</td>'
       + '<td class="num">' + esc(p.cig_share || "-") + '</td><td>' + rt + '</td><td>' + esc(p.est_grant || "-") + '</td></tr>'
       + '<tr class="t411-detail" data-i="' + i + '" hidden><td colspan="10"><div class="t411-ms-title">Milestones</div>'
@@ -25,25 +26,22 @@
 
   // CIG pipeline table. `projects` is the array from /api/cig. Clicking a row shows its milestone
   // dates; "Show snapshot history" loads its month-by-month changes. opts.fetchHistory(project) can
-  // supply history from another endpoint (default: /api/cig/history on the same host).
-  // FTA's dashboard has no mode column, so cig.py infers mode (from the exclusive-BRT column and the
-  // project name). Until modes come from an authoritative FTA source, the table says so. Set this to
-  // false (or pass opts.modeInferred=false) once most modes are sourced.
-  const MODE_INFERRED = true;
-  const MODE_NOTE = "Mode is inferred: FTA's CIG dashboard has no mode column, so modes come from its exclusive-BRT "
-    + "column and each project's name, and some are missing or approximate (e.g. “Rail”).";
+  // supply history from another endpoint (default: /api/cig/history on the same host); opts.apiBase is
+  // the host serving the FTA profile PDFs (default: same host).
+  // Mode comes only from FTA: the dashboard's exclusive-BRT column or the project's FTA profile
+  // (cig.py); where neither states it the table says "Unspecified" rather than guessing.
+  const MODE_NOTE = "Mode from FTA sources (the dashboard's exclusive-BRT column or the project's FTA profile); "
+    + "Unspecified where they don't state it.";
 
   function renderCigTable(el, projects, opts) {
     opts = opts || {};
     if (!projects || !projects.length) { el.innerHTML = '<div class="t411-empty">' + esc(opts.emptyText || "No projects.") + '</div>'; return; }
-    el._t411 = { projects: projects, fetchHistory: opts.fetchHistory || defaultHistory };
-    const inferred = opts.modeInferred ?? MODE_INFERRED;
+    el._t411 = { projects: projects, fetchHistory: opts.fetchHistory || defaultHistory, apiBase: opts.apiBase || "" };
     el.innerHTML = '<div class="t411-card"><div class="t411-scroll"><table class="t411-table"><thead><tr>'
-      + '<th>Project</th><th>Sponsor</th><th>Location</th>'
-      + (inferred ? '<th title="' + esc(MODE_NOTE) + '">Mode (inferred)<sup class="t411-fn">*</sup></th>' : '<th>Mode</th>')
+      + '<th>Project</th><th>Sponsor</th><th>Location</th><th title="' + esc(MODE_NOTE) + '">Mode<sup class="t411-fn">*</sup></th>'
       + '<th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th>'
       + '</tr></thead><tbody>' + projects.map(cigRow).join("") + '</tbody></table></div>'
-      + (inferred ? '<div class="t411-footnote"><sup class="t411-fn">*</sup> ' + esc(MODE_NOTE) + '</div>' : '')
+      + '<div class="t411-footnote"><sup class="t411-fn">*</sup> ' + esc(MODE_NOTE) + '</div>'
       + '</div>';
     if (el._t411Bound) return;
     el._t411Bound = true;
@@ -61,13 +59,18 @@
       if (!row) return;
       const det = el.querySelector('.t411-detail[data-i="' + row.dataset.i + '"]');
       if (!det) return;
-      if (det.hidden) renderCigMilestones(det.querySelector(".t411-ms-box"), st.projects[+row.dataset.i]);
+      if (det.hidden) renderCigMilestones(det.querySelector(".t411-ms-box"), st.projects[+row.dataset.i], st);
       det.hidden = !det.hidden;
     });
   }
 
-  // Per-project milestone dates (from a /api/cig row).
-  function renderCigMilestones(el, p) {
+  // Per-project milestone dates (from a /api/cig row), plus a link to its FTA project profile PDF.
+  function renderCigMilestones(el, p, opts) {
+    const base = (opts && opts.apiBase) || "";
+    const prof = p.profile_file
+      ? '<a class="t411-prof" href="' + esc(base + "/api/cig/profile?file=" + encodeURIComponent(p.profile_file))
+        + '" target="_blank" rel="noopener noreferrer">FTA project profile (PDF)</a>'
+      : '';
     const items = [["PD entry", p.pd_entry], ["NEPA complete", p.nepa], ["Engineering entry", p.eng_entry],
       ["LONP request", p.lonp_req], ["LONP decision", p.lonp_dec], ["LONP action", p.lonp_action],
       ["Rating requested", p.req_rating_date], ["Project rated", p.proj_rating_date],
@@ -75,7 +78,7 @@
       ["Local match", p.noncig_status], ["Est. grant", p.est_grant]];
     const chips = items.filter(x => x[1]).map(x =>
       '<span class="t411-ms"><span class="t411-ms-k">' + x[0] + '</span><span class="t411-ms-v">' + esc(x[1]) + '</span></span>').join("");
-    el.innerHTML = chips || '<div class="t411-empty">No milestone dates recorded.</div>';
+    el.innerHTML = (chips || '<div class="t411-empty">No milestone dates recorded.</div>') + prof;
   }
 
   // Snapshot history / change log (from /api/cig/history). Shows what moved each month.

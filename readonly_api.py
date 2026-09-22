@@ -40,6 +40,7 @@ ALLOW = {
     ("GET", "/api/cig"),
     ("GET", "/api/cig/history"),
     ("GET", "/api/cig/changes"),
+    ("GET", "/api/cig/profile"),   # FTA's public project profile PDFs, only those in the committed lookup
     ("POST", "/api/ask"),
     ("POST", "/api/cig/ask"),
 }
@@ -118,5 +119,6 @@ async def proxy(path: str, request: Request):
             )
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Upstream unreachable")
-    return Response(content=up.content, status_code=up.status_code,
+    extra = {k: up.headers[k] for k in ("content-disposition",) if k in up.headers}
+    return Response(content=up.content, status_code=up.status_code, headers=extra,
                     media_type=up.headers.get("content-type", "application/json"))

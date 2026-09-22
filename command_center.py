@@ -457,7 +457,7 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
             cur.execute("SELECT id, project_name, sponsor, city, state, mode, phase, cost_musd, cost_raw, "
                         "cig_request_musd, cig_request_raw, cig_share, rating, noncig_status, est_grant, "
                         "nepa, pd_entry, eng_entry, lonp_req, lonp_dec, lonp_action, req_rating_date, "
-                        "proj_rating_date FROM cig_projects WHERE " + " AND ".join(where) +
+                        "proj_rating_date, mode_source, profile_file FROM cig_projects WHERE " + " AND ".join(where) +
                         " ORDER BY cig_request_musd DESC NULLS LAST, project_name", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
@@ -612,6 +612,18 @@ def cig_load_file(load_id: int):
                         filename=f"CIG-Dashboard-{row[1].isoformat() if row[1] else 'undated'}.pdf")
 
 
+@app.get("/api/cig/profile")
+def cig_profile(file: str):
+    """An FTA project profile PDF (the source of a project's mode), by the profile_file on its /api/cig row."""
+    import cig as cigmod
+    from fastapi.responses import FileResponse
+    path = cigmod.profile_path(file)
+    if not path:
+        raise HTTPException(404, "No FTA profile with that name.")
+    return FileResponse(path, media_type="application/pdf", content_disposition_type="inline",
+                        filename=os.path.basename(path))
+
+
 class CigLink(BaseModel):
     url: str
 
@@ -664,7 +676,7 @@ CIG_SCHEMA_DOC = """Table cig_projects - the FTA Capital Investment Grants pipel
 Columns:
 - snapshot_date (date): which monthly dashboard the row is from. The CURRENT pipeline is the latest snapshot; unless the question is about history/change over time, filter to it: snapshot_date = (SELECT max(snapshot_date) FROM cig_projects).
 - project_name, sponsor (the transit agency), city, state (2-letter code)
-- mode: 'Bus','BRT','Light Rail','Heavy Rail','Commuter Rail','Streetcar','Rail' (may be NULL)
+- mode: 'BRT','Light Rail','Heavy Rail','Commuter Rail','Streetcar', or NULL where FTA's sources don't state it (call NULL "Unspecified"; never guess a mode from the project name). mode_source says where it came from.
 - phase: 'PD' (Project Development) or 'Eng' (Engineering)
 - rating: 'H','MH','M','ML','L' (High..Low); NULL if unrated. "Medium or better" = rating IN ('M','MH','H').
 - cost_musd (numeric, total project cost in $millions), cig_request_musd (numeric, CIG funding sought in $millions), cig_share (text like '49%')

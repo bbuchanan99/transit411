@@ -93,6 +93,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
     const rows = phase ? all.filter((p) => p.phase === phase) : all;
     T411.renderCigTable(el, rows, {
       fetchHistory,
+      apiBase: api,  // FTA profile PDFs are served by the public API
       emptyText: all.length ? "No projects in this phase." : "The pipeline isn't available right now. Please check back soon.",
     });
   }

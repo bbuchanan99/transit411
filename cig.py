@@ -193,6 +193,16 @@ def load_profiles():
     return _profiles_cache
 
 
+def profile_path(name):
+    """The kept copy of a profile PDF, or None. Only file names listed in the committed lookup are
+    served, and only from the profiles folder."""
+    if not name or name not in {p["file"] for p in load_profiles()}:
+        return None
+    base = os.path.realpath(os.path.join(PDF_DIR, "profiles"))
+    path = os.path.realpath(os.path.join(base, name))
+    return path if path.startswith(base + os.sep) and os.path.isfile(path) else None
+
+
 def match_profile(name, state, profiles=None):
     """The profile for a dashboard project: same normalized name (or a close one) in the same state."""
     from difflib import SequenceMatcher

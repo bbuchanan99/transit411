@@ -15,6 +15,8 @@
 .t411-tl-dot{width:9px;height:9px;border-radius:50%;background:var(--accent,#c0341f);flex-shrink:0}
 .t411-tl-date{width:96px;flex-shrink:0;color:var(--muted,#666)}
 .t411-fn{color:var(--accent,#c0341f);font-weight:800;margin-left:1px}
+.t411-unspec{color:var(--muted,#666);font-style:italic}
+.t411-prof{display:inline-block;margin:6px 0 2px;font-family:'Archivo',system-ui,sans-serif;font-size:12px;font-weight:600;color:var(--accent,#c0341f)}
 .t411-footnote{padding:8px 18px 12px;font-family:'Archivo',system-ui,sans-serif;font-size:11px;color:var(--muted,#666)}
 .t411-row{cursor:pointer}
 .t411-row:hover td{background:var(--panel,#f7f7f7)}
