@@ -12,6 +12,11 @@ dashboard). Parser validated against the 2026-09-11 dashboard.
   python cig.py --latest              # find & download the newest dashboard (403 from transit.dot.gov today)
   python cig.py --file dash.pdf       # load a local PDF (snapshot date from its filename)
   python cig.py --url https://...pdf  # download & load a specific (e.g. archived) dashboard
+  python cig.py --profiles DIR        # build reference/cig_modes.json from FTA project profile PDFs
+  python cig.py --remode              # re-apply mode + profile links to every stored snapshot
+
+Mode comes only from FTA sources (see assign_mode): the dashboard's exclusive-BRT column, then the
+profile's "Proposed Project:" field; otherwise NULL (Unspecified).
 """
 import argparse
 import os
@@ -77,22 +82,158 @@ def clean_num(s):
         return None
 
 
-def derive_mode(rec):
-    n = rec["name"].lower()
-    if "streetcar" in n:
-        return "Streetcar"
-    if "commuter rail" in n:
-        return "Commuter Rail"
-    if "light rail" in n or "lrt" in n:
-        return "Light Rail"
-    if "heavy rail" in n or "subway" in n or "metrorail" in n:
-        return "Heavy Rail"
-    eb = (rec.get("excl_brt") or "").upper()
-    if eb not in ("N/A", "TBD", "") or "brt" in n or "bus rapid" in n:
-        return "BRT"
-    if "rail" in n or "link" in n or "line" in n or "streetcar" in n:
-        return "Rail"
+# ---- Mode, from FTA sources only ---------------------------------------------------------------
+# The dashboard has no mode column. Mode comes from (1) the dashboard's "Length of Exclusive BRT"
+# column (a number or TBD => BRT; N/A => not BRT) and (2) the "Proposed Project: <mode>" field of
+# FTA's project profile PDFs (reference/cig_modes.json, built by --profiles). If neither states it,
+# or they disagree, mode is NULL ("Unspecified"). No guessing from project names.
+REF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference")
+MODES_FILE = os.environ.get("CIG_MODES_FILE", os.path.join(REF_DIR, "cig_modes.json"))
+STATE_CODES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA", "colorado": "CO",
+    "connecticut": "CT", "delaware": "DE", "district of columbia": "DC", "washington, dc": "DC", "florida": "FL",
+    "georgia": "GA", "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
+    "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY", "north carolina": "NC",
+    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "puerto rico": "PR",
+    "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX",
+    "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI",
+    "wyoming": "WY",
+}
+
+
+def canon_mode(raw):
+    """A profile's 'Proposed Project:' value -> a standard mode, or None if it isn't one we recognize."""
+    s = (raw or "").lower()
+    for key, mode in (("bus rapid", "BRT"), ("brt", "BRT"), ("light rail", "Light Rail"), ("heavy rail", "Heavy Rail"),
+                      ("commuter rail", "Commuter Rail"), ("streetcar", "Streetcar")):
+        if re.search(r"\b" + key + r"\b", s):
+            return mode
     return None
+
+
+def norm_name(s):
+    """Project-name key for matching dashboard rows to profiles."""
+    s = (s or "").lower().replace("&", " and ")
+    s = re.sub(r"\([^)]*\)", " ", s)
+    s = re.sub(r"\bbus rapid transit\b", "brt", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\b(the|project|program)\b", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _states_in(place):
+    """'Tacoma, Washington' -> {'WA'}; 'Portland, Oregon and Vancouver, Washington' -> {'OR','WA'}."""
+    p = (place or "").lower()
+    found = {code for name, code in STATE_CODES.items() if re.search(r"\b" + re.escape(name) + r"\b", p)}
+    if "washington, dc" in p or "district of columbia" in p:
+        found.discard("WA")
+    return found
+
+
+def read_profile(path):
+    """One FTA project profile PDF -> title, place, program, states, stated mode (if any), and
+    whether its text mentions rail vs. BRT (used only to detect conflicts, never to assign a mode)."""
+    import pdfplumber
+    with pdfplumber.open(path) as pdf:
+        text = "\n".join((p.extract_text() or "") for p in pdf.pages[:2])
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    title = lines[0] if lines else os.path.basename(path)
+    place = lines[1] if len(lines) > 1 else ""
+    program = next((l for l in lines[2:5] if re.search(r"\b(Starts|Capacity)\b", l)), "")
+    m = re.search(r"Proposed Project:\s*(.+)", text)
+    low = text.lower()
+    return {
+        "title": title, "place": place, "program": program, "states": sorted(_states_in(place)),
+        "key": norm_name(title), "mode_field": m.group(1).strip() if m else None,
+        "mode": canon_mode(m.group(1)) if m else None,
+        "mentions_rail": bool(re.search(r"\b(light rail|heavy rail|commuter rail|streetcar|metrorail|subway)\b", low)),
+        "mentions_brt": bool(re.search(r"\b(bus rapid transit|brt)\b", low)),
+    }
+
+
+def build_modes(src_dir, out_path=MODES_FILE, keep_dir=None):
+    """Read every profile PDF in src_dir into the committed lookup (reference/cig_modes.json), and
+    copy the PDFs into keep_dir (served as each project's 'FTA project profile' link)."""
+    import glob
+    import hashlib
+    import json
+    import shutil
+    keep_dir = keep_dir or os.path.join(PDF_DIR, "profiles")
+    os.makedirs(keep_dir, exist_ok=True)
+    out = []
+    for f in sorted(glob.glob(os.path.join(src_dir, "*.pdf"))):
+        prof = read_profile(f)
+        name = os.path.basename(f)
+        with open(f, "rb") as fh:
+            prof["sha256"] = hashlib.sha256(fh.read()).hexdigest()
+        prof["file"] = name
+        shutil.copyfile(f, os.path.join(keep_dir, name))
+        out.append(prof)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump({"generated": datetime.utcnow().strftime("%Y-%m-%d"), "source":
+                   "FTA CIG project profile PDFs (Proposed Project field)", "profiles": out}, fh, indent=1)
+    return out
+
+
+_profiles_cache = None
+
+
+def load_profiles():
+    global _profiles_cache
+    if _profiles_cache is None:
+        import json
+        try:
+            with open(MODES_FILE, encoding="utf-8") as fh:
+                _profiles_cache = json.load(fh).get("profiles", [])
+        except (OSError, ValueError):
+            _profiles_cache = []
+    return _profiles_cache
+
+
+def match_profile(name, state, profiles=None):
+    """The profile for a dashboard project: same normalized name (or a close one) in the same state."""
+    from difflib import SequenceMatcher
+    profiles = load_profiles() if profiles is None else profiles
+    key = norm_name(name)
+    states = set((state or "").split("-"))
+    same_state = [p for p in profiles if not p["states"] or states & set(p["states"])]
+    exact = [p for p in same_state if p["key"] == key]
+    if exact:
+        return exact[0]
+    # One name's distinctive words all appear in the other (e.g. "BART Silicon Valley Phase II" vs
+    # "... Phase II Extension Project", "Veirs Mill Road Flash BRT" vs "Veirs Mill Road BRT"), and
+    # only one profile in the state qualifies.
+    filler = {"extension", "corridor", "flash", "new", "starts"}
+    words = set(key.split()) - filler
+    contained = [p for p in same_state
+                 if words and (set(p["key"].split()) - filler) and
+                 (words <= set(p["key"].split()) - filler or set(p["key"].split()) - filler <= words)]
+    if len(contained) == 1:
+        return contained[0]
+    scored = sorted(((SequenceMatcher(None, key, p["key"]).ratio(), p) for p in same_state), key=lambda t: -t[0])
+    if scored and scored[0][0] >= 0.88 and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 0.05):
+        return scored[0][1]
+    return None
+
+
+def assign_mode(excl_brt, profile):
+    """(mode, source) from FTA sources only; mode None means Unspecified."""
+    col = (excl_brt or "").strip().upper()
+    col_says_brt = col not in ("", "N/A")
+    pmode = profile["mode"] if profile else None
+    if col_says_brt:
+        if pmode and pmode != "BRT":
+            return None, f"conflict: dashboard BRT column vs profile ({pmode})"
+        if profile and not pmode and profile["mentions_rail"]:
+            # e.g. Interstate Bridge Replacement: light rail AND bus-on-shoulder BRT. One mode can't say it.
+            return None, "conflict: dashboard BRT column but the profile also describes a rail mode"
+        return "BRT", "FTA dashboard (Length of Exclusive BRT)"
+    if pmode:
+        return pmode, "FTA project profile"
+    return None, "not stated by FTA sources"
 
 
 def date_in(s):
@@ -142,7 +283,9 @@ def download(url, dest="/tmp/cig.pdf"):
     return dest
 
 
-MILESTONE_COLS = ["lonp_req", "lonp_dec", "lonp_action", "req_rating_date", "proj_rating_date"]
+MILESTONE_COLS = ["lonp_req", "lonp_dec", "lonp_action", "req_rating_date", "proj_rating_date",
+                  # mode provenance: the raw BRT-column value, where mode came from, the linked profile PDF
+                  "excl_brt", "mode_source", "profile_file"]
 
 
 def create_table(conn):
@@ -182,21 +325,53 @@ def load(conn, rows, snap):
         # so a failure part-way leaves this snapshot as it was.
         cur.execute("DELETE FROM cig_projects WHERE snapshot_date=%s", (snap,))
         for r in unique:
+            prof = match_profile(r["name"], r["state"])
+            mode, mode_source = assign_mode(r["excl_brt"], prof)
             cur.execute(
                 "INSERT INTO cig_projects (snapshot_date, project_name, sponsor, city, state, mode, phase, "
                 "length_mi, stations, cost_musd, cost_raw, cig_request_musd, cig_request_raw, cig_share, "
                 "rating, noncig_status, est_grant, nepa, pd_entry, eng_entry, lonp_req, lonp_dec, "
-                "lonp_action, req_rating_date, proj_rating_date) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (snap, r["name"], r["sponsor"], r["city"], r["state"], derive_mode(r), r["phase"],
+                "lonp_action, req_rating_date, proj_rating_date, excl_brt, mode_source, profile_file) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (snap, r["name"], r["sponsor"], r["city"], r["state"], mode, r["phase"],
                  r["length"], r["stations"], clean_num(r["cost"]), r["cost"] or None,
                  clean_num(r["cig_request"]), r["cig_request"] or None, r["cig_share"] or None,
                  r["rating"] or None, r["noncig_status"] or None, r["est_grant"] or None,
                  r["nepa"] or None, r["pd_entry"] or None, r["eng_entry"] or None,
                  r["lonp_req"] or None, r["lonp_dec"] or None, r["lonp_action"] or None,
-                 r["req_rating_date"] or None, r["proj_rating_date"] or None))
+                 r["req_rating_date"] or None, r["proj_rating_date"] or None,
+                 r["excl_brt"] or None, mode_source, prof["file"] if prof else None))
     conn.commit()
     return len(unique)
+
+
+def remode(conn, kept_pdfs=()):
+    """Re-apply mode + profile links to every stored snapshot (e.g. after rebuilding cig_modes.json).
+    Rows loaded before excl_brt was stored get it from a kept dashboard PDF of the same snapshot, or
+    from the same project in another snapshot (a project's BRT status doesn't change month to month)."""
+    create_table(conn)
+    with conn.cursor() as cur:
+        for path in kept_pdfs:  # fill excl_brt from kept dashboard PDFs
+            snap = date_in(os.path.basename(path))
+            if not snap:
+                continue
+            for r in parse_pdf(path):
+                cur.execute("UPDATE cig_projects SET excl_brt=%s WHERE snapshot_date=%s AND project_name=%s "
+                            "AND sponsor=%s AND excl_brt IS NULL", (r["excl_brt"] or None, snap, r["name"], r["sponsor"]))
+        cur.execute("""UPDATE cig_projects p SET excl_brt = q.excl_brt FROM (
+                         SELECT DISTINCT ON (project_name, sponsor) project_name, sponsor, excl_brt FROM cig_projects
+                         WHERE excl_brt IS NOT NULL ORDER BY project_name, sponsor, snapshot_date DESC) q
+                       WHERE p.excl_brt IS NULL AND p.project_name = q.project_name AND p.sponsor = q.sponsor""")
+        cur.execute("SELECT id, project_name, state, excl_brt FROM cig_projects")
+        counts = {}
+        for rid, name, state, excl in cur.fetchall():
+            prof = match_profile(name, state)
+            mode, src = assign_mode(excl, prof) if excl is not None or prof else (None, "not stated by FTA sources")
+            cur.execute("UPDATE cig_projects SET mode=%s, mode_source=%s, profile_file=%s WHERE id=%s",
+                        (mode, src, prof["file"] if prof else None, rid))
+            counts[src.split(":")[0]] = counts.get(src.split(":")[0], 0) + 1
+    conn.commit()
+    return counts
 
 
 # ---- Load history: every dashboard load (or refusal) and a kept copy of its PDF ------------------
@@ -315,7 +490,32 @@ def main():
     ap.add_argument("--file")
     ap.add_argument("--url")
     ap.add_argument("--latest", action="store_true")
+    ap.add_argument("--profiles", metavar="DIR",
+                    help="build the mode lookup (reference/cig_modes.json or --out) from FTA project profile PDFs "
+                         "in DIR, and keep copies of them for the project links")
+    ap.add_argument("--out", help="with --profiles: where to write the lookup JSON")
+    ap.add_argument("--remode", action="store_true",
+                    help="re-apply mode + profile links to every stored snapshot")
     a = ap.parse_args()
+    if a.profiles:
+        profs = build_modes(a.profiles, a.out or MODES_FILE)
+        print(f"Profiles read: {len(profs)}; with a stated mode: {sum(1 for p in profs if p['mode'])}; "
+              f"lookup written to {a.out or MODES_FILE}")
+        if not a.remode:
+            return
+    if a.remode:
+        import glob
+        import psycopg
+        global _profiles_cache
+        if a.out:
+            os.environ["CIG_MODES_FILE"] = a.out
+            globals()["MODES_FILE"] = a.out
+        _profiles_cache = None
+        dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
+        with psycopg.connect(dsn) as conn:
+            counts = remode(conn, sorted(glob.glob(os.path.join(PDF_DIR, "*.pdf"))))
+        print("Mode sources across all stored rows:", counts)
+        return
     if a.file:
         path, src = a.file, a.file
     elif a.url:

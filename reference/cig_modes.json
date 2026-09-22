@@ -1,0 +1,773 @@
+{
+ "generated": "2026-09-22",
+ "source": "FTA CIG project profile PDFs (Proposed Project field)",
+ "profiles": [
+  {
+   "title": "Stone Avenue BRT",
+   "place": "Tucson, Arizona",
+   "program": "Small Starts Project Development",
+   "states": [
+    "AZ"
+   ],
+   "key": "stone avenue brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": true,
+   "mentions_brt": true,
+   "sha256": "5e4ccb8fcc9195f3a2e21ec259d953586a45110abf31351470ed1cdd3cbdf9ab",
+   "file": "AZ-Tucson-Stone-Avenue-BRT-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "BART Silicon Valley Phase II Extension Project",
+   "place": "San Jose, California",
+   "program": "New Starts Engineering",
+   "states": [
+    "CA"
+   ],
+   "key": "bart silicon valley phase ii extension",
+   "mode_field": "Heavy Rail",
+   "mode": "Heavy Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "8ae6554d4084f8dbb9a1d403f19a2de349dd71dc1d33d67717e01de3746dbbfc",
+   "file": "CA-BART-Silicon-Valley-Phase-II-Eng-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Eastside Transit Corridor Phase 2 Project",
+   "place": "Los Angeles, California",
+   "program": "New Starts Project Development",
+   "states": [
+    "CA"
+   ],
+   "key": "eastside transit corridor phase 2",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "d74e979f88ee8b01c5938c76e73eeeef187db171211634927c79c4ffbb833c05",
+   "file": "CA-Los-Angeles-Eastside-Transit-Corridor-Phase-2-Project-PD-PROFILE-final-06-17-2026.pdf"
+  },
+  {
+   "title": "Southeast Gateway Line",
+   "place": "Los Angeles, California",
+   "program": "New Starts Project Development",
+   "states": [
+    "CA"
+   ],
+   "key": "southeast gateway line",
+   "mode_field": "Light Rail",
+   "mode": "Light Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "ad58cf8823734c8d6f84f4ac591b725ebcd04844e956b48082eae0b39297f4ff",
+   "file": "CA-Los-Angeles-Southeast-Gateway-PD-Profile-FY27AR-04-07-2026.pdf"
+  },
+  {
+   "title": "Vermont Avenue BRT",
+   "place": "Los Angeles, California",
+   "program": "Small Starts Project Development",
+   "states": [
+    "CA"
+   ],
+   "key": "vermont avenue brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "73bf031696fa03e8472ab73ce0312289b2c701a563b459f21d0ceaecb12bb89c",
+   "file": "CA-Los-Angeles-Vermont-Avenue-BRT-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "Downtown Riverfront Streetcar Project",
+   "place": "Sacramento, California",
+   "program": "Small Starts Project Development",
+   "states": [
+    "CA"
+   ],
+   "key": "downtown riverfront streetcar",
+   "mode_field": "Streetcar",
+   "mode": "Streetcar",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "333509a0d0789eeb7101590d3c46c59e65fbc192767e2d25a4b7d400a81fc981",
+   "file": "CA-Sacramento-Downtown-Riverfront-Streetcar-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Transbay Downtown Rail Extension Project",
+   "place": "San Francisco, California",
+   "program": "New Starts Engineering",
+   "states": [
+    "CA"
+   ],
+   "key": "transbay downtown rail extension",
+   "mode_field": "Commuter Rail",
+   "mode": "Commuter Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "97b5fe966ea63f966c750f0c94bc04216e09c2c5ea3442d7790c182b0763bd03",
+   "file": "CA-San-Francisco-Transbay-Program-Downtown-Extension-Eng-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Federal Boulevard BRT Project",
+   "place": "Denver, Colorado",
+   "program": "Small Starts Project Development",
+   "states": [
+    "CO"
+   ],
+   "key": "federal boulevard brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "5eb3544317eff318fefdef74c763c5071c7d435316c19b6b96e166b71cc43bb5",
+   "file": "CO-Denver-Federal-Boulevard-BRT-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "West Elizabeth Corridor",
+   "place": "Fort Collins, Colorado",
+   "program": "Small Starts Project Development",
+   "states": [
+    "CO"
+   ],
+   "key": "west elizabeth corridor",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "07438ab0600f9aaa02916517610c473778d28b7b8f5fea0fe7f87fd13a073de8",
+   "file": "CO-Fort-Collins-West-Elizabeth-Corridor-PD-Profile.pdf"
+  },
+  {
+   "title": "Red Line Modernization Project",
+   "place": "Washington, DC",
+   "program": "Core Capacity Project Development",
+   "states": [
+    "DC"
+   ],
+   "key": "red line modernization",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "b7e2e178f5ab9eff95533d64c7ddfcf14340d35f9a32d689d4a9151be6bb189c",
+   "file": "DC-Washington-Red-Line-Modernization-Project-PD-Profile-08-04-26.pdf"
+  },
+  {
+   "title": "Broward Commuter Rail South",
+   "place": "Broward County, Florida",
+   "program": "New Starts Project Development",
+   "states": [
+    "FL"
+   ],
+   "key": "broward commuter rail south",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "c22f1871e6f9f5b7a5d74b83ab2730319fb4ebe3a81076a7031667c81055718a",
+   "file": "FL-Broward-BCRS-NS-PD-Profile-12-04-2024.pdf"
+  },
+  {
+   "title": "Northeast Corridor Rapid Transit Project",
+   "place": "Miami-Dade County, Florida",
+   "program": "New Starts Engineering",
+   "states": [
+    "FL"
+   ],
+   "key": "northeast corridor rapid transit",
+   "mode_field": "Commuter Rail",
+   "mode": "Commuter Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "5a789a9e80243879e03c5ff720a34006c44ab03c7c43e3a6ddc9655462d2feeb",
+   "file": "FL-Miami-Dade-Northeast-Corridor-Rapid-Transit-Eng-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "MARTA Rapid Campbellton",
+   "place": "Atlanta, Georgia",
+   "program": "Small Starts Project Development",
+   "states": [
+    "GA"
+   ],
+   "key": "marta rapid campbellton",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "6a6ae70ac24f7de8f99ae863bb80a4f37d27b1f248612b69d00a968c7c3405b4",
+   "file": "GA-Atlanta-MARTA-Rapid-Campbellton-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "MARTA Rapid Southlake",
+   "place": "Atlanta, Georgia",
+   "program": "Small Starts Project Development",
+   "states": [
+    "GA"
+   ],
+   "key": "marta rapid southlake",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": true,
+   "mentions_brt": true,
+   "sha256": "bfe6c00e7c87aaf9fb6411bda9ecb4d51fb2e0758f8a59da00767812eb545090",
+   "file": "GA-Atlanta-MARTA-Rapid-Southlake-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Red Line Extension New Starts Project",
+   "place": "Chicago, Illinois",
+   "program": "",
+   "states": [
+    "IL"
+   ],
+   "key": "red line extension new starts",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "125aab9006d5563f8844ad5d51df9b9d524da28c0e8418025f54f6614d92cdb4",
+   "file": "IL-Chicago-Red-Line-Extension-FFGA-Profile-FY26-01-16-2025_0.pdf"
+  },
+  {
+   "title": "Blue Hill Avenue Transit Action Plan",
+   "place": "Boston, Massachusetts",
+   "program": "Small Starts Project Development",
+   "states": [
+    "MA"
+   ],
+   "key": "blue hill avenue transit action plan",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "2b300778a4627b637ecf64fb0849aff3e35400202358b5942dfd138136ffde2c",
+   "file": "MA-Boston-Blue-Hill-Ave-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "Green Line Transformation (GLT) Core Capacity Program",
+   "place": "Boston, Massachusetts",
+   "program": "Core Capacity Project Development",
+   "states": [
+    "MA"
+   ],
+   "key": "green line transformation core capacity",
+   "mode_field": "Light Rail Capacity Improvements",
+   "mode": "Light Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "c6817b90d721bc97bd09c053de53d9597ffee00474ae6fc2ebf21107ec91406a",
+   "file": "MA-Boston-Green-Line-Core-Capacity-PD-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "MD 355 Central Flash Bus Rapid Transit",
+   "place": "Montgomery County, Maryland",
+   "program": "New Starts Project Development",
+   "states": [
+    "MD"
+   ],
+   "key": "md 355 central flash brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "4aafc550497d303dedbbf447f3913e8f8c2214a273644ca04d7ccae9a3dc5b55",
+   "file": "MD-Montgomery-County-MD-355-Central-Flash-BRT-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "Veirs Mill Road BRT",
+   "place": "Montgomery County, Maryland",
+   "program": "Small Starts Project Development",
+   "states": [
+    "MD"
+   ],
+   "key": "veirs mill road brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": true,
+   "mentions_brt": true,
+   "sha256": "76768c21bc79c2cc098941db44781ef1016d7de565b5eddde6003dedd5cc03ba",
+   "file": "MD-Montgomery-County-Veirs-Mill-BRT-Project-Profile-Off-Cycle-12-11-2025.pdf"
+  },
+  {
+   "title": "METRO Blue Line Extension (Bottineau LRT)",
+   "place": "Minneapolis, Minnesota",
+   "program": "New Starts Engineering",
+   "states": [
+    "MN"
+   ],
+   "key": "metro blue line extension",
+   "mode_field": "Light Rail Transit Extension",
+   "mode": "Light Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "6fd35a20f55337076f19b9c2ae0a07bc092a1ea1843e33935d1530956abc9431",
+   "file": "MN-Minneapolis-METRO-Blue-Line-Extension-Project-Profile-FY22.pdf"
+  },
+  {
+   "title": "METRO F Line Bus Rapid Transit",
+   "place": "Minneapolis, Minnesota",
+   "program": "Small Starts Project Development",
+   "states": [
+    "MN"
+   ],
+   "key": "metro f line brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": true,
+   "mentions_brt": true,
+   "sha256": "9f53566a4103f3b4187b54382373ceec2c71236ff29adf53729a3bcd7a3ec95d",
+   "file": "MN-Minneapolis-METRO-F-Line-BRT-FY24.pdf"
+  },
+  {
+   "title": "Jefferson Alignment MetroLink Expansion Project",
+   "place": "St. Louis, Missouri",
+   "program": "New Starts Project Development",
+   "states": [
+    "MO"
+   ],
+   "key": "jefferson alignment metrolink expansion",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "a25b5428e2136a57e5eae73778d0b477bbb57b97291ce6fe33e6e97d13b71d31",
+   "file": "MO-St.-Louis-Jefferson-Alignment-MetroLink-Expansion-LRT-PD-PROFILE-April-2026-UPDATE-04-28-2026.pdf"
+  },
+  {
+   "title": "North-South Bus Rapid Transit (NSBRT)",
+   "place": "Chapel Hill, North Carolina",
+   "program": "Small Starts Project Development",
+   "states": [
+    "NC"
+   ],
+   "key": "north south brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "542a56048a5fa596bd5a86da42b0b2b0a559e1eda37814d0c6583781de820a30",
+   "file": "NC-Chapel-Hill-North-South-BRT-Profile-FY25_0.pdf"
+  },
+  {
+   "title": "Wake Bus Rapid Transit: Western Corridor",
+   "place": "Raleigh, North Carolina",
+   "program": "Small Starts Project Development",
+   "states": [
+    "NC"
+   ],
+   "key": "wake brt western corridor",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "70a37eb2919af7aec894f0003dd4b3511893e9d7fba6d26bbe6b9d608a8a8c7d",
+   "file": "NC-Raleigh-Wake-BRT-Western-Corridor-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Wake Bus Rapid Transit: Southern Corridor",
+   "place": "Raleigh, North Carolina",
+   "program": "Small Starts Project Development",
+   "states": [
+    "NC"
+   ],
+   "key": "wake brt southern corridor",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "0c243e2b6dde1b64009763ce7f9446a209857fc3a127766e4e691fff4c65d42c",
+   "file": "NC-Raleigh-Wake-Bus-Rapid-Transit-Southern-Corridor-Profile-FY24.pdf"
+  },
+  {
+   "title": "Hudson Tunnel",
+   "place": "Secaucus, New Jersey to New York City",
+   "program": "",
+   "states": [
+    "NJ",
+    "NY"
+   ],
+   "key": "hudson tunnel",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "e4dceebeca5b6327fba0b3a853f6aed921115562358b6ebf941b3c7f8c83908a",
+   "file": "NJ-NY-Hudson-Tunnel-Project-Profile-FY25.pdf"
+  },
+  {
+   "title": "Nassau Hub Bus Rapid Transit Project",
+   "place": "Nassau County, New York",
+   "program": "Small Starts Project Development",
+   "states": [
+    "NY"
+   ],
+   "key": "nassau hub brt",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "d1fa3750329d13e4883029bd1014e0b5a4beae54df3ece70e8cbfc03310ffb18",
+   "file": "NY-Nassau-Hub-BRT-PD-PROFILE-08-28-2025_0.pdf"
+  },
+  {
+   "title": "Second Avenue Subway Phase 2",
+   "place": "New York, New York",
+   "program": "",
+   "states": [
+    "NY"
+   ],
+   "key": "second avenue subway phase 2",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "7f970adc50fdb91e5d640ab674ba294fb186b487df05874f60406b2f79f5f5d9",
+   "file": "NY-New-York-Second-Avenue-Subway-Phase-2-Profile-FY25.pdf"
+  },
+  {
+   "title": "Hamilton Avenue Corridor Bus Rapid Transit Project",
+   "place": "Cincinnati, Ohio",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OH"
+   ],
+   "key": "hamilton avenue corridor brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "08e8b4a99af36d52ea9579f2430671b5598df7562fb8b07a139d99c52ef2096b",
+   "file": "OH-Cincinnati-Hamilton-Ave-Corridor-BRT-Profile-Off-Cycle-11-19-25.pdf"
+  },
+  {
+   "title": "Reading Road Corridor BRT Project",
+   "place": "Cincinnati, Ohio",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OH"
+   ],
+   "key": "reading road corridor brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "b4de24b1a313912cd93504941d8b43e058afec85ab422919286f7ba1b24111c8",
+   "file": "OH-Cincinnati-Reading-BRT-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "MetroHealth Line BRT Project",
+   "place": "Cleveland, Ohio",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OH"
+   ],
+   "key": "metrohealth line brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "58cb875b69983f8e36a6c4f4d47878b7809f373b4bb0f8669852be366ba750d5",
+   "file": "OH-Cleveland-MetroHealth-Line-BRT-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "East Main Street BRT",
+   "place": "Columbus, Ohio",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OH"
+   ],
+   "key": "east main street brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "a8ffc91c5651b0a9c5e4e4f7c2bba12744833c664b283443d9cc89acaca8848e",
+   "file": "OH-Columbus-East-Main-BRT-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Northwest Corridor Bus Rapid Transit Project",
+   "place": "Columbus, Ohio",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OH"
+   ],
+   "key": "northwest corridor brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "7c530388e81bc07f78707e2c2cabf41954f4028adc45a21e901f510c286b8889",
+   "file": "OH-Columbus-Northwest-Corridor-BRT-PROFILE-Final-9-03-26.pdf"
+  },
+  {
+   "title": "West Broad Street Bus Rapid Transit Project",
+   "place": "Columbus, Ohio",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OH"
+   ],
+   "key": "west broad street brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "db5dfff0d67ce1d089d0c1d1b78943c50f15b18f80b168df5d2d7c0b2a66e208",
+   "file": "OH-Columbus-West-Broad-Street-BRT-Profile-AR26-11-19-25_0.pdf"
+  },
+  {
+   "title": "MAPS 4 Bus Rapid Transit Corridor Project",
+   "place": "Oklahoma City, Oklahoma",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OK"
+   ],
+   "key": "maps 4 brt corridor",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "7267323458ee848c69db8152d041e2dd555b7c30e584214038f803f5b0449366",
+   "file": "OK-Oklahoma-City-MAPS4-BRT-PD-PROFILE-10-09-2025.pdf"
+  },
+  {
+   "title": "82nd Avenue Transit Project",
+   "place": "Portland, Oregon",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OR"
+   ],
+   "key": "82nd avenue transit",
+   "mode_field": "BRT",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "605362baab9eafd58316629114c91f03a1b1f6eef95ce32ebab78fd9703fa1f8",
+   "file": "OR-Portalnd-82nd-Ave-Tranist-Profile-Off-Cycle-11-19-25_0.pdf"
+  },
+  {
+   "title": "Montgomery Park Transit Project",
+   "place": "Portland, Oregon",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OR"
+   ],
+   "key": "montgomery park transit",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "0daf99987bb37973db1bf7ef74cd954bdfb44d0516a03efd332752a343264fa8",
+   "file": "OR-Portland-MPTP-PD-PROFILE-01-02-2025.pdf"
+  },
+  {
+   "title": "TV Highway Transit and Safety Project",
+   "place": "Portland, Oregon",
+   "program": "Small Starts Project Development",
+   "states": [
+    "OR"
+   ],
+   "key": "tv highway transit and safety",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "38a237cfe2e6c73b982361ff6ed172385bf65d928d132cb2487bf929ca527761",
+   "file": "OR-Portland-TV-Highway-PD-Profile-10-15-2025.pdf"
+  },
+  {
+   "title": "Lowcountry Rapid Transit (LCRT)",
+   "place": "Charleston, South Carolina",
+   "program": "New Starts Engineering",
+   "states": [
+    "SC"
+   ],
+   "key": "lowcountry rapid transit",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "8c45d600ca1a824cb3b898eafe39c065d0510cb01ce95d3fb5817c961a926455",
+   "file": "SC-Charleston-Lowcountry-Rapid-Transit-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "Austin Light Rail Phase 1 Project",
+   "place": "Austin, Texas",
+   "program": "New Starts Project Development",
+   "states": [
+    "TX"
+   ],
+   "key": "austin light rail phase 1",
+   "mode_field": "Light Rail Transit",
+   "mode": "Light Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "130d39949ec43094eb2b4f578077ba6e4404d6b6c2b9d28091037430c92d41d4",
+   "file": "TX-Austin-Light-Rail-Phase-1-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "METRORapid Gulfton Corridor Project",
+   "place": "Houston, Texas",
+   "program": "Small Starts Project Development",
+   "states": [
+    "TX"
+   ],
+   "key": "metrorapid gulfton corridor",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "8f907af7d79bb7bbc3d5721a12a85104b34b25efbf05c17ade7ecee2174c79e6",
+   "file": "TX-Houston-METRORapid-Gulfton-Corridor-PD-PROFILE.pdf"
+  },
+  {
+   "title": "VIA Advanced Rapid Transit East/West Corridor Project",
+   "place": "San Antonio, Texas",
+   "program": "Small Starts Project Development",
+   "states": [
+    "TX"
+   ],
+   "key": "via advanced rapid transit east west corridor",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "2e265449a244535f0ce6b5bd228aa6448a342f394236297c12fa6bcfa8b5a6f2",
+   "file": "TX-SanAntonio-VIAARTEastWestCorridor-Profile-FY25.pdf"
+  },
+  {
+   "title": "Davis-Salt Lake City Community Connector",
+   "place": "Salt Lake City, Utah",
+   "program": "Small Starts Project Development",
+   "states": [
+    "UT"
+   ],
+   "key": "davis salt lake city community connector",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": true,
+   "mentions_brt": true,
+   "sha256": "e7a2707c596b689a071b3c951a12e76c638f23c8dc5450e33420cf64ca36718c",
+   "file": "UT-Davis-SLC-Community-Connector-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "FrontRunner 2X",
+   "place": "Salt Lake City, Utah",
+   "program": "Core Capacity Engineering",
+   "states": [
+    "UT"
+   ],
+   "key": "frontrunner 2x",
+   "mode_field": "Commuter Rail Capacity Improvements",
+   "mode": "Commuter Rail",
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "a4ac45a6703232598f8df2d7a7cb4a255ff26ed7e4109b9122e72c661cb5922d",
+   "file": "UT-FrontRunner-2X -Engineering-Profile-08-12-2026.pdf"
+  },
+  {
+   "title": "Richmond Highway Bus Rapid Transit Project",
+   "place": "Fairfax, Virginia",
+   "program": "New Starts Engineering",
+   "states": [
+    "VA"
+   ],
+   "key": "richmond highway brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "9b624f6903219220f9d758e7ac9b8140de884d3f97534fecbb487b24c3ec430e",
+   "file": "VA-Fairfax-Richmond-Highwy-BRT-Eng-Profile-AR26-11-19-25.pdf"
+  },
+  {
+   "title": "Division Street Bus Rapid Transit",
+   "place": "Spokane, Washington",
+   "program": "Small Starts Project Development",
+   "states": [
+    "WA"
+   ],
+   "key": "division street brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "f182d03ecd0496f06a1ebc0fae57fc00850554a6e595f31aa8dc5bb2b4f28004",
+   "file": "WA-Division-Street-BRT-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "Swift Gold Line Bus Rapid Transit",
+   "place": "Everett, Washington",
+   "program": "Small Starts Project Development",
+   "states": [
+    "WA"
+   ],
+   "key": "swift gold line brt",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "833ab50b35c0956bf59235c7c1d32987cc1a0f87f9ad7daef861414c4527e292",
+   "file": "WA-Everett-Swift-Gold-Line-Profile-08-28-2025_0.pdf"
+  },
+  {
+   "title": "RapidRide K Line Bus Rapid Transit",
+   "place": "King County, Washington",
+   "program": "Small Starts Project Development",
+   "states": [
+    "WA"
+   ],
+   "key": "rapidride k line brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "8c728cbd43f681d4464dd932d26f2ee2bf3b6e7d35b3d2e4d847d0a58107d492",
+   "file": "WA-King-County-RapidRide-K-Line-Profile-AR27-04-07-26.pdf"
+  },
+  {
+   "title": "Interstate Bridge Replacement Program",
+   "place": "Portland, Oregon and Vancouver, Washington",
+   "program": "New Starts Project Development",
+   "states": [
+    "OR",
+    "WA"
+   ],
+   "key": "interstate bridge replacement",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": true,
+   "sha256": "8fb48716c5c402c931d95aa62bbfce64850938a05e2f400118f366b9a2f34768",
+   "file": "WA-OR-Interstate-Bridge-Replacement-PD-PROFILE_0.pdf"
+  },
+  {
+   "title": "Tacoma Dome Link Extension",
+   "place": "Tacoma, Washington",
+   "program": "New Starts Project Development",
+   "states": [
+    "WA"
+   ],
+   "key": "tacoma dome link extension",
+   "mode_field": null,
+   "mode": null,
+   "mentions_rail": true,
+   "mentions_brt": false,
+   "sha256": "68a25cd5a0036f85c8023c4d59e60ad7e5435d58ddf9c5d4f7785e135a6b6561",
+   "file": "WA-Tacoma-Dome-Link-Extension-PD-PROFILE-09-17-26.pdf"
+  },
+  {
+   "title": "Madison North-South Bus Rapid Transit Project",
+   "place": "Madison, Wisconsin",
+   "program": "Small Starts Project Development",
+   "states": [
+    "WI"
+   ],
+   "key": "madison north south brt",
+   "mode_field": "Bus Rapid Transit",
+   "mode": "BRT",
+   "mentions_rail": false,
+   "mentions_brt": true,
+   "sha256": "71246ab626dbc6879616ae39711d919421c3eef3c8ed57cefffd17b7e98789ba",
+   "file": "WI-Madison-North-South-BRT-Project-Profile-FY25_0.pdf"
+  }
+ ]
+}
