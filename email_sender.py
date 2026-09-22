@@ -145,12 +145,21 @@ def send_confirmation(conn, contact):
 
 
 def send_test(conn, to_email):
-    """A one-off check that SES, DKIM and the headers are working."""
+    """A one-off check that SES, DKIM and the headers are working. When the address is on the list the
+    message carries that contact's real unsubscribe headers, so the test shows exactly what a
+    subscriber sees - including the unsubscribe control mail clients render from them."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT unsub_token, name FROM contacts WHERE email=%s", (to_email,))
+        row = cur.fetchone()
+    unsub = unsub_url(row[0]) if row and row[0] else None
     text = ("This is a Transit411 test message.\n\nIf you're reading it, SES sending, DKIM signing and "
             "the unsubscribe headers are all working.\n")
     html = ("<p>This is a <strong>Transit411</strong> test message.</p><p>If you're reading it, SES sending, "
             "DKIM signing and the unsubscribe headers are all working.</p>")
-    mid = send(to_email, "Transit411 test message", text, html)
+    if unsub:
+        text += "\nUnsubscribe: " + unsub + "\n"
+        html += '<p style="font-size:12px;color:#6A6458"><a href="' + unsub + '">Unsubscribe</a></p>'
+    mid = send(to_email, "Transit411 test message", text, html, unsub, row[1] if row else None)
     log_event(conn, to_email, "test", message_id=mid)
     return mid
 
