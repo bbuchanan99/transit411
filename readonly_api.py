@@ -41,9 +41,15 @@ ALLOW = {
     ("GET", "/api/cig/history"),
     ("GET", "/api/cig/changes"),
     ("GET", "/api/cig/profile"),   # FTA's public project profile PDFs, only those in the committed lookup
+    ("GET", "/api/agencies"),      # the agency reference table (names, NTD ids, links) the site builds from
     ("POST", "/api/ask"),
     ("POST", "/api/cig/ask"),
 }
+
+# Read-only paths with one path segment: GET /api/posts/<slug> (an article page's post). The slug is
+# restricted so nothing else under /api/posts can be reached.
+import re  # noqa: E402
+ALLOW_PATTERNS = [("GET", re.compile(r"^/api/posts/[a-z0-9][a-z0-9-]{0,120}$"))]
 
 app = FastAPI(title="Transit411 read-only public API")
 # Only the Transit411 site (Pages preview + the domains) may call from a browser.
@@ -102,7 +108,8 @@ def _check_ask(request, body):
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def proxy(path: str, request: Request):
     full = "/" + path
-    if (request.method, full) not in ALLOW:
+    if (request.method, full) not in ALLOW and not any(
+            m == request.method and p.match(full) for m, p in ALLOW_PATTERNS):
         raise HTTPException(status_code=404, detail="Not found")
     body = await request.body()
     if len(body) > MAX_BODY:

@@ -430,6 +430,15 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
     return {"posts": out}
 
 
+@app.get("/api/posts/{slug}")
+def post_by_slug(slug: str):
+    """One published post by its slug - the article page at /article/<slug>."""
+    found = posts(slug=slug)["posts"]
+    if not found:
+        raise HTTPException(404, "No published post with that slug.")
+    return found[0]
+
+
 @app.post("/api/posts/{post_id}/unpublish")
 def unpublish(post_id: int):
     """Take a post off the site and put its item back in "Ready to publish", so it can be republished."""
@@ -718,8 +727,10 @@ class SourceIn(BaseModel):
 
 
 def _source_fields(s: SourceIn, is_search: bool, current=None):
-    """Validated column values for a create/update. Keyword searches build their name and URL from the
-    query and window; feeds need an http(s) URL."""
+    """Validated column values for a create/update. Query-based rows (keyword searches and the
+    per-agency daily searches) build their URL from the query and window - a keyword search is also
+    named after its query, while an agency search keeps its "Agency: <name>" label; feeds need an
+    http(s) URL."""
     import re
     import collection
     from urllib.parse import urlparse
@@ -749,8 +760,11 @@ def _source_fields(s: SourceIn, is_search: bool, current=None):
         if not 1 <= int(days) <= 365:
             raise HTTPException(400, "Look back between 1 and 365 days.")
         name, url = collection.search_source(query, days)
+        if cur.get("type") == "Agency":  # keep the agency's label and its own query text
+            name, url = cur["name"], collection.google_news_url(query if "when:" in query else f"{query} when:{days}d")
         out.update(name=name, url=url, query=re.sub(r"\s+when:\d+d\s*$", "", query), search_days=int(days),
-                   type="Search", method=cur.get("method") if cur.get("method") in ("RSS", "Retired") else "RSS")
+                   type=cur.get("type") or "Search",
+                   method=cur.get("method") if cur.get("method") in ("RSS", "Retired") else "RSS")
         if s.method in ("RSS", "Retired"):
             out["method"] = s.method
     else:
@@ -776,6 +790,19 @@ def _source_row(cur, source_id):
 
 def _iso(v):
     return v.isoformat() if hasattr(v, "isoformat") else v
+
+
+@app.get("/api/agencies")
+def list_agencies():
+    """The agency reference table (reference/agencies.json, synced to Postgres). Read-only; the site
+    uses it at build time for each article's Explore module."""
+    import agencies as agmod
+    try:
+        with _db() as c:
+            rows = agmod.all_agencies(c)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"agencies": rows}
 
 
 @app.get("/api/sources")
@@ -854,7 +881,7 @@ def update_source(source_id: int, s: SourceIn):
     try:
         with _db() as c, c.cursor() as cur:
             cur_row = _source_row(cur, source_id)
-            f = _source_fields(s, cur_row["type"] == "Search", cur_row)
+            f = _source_fields(s, cur_row["type"] in ("Search", "Agency"), cur_row)
             if f["name"].lower() != cur_row["name"].lower():
                 cur.execute("SELECT 1 FROM sources WHERE lower(name)=lower(%s) AND id<>%s", (f["name"], source_id))
                 if cur.fetchone():
@@ -1745,8 +1772,10 @@ function sHealth(x){
 }
 function sRow(x){
   const url=safeUrl(x.url);
-  const title=x.type==="Search"
-    ?'<div style="font-weight:700">'+esc(x.query||x.name)+'</div><div style="color:var(--muted);font-size:11px">last '+(x.search_days||30)+' days · '+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Google News</a>':'')+'</div>'
+  const title=(x.type==="Search"||x.type==="Agency")
+    ?'<div style="font-weight:700">'+esc(x.type==="Agency"?x.name.replace(/^Agency: /,""):x.query||x.name)+'</div>'
+      +(x.type==="Agency"?'<div style="color:var(--muted);font-size:11px">'+esc(x.query||"")+'</div>':'')
+      +'<div style="color:var(--muted);font-size:11px">last '+(x.search_days||30)+' days · '+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Google News</a>':'')+'</div>'
     :'<div style="font-weight:700">'+esc(x.name)+'</div><div style="font-size:11px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" title="'+esc(x.url)+'">'+esc(x.url)+'</a>':esc(x.url))+'</div>';
   const note=x.notes?'<div style="color:var(--muted);font-size:11px;white-space:normal;max-width:340px">'+esc(x.notes)+'</div>':"";
   const tag=x.origin==="user"?' <span class="t411-badge" title="Added in this tab">added here</span>':(x.edited_at?' <span class="t411-badge" title="Changed in this tab; collect --seed leaves it as is">edited</span>':'');
@@ -1775,7 +1804,9 @@ async function loadSources(){
     document.getElementById("sRun").innerHTML=(lr&&lr.at?"Last run "+esc(new Date(lr.at).toLocaleString())+(lr.skipped?" - skipped (Auto-collect off)"
         :(lr.error?" - failed: "+esc(lr.error):" - "+(lr.added||0)+" items queued from "+((lr.sources||0)-((lr.failed||[]).length))+" of "+(lr.sources||0)+" sources"+((lr.failed||[]).length?"; failed: "+esc(lr.failed.join(", ")):""))):"No run recorded yet")
       +(sc&&sc.next_run?" · next run "+esc(new Date(sc.next_run).toLocaleString()):"");
-    out.innerHTML=sTable("Feeds",S.filter(x=>x.type!=="Search"))+sTable("Google News keyword searches",S.filter(x=>x.type==="Search"));
+    out.innerHTML=sTable("Feeds",S.filter(x=>x.type!=="Search"&&x.type!=="Agency"))
+      +sTable("Google News keyword searches",S.filter(x=>x.type==="Search"))
+      +(S.some(x=>x.type==="Agency")?sTable("Agency searches (one per agency in reference/agencies.json)",S.filter(x=>x.type==="Agency")):"");
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load sources.</div></div>';}
 }
 function sOpts(list,cur){return list.map(v=>'<option'+(v===cur?" selected":"")+'>'+esc(v)+'</option>').join("");}
@@ -1830,7 +1861,7 @@ async function sTest(id){
 document.getElementById("p-sources").addEventListener("click",async e=>{
   const t=e.target.closest("[data-test]");if(t){sTest(+t.dataset.test);return;}
   const ed=e.target.closest("[data-edit]");
-  if(ed){const x=sData.sources.find(s=>s.id===+ed.dataset.edit);if(x)sShowForm(x.type==="Search"?"search":"feed",x);return;}
+  if(ed){const x=sData.sources.find(s=>s.id===+ed.dataset.edit);if(x)sShowForm(x.type==="Search"||x.type==="Agency"?"search":"feed",x);return;}
   const del=e.target.closest("[data-del]");
   if(del){const x=sData.sources.find(s=>s.id===+del.dataset.del);if(!x)return;
     if(!confirm("Delete "+(x.query||x.name)+"? The next run stops fetching it. Items it already collected stay."))return;
