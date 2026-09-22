@@ -268,7 +268,11 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 
 **Pending / next:**
 - Refresh the profile PDFs as projects enter Engineering, since their profiles then state a mode (fewer Unspecified).
-- Newsletter capture wired to an ESP (Beehiiv). (Article pages and the static pages are done.)
+- **Owned email programme** (contacts live in our Postgres; Amazon SES is only the sending pipe). Phase 1 is done: the `contacts` + `email_suppressions` tables, the Contacts tab, and the public `POST /api/subscribe` (pending contacts only, no sending).
+  - **Phase 2 — SES sending, double opt-in, feedback loop:** `email_sender.py` (boto3, throttled batches), a confirmation email that flips a contact to `subscribed`, a self-hosted tokenised `/unsubscribe` plus `List-Unsubscribe` and `List-Unsubscribe-Post` one-click headers (RFC 8058), and `POST /api/email/sns` for SES→SNS bounces and complaints (handshake confirmed, message verified) feeding the suppression list. Warm the sending volume up gradually.
+  - **Phase 3 — Newsletter module:** a Command Center tab that drafts an issue from `content_posts` for a period (grouped by pillar), preview, then a throttled send to `subscribed` contacts (optionally by tag), logged in an `issues` table.
+  - **AWS/DNS setup (Brian's side), as of 2026-09-22:** ✅ SES account + `mail.transit411.net` identity verified; ✅ custom MAIL FROM `bounce.mail.transit411.net` (MX to `feedback-smtp.us-east-1.amazonses.com`, SPF `v=spf1 include:amazonses.com ~all`) — records live, SES status pending its recheck; ⬜ DMARC TXT at `_dmarc` (org level, with `rua=`); ⬜ SES production access (out of the sandbox); ⬜ IAM sending user + `.env` keys; ⬜ SNS topic for bounces/complaints.
+  - **Region:** us-east-1. **Root domain mail stays on GoDaddy** (`smtp.secureserver.net`) — never touch the root MX.
 - Facet filtering on the section pages, so an article's agency/program chips can link to a filtered view (they're labels today).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
 
