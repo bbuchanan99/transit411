@@ -39,6 +39,7 @@ ALLOW = {
     ("GET", "/api/posts"),
     ("GET", "/api/cig"),
     ("GET", "/api/cig/history"),
+    ("GET", "/api/cig/changes"),
     ("POST", "/api/ask"),
     ("POST", "/api/cig/ask"),
 }

@@ -4,9 +4,10 @@
 // newer dashboard has loaded. The table, milestones and snapshot history are the shared component
 // bundle (static/t411.js, copied to /vendor at build time), the same code the Command Center runs.
 import Base from "../layouts/Base.astro";
-import { API_BASE, getCig } from "../lib/content.js";
+import { API_BASE, getCig, getCigChanges } from "../lib/content.js";
 
 const cig = await getCig();
+const changes = await getCigChanges();
 const s = cig?.summary;
 const snapLabel = s?.snapshot
   ? new Date(s.snapshot + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
@@ -19,6 +20,7 @@ const stats = [
 ];
 // Embedded as JSON; "<" escaped so no value can close the script tag.
 const embedded = JSON.stringify(cig ?? null).replace(/</g, "\\u003c");
+const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c");
 ---
 <Base title="CIG Pipeline — Transit411">
   <Fragment slot="head">
@@ -49,6 +51,8 @@ const embedded = JSON.stringify(cig ?? null).replace(/</g, "\\u003c");
   </p>
 
   <div class="wrap cig-page">
+    <div id="cig-changes"></div>
+    <h2 class="section-h cig-h">All projects</h2>
     <div class="cig-filters" role="group" aria-label="Filter by phase">
       <button type="button" class="cig-chip on" data-phase="">All phases</button>
       <button type="button" class="cig-chip" data-phase="PD">Project Development</button>
@@ -63,6 +67,7 @@ const embedded = JSON.stringify(cig ?? null).replace(/</g, "\\u003c");
     </p>
   </div>
   <script type="application/json" id="cig-data" set:html={embedded}></script>
+  <script type="application/json" id="cig-changes-data" set:html={embeddedChanges}></script>
 </Base>
 
 <script>
@@ -102,14 +107,50 @@ const embedded = JSON.stringify(cig ?? null).replace(/</g, "\\u003c");
     document.getElementById("cig-asof").textContent = `From the FTA Capital Investment Grants dashboard of ${d}.`;
   }
 
-  document.querySelectorAll(".cig-chip").forEach((b) =>
-    b.addEventListener("click", () => {
-      phase = b.dataset.phase;
-      document.querySelectorAll(".cig-chip").forEach((x) => x.classList.toggle("on", x === b));
-      render();
-    }));
+  function setPhase(p) {
+    phase = p;
+    document.querySelectorAll(".cig-chip").forEach((x) => x.classList.toggle("on", x.dataset.phase === p));
+    render();
+  }
+  document.querySelectorAll(".cig-chip").forEach((b) => b.addEventListener("click", () => setPhase(b.dataset.phase)));
+
+  // ---- What changed (shared component) ----
+  const chEl = document.getElementById("cig-changes");
+  let changes = JSON.parse(document.getElementById("cig-changes-data").textContent || "null");
+
+  function openProject(name, sponsor) {
+    if (window.T411.openCigProject(el, name, sponsor)) return;
+    if (phase) { setPhase(""); if (window.T411.openCigProject(el, name, sponsor)) return; }
+    const note = chEl.querySelector(".cig-ch-note");
+    if (note) note.textContent = `${name} is no longer in the pipeline, so it isn't in the table below.`;
+  }
+
+  function renderChanges() {
+    const T411 = window.T411;
+    if (!T411 || !changes) { chEl.innerHTML = ""; return; }
+    const older = (changes.snapshots || []).filter((s) => changes.to && s < changes.to);
+    const fmt = (s) => new Date(s + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const sel = older.length > 1
+      ? '<label class="cig-compare">Compare with <select id="cig-since">'
+        + older.map((s, i) => `<option value="${T411.esc(s)}"${s === changes.from ? " selected" : ""}>${T411.esc(fmt(s))}${i === 0 ? " (previous)" : ""}</option>`).join("")
+        + "</select></label>"
+      : "";
+    T411.renderCigChanges(chEl, changes, { headerExtra: sel, onProject: openProject });
+    chEl.insertAdjacentHTML("beforeend", '<p class="cig-ch-note" aria-live="polite"></p>');
+    const s = document.getElementById("cig-since");
+    if (s) s.onchange = () => loadChanges(s.value);
+  }
+
+  function loadChanges(since) {
+    return fetch(`${api}/api/cig/changes${since ? "?since=" + encodeURIComponent(since) : ""}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d && Array.isArray(d.snapshots)) { changes = d; renderChanges(); } })
+      .catch(() => {});
+  }
 
   render();
+  renderChanges();
+  if (!changes) loadChanges();  // not in this build (e.g. API was down): fetch it live
 
   // Pick up a newer dashboard than the one this page was built with.
   fetch(`${api}/api/cig`)
@@ -120,6 +161,7 @@ const embedded = JSON.stringify(cig ?? null).replace(/</g, "\\u003c");
       data = live;
       fmtStats(live.summary);
       render();
+      loadChanges();  // a newer dashboard means newer changes too
     })
     .catch(() => {});
 </script>

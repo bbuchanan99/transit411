@@ -89,6 +89,11 @@ export function getCig() {
   return cigPromise;
 }
 
+// What changed between the latest dashboard and the previous one (/api/cig/changes); null if unavailable.
+export function getCigChanges() {
+  return getJson("/api/cig/changes").then((d) => (d && Array.isArray(d.snapshots) ? d : null));
+}
+
 // Just the summary, for the homepage stats; null if unavailable.
 export async function getCigSummary() {
   return (await getCig())?.summary ?? null;

@@ -80,10 +80,10 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - Lives at **`transit411.pages.dev`** (domain stays dark until launch).
 
 ### 3.8 Read-only public API + Cloudflare Tunnel
-- **`readonly_api.py`** — the ONLY service the tunnel exposes. It **allowlists** exactly the safe endpoints (`GET /api/posts`, `GET /api/cig`, `GET /api/cig/history`, `POST /api/ask`, `POST /api/cig/ask`) and forwards them to the Command Center; **everything else returns 404.** CORS restricts browser calls to the Transit411 site (`transit411.pages.dev`, `transit411.net`, `transit411.com` and their subdomains).
+- **`readonly_api.py`** — the ONLY service the tunnel exposes. It **allowlists** exactly the safe endpoints (`GET /api/posts`, `GET /api/cig`, `GET /api/cig/history`, `GET /api/cig/changes`, `POST /api/ask`, `POST /api/cig/ask`) and forwards them to the Command Center; **everything else returns 404.** CORS restricts browser calls to the Transit411 site (`transit411.pages.dev`, `transit411.net`, `transit411.com` and their subdomains).
   - The two ask endpoints each cost an Anthropic call, so they are **rate-limited**: `ASK_PER_IP_HOUR` per visitor (default 20, by Cloudflare's visitor-IP header), `ASK_PER_DAY` in total (default 200), questions up to `ASK_MAX_CHARS` (500), requests up to 16 KB. `PUBLIC_ASK_ENABLED=false` turns them off. Counts are in memory and reset when the container restarts.
 - **`cloudflared`** — the tunnel container. Dials out to Cloudflare (no open router ports). Public hostname **`api.transit411.net`** → `http://readonly-api:8000`. It sits on its own `public` Docker network with `readonly-api` only, so a misconfigured hostname in the Cloudflare dashboard can't reach the Command Center, the database or the NTD API. The token is passed as the `TUNNEL_TOKEN` environment variable (not on the command line).
-- **Data path:** internet → Cloudflare → tunnel → `readonly-api` (5 safe endpoints) → Command Center. No path from the public to any write/admin action.
+- **Data path:** internet → Cloudflare → tunnel → `readonly-api` (6 safe endpoints) → Command Center. No path from the public to any write/admin action.
 
 ---
 
@@ -226,7 +226,8 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 
 **Pending / next:**
 - **Publish all** button on the Command Center's Publish tab: publish every item in "Ready to publish" in one go (with a confirm showing the count), then trigger a single site rebuild rather than one per item.
-- Build the CIG pipeline page and Ask NTD/CIG pages on the site using the shared bundle.
+- Build the Ask NTD / Ask CIG pages on the site using the shared bundle (the public **CIG Pipeline** page at `/cig` is live, with What changed, phase filter, table, milestones and history).
+- Fix CIG project modes before adding a **Mode filter** to `/cig`: the dashboard has no mode column and `cig.py` guesses from project names (7 projects get none, 5 only "Rail"); add per-project corrections and re-apply to stored snapshots.
 - Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
 
@@ -245,7 +246,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 
 ## 12. Security notes
 
-- The **read-only API allowlist** is the public boundary — only 5 GET/ask endpoints are reachable; all writes are 404. Keep it tight if adding public endpoints.
+- The **read-only API allowlist** is the public boundary — only 6 read/ask endpoints are reachable; all writes are 404. Keep it tight if adding public endpoints.
 - The **public ask endpoints spend money** (an Anthropic call each): keep the per-visitor and daily limits on, and set `PUBLIC_ASK_ENABLED=false` if usage looks wrong. Also set a spending limit in the Anthropic Console.
 - The **tunnel is network-isolated**: `cloudflared` can reach only `readonly-api`, even if a dashboard hostname is misconfigured.
 - **Secrets live only in `.env`** on the NAS (git-ignored). Never commit keys or tokens, and don't paste them into chat.
