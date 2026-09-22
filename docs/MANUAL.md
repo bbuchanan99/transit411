@@ -225,7 +225,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - Read-only public API + Cloudflare Tunnel, secured by allowlist; `api.transit411.net` live. ✅
 
 **Pending / next:**
-- Add the Cloudflare Pages deploy hook to `.env` (`CF_PAGES_DEPLOY_HOOK`) so publishing rebuilds the site automatically (the wiring is in place).
+- **Publish all** button on the Command Center's Publish tab: publish every item in "Ready to publish" in one go (with a confirm showing the count), then trigger a single site rebuild rather than one per item.
 - Build the CIG pipeline page and Ask NTD/CIG pages on the site using the shared bundle.
 - Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
