@@ -81,9 +81,15 @@ export async function getPosts(pillar) {
   return pillar ? posts.filter((p) => p.pillar === pillar) : posts;
 }
 
-// Latest CIG pipeline summary for the homepage stats; null if unavailable.
+// Latest CIG pipeline snapshot ({summary, projects}) from /api/cig; null if unavailable.
 let cigPromise;
-export function getCigSummary() {
-  cigPromise ??= getJson("/api/cig").then((d) => (d && d.summary && d.summary.projects ? d.summary : null));
+export function getCig() {
+  cigPromise ??= getJson("/api/cig").then((d) =>
+    d && d.summary && d.summary.projects && Array.isArray(d.projects) ? d : null);
   return cigPromise;
+}
+
+// Just the summary, for the homepage stats; null if unavailable.
+export async function getCigSummary() {
+  return (await getCig())?.summary ?? null;
 }

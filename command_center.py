@@ -554,6 +554,7 @@ async def _load_cig_pdf(body, name, what, source, label):
         except Exception:
             pass
         raise HTTPException(422, msg)
+    _request_site_rebuild("CIG dashboard loaded")  # the public site's CIG figures and page
     return {"projects": n, "snapshot": snap,
             "note": None if snap else f"No date in the {what}, so today's date was used as the snapshot date."}
 

@@ -1,4 +1,6 @@
 node_modules/
 dist/
 .astro/
+# copied from ../static by scripts/copy-bundle.mjs at build time
+public/vendor/
 .DS_Store

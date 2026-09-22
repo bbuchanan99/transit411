@@ -1,0 +1,125 @@
+---
+// Public CIG Pipeline page. The pipeline as of the last build is embedded in the page (instant, and
+// still works if the API is briefly down); the browser then checks the live API and re-renders if a
+// newer dashboard has loaded. The table, milestones and snapshot history are the shared component
+// bundle (static/t411.js, copied to /vendor at build time), the same code the Command Center runs.
+import Base from "../layouts/Base.astro";
+import { API_BASE, getCig } from "../lib/content.js";
+
+const cig = await getCig();
+const s = cig?.summary;
+const snapLabel = s?.snapshot
+  ? new Date(s.snapshot + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+  : null;
+const stats = [
+  { l: "Projects", v: s ? String(s.projects) : "—", s: "Seeking CIG funding" },
+  { l: "CIG requested", v: s ? `$${(s.total_cig_musd / 1000).toFixed(1)}B` : "—", s: "Across the pipeline" },
+  { l: "Project Development", v: s ? String(s.by_phase?.PD ?? 0) : "—", s: "Phase: PD" },
+  { l: "Engineering", v: s ? String(s.by_phase?.Eng ?? 0) : "—", s: "Phase: Eng" },
+];
+// Embedded as JSON; "<" escaped so no value can close the script tag.
+const embedded = JSON.stringify(cig ?? null).replace(/</g, "\\u003c");
+---
+<Base title="CIG Pipeline — Transit411">
+  <Fragment slot="head">
+    <link rel="stylesheet" href="/vendor/t411.css" />
+    <script is:inline src="/vendor/t411.js"></script>
+  </Fragment>
+
+  <div class="wrap section-page">
+    <h1 class="section-title disp">CIG Pipeline</h1>
+    <p class="section-blurb">
+      Every project in the FTA's Capital Investment Grants pipeline &mdash; New Starts, Small Starts and Core
+      Capacity &mdash; with phase, cost, CIG funding sought, rating and expected grant timing. Click a project for
+      its milestone dates and month-by-month history.
+    </p>
+  </div>
+
+  <section class="stats wrap" style="padding-left:0;padding-right:0">
+    {stats.map((st) => (
+      <div class="stat">
+        <div class="l">{st.l}</div>
+        <div class="v disp" data-stat={st.l}>{st.v}</div>
+        <div class="s">{st.s}</div>
+      </div>
+    ))}
+  </section>
+  <p class="wrap stats-note" id="cig-asof">
+    {snapLabel ? `From the FTA Capital Investment Grants dashboard of ${snapLabel}.` : "The pipeline couldn't be loaded when this page was built."}
+  </p>
+
+  <div class="wrap cig-page">
+    <div class="cig-filters" role="group" aria-label="Filter by phase">
+      <button type="button" class="cig-chip on" data-phase="">All phases</button>
+      <button type="button" class="cig-chip" data-phase="PD">Project Development</button>
+      <button type="button" class="cig-chip" data-phase="Eng">Engineering</button>
+    </div>
+    <div id="cig-table" data-api={API_BASE}>
+      <noscript><div class="empty"><strong>This table needs JavaScript.</strong></div></noscript>
+    </div>
+    <p class="cig-source">
+      Source: Federal Transit Administration, <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">Capital Investment Grants dashboard</a>.
+      Dollar figures in millions. Ratings: H High, MH Medium-High, M Medium, ML Medium-Low, L Low.
+    </p>
+  </div>
+  <script type="application/json" id="cig-data" set:html={embedded}></script>
+</Base>
+
+<script>
+  // Runs after /vendor/t411.js (a classic script) has defined window.T411.
+  const el = document.getElementById("cig-table");
+  const api = el.dataset.api;
+  let data = JSON.parse(document.getElementById("cig-data").textContent || "null");
+  let phase = "";
+
+  // Snapshot history comes from the public API, not a path on this site.
+  const fetchHistory = (p) =>
+    fetch(`${api}/api/cig/history?name=${encodeURIComponent(p.project_name)}&sponsor=${encodeURIComponent(p.sponsor || "")}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d) => d.history || []);
+
+  function render() {
+    const T411 = window.T411;
+    if (!T411) {
+      el.innerHTML = '<div class="empty"><strong>The pipeline table couldn\'t load.</strong><span>Please refresh the page.</span></div>';
+      return;
+    }
+    const all = (data && data.projects) || [];
+    const rows = phase ? all.filter((p) => p.phase === phase) : all;
+    T411.renderCigTable(el, rows, {
+      fetchHistory,
+      emptyText: all.length ? "No projects in this phase." : "The pipeline isn't available right now. Please check back soon.",
+    });
+  }
+
+  function fmtStats(s) {
+    const set = (k, v) => { const n = document.querySelector(`[data-stat="${k}"]`); if (n) n.textContent = v; };
+    set("Projects", String(s.projects));
+    set("CIG requested", `$${(s.total_cig_musd / 1000).toFixed(1)}B`);
+    set("Project Development", String(s.by_phase?.PD ?? 0));
+    set("Engineering", String(s.by_phase?.Eng ?? 0));
+    const d = new Date(s.snapshot + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    document.getElementById("cig-asof").textContent = `From the FTA Capital Investment Grants dashboard of ${d}.`;
+  }
+
+  document.querySelectorAll(".cig-chip").forEach((b) =>
+    b.addEventListener("click", () => {
+      phase = b.dataset.phase;
+      document.querySelectorAll(".cig-chip").forEach((x) => x.classList.toggle("on", x === b));
+      render();
+    }));
+
+  render();
+
+  // Pick up a newer dashboard than the one this page was built with.
+  fetch(`${api}/api/cig`)
+    .then((r) => (r.ok ? r.json() : null))
+    .then((live) => {
+      if (!live?.summary?.projects || !Array.isArray(live.projects)) return;
+      if (data?.summary?.snapshot === live.summary.snapshot && data.projects.length === live.projects.length) return;
+      data = live;
+      fmtStats(live.summary);
+      render();
+    })
+    .catch(() => {});
+</script>

@@ -1,17 +1,24 @@
 ---
 import Base from "../layouts/Base.astro";
+// `live` tools link to their page; the rest show "Coming soon" until built.
 const tools = [
-  { title: "CIG Pipeline", blurb: "Every FTA Capital Investment Grants project seeking funding — phase, rating, cost, and CIG sought — with month-by-month history.", href: "/cig" },
-  { title: "Ask NTD", blurb: "Ask the National Transit Database in plain English. Ridership, cost per rider, and financials across every U.S. agency.", href: "/ask-ntd" },
-  { title: "Ask CIG", blurb: "Ask the Capital Investment Grants pipeline in plain English — who's seeking what, where, and at what stage.", href: "/ask-cig" },
+  { title: "CIG Pipeline", blurb: "Every FTA Capital Investment Grants project seeking funding — phase, rating, cost, and CIG sought — with month-by-month history.", href: "/cig", live: true },
+  { title: "Ask NTD", blurb: "Ask the National Transit Database in plain English. Ridership, cost per rider, and financials across every U.S. agency.", href: "/ask-ntd", live: false },
+  { title: "Ask CIG", blurb: "Ask the Capital Investment Grants pipeline in plain English — who's seeking what, where, and at what stage.", href: "/ask-cig", live: false },
 ];
 ---
 <Base title="Data — Transit411">
   <div class="wrap section-page">
     <h1 class="section-title disp">Data</h1>
-    <p class="section-blurb">Transit411's data tools — pipeline tracking and plain-English search over the numbers behind American transit. These connect to the live data API; wiring in progress.</p>
+    <p class="section-blurb">Transit411's data tools — pipeline tracking and plain-English search over the numbers behind American transit.</p>
     <div class="data-hub">
-      {tools.map((t) => (
+      {tools.map((t) => t.live ? (
+        <a class="data-card" href={t.href}>
+          <h3 class="disp">{t.title}</h3>
+          <p>{t.blurb}</p>
+          <span class="cta">Open &rarr;</span>
+        </a>
+      ) : (
         <div class="data-card">
           <h3 class="disp">{t.title}</h3>
           <p>{t.blurb}</p>
