@@ -44,10 +44,10 @@ ALLOW = {
 }
 
 app = FastAPI(title="Transit411 read-only public API")
-# Only the Transit411 site (Pages preview + the domain) may call from a browser.
+# Only the Transit411 site (Pages preview + the domains) may call from a browser.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https://([a-z0-9-]+\.)?transit411\.(pages\.dev|com)",
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?transit411\.(pages\.dev|net|com)",
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
