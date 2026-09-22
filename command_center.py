@@ -847,15 +847,233 @@ def subscribe(s: Subscribe):
     deliberately the same whether or not the address is already on the list or suppressed, so this
     can't be used to find out who is."""
     import contacts as cmod
+    import email_sender as sender
     try:
         with _db() as c:
             cid, what = cmod.upsert(c, s.email, (s.name or "")[:120], (s.source or "site")[:60], [], "pending")
+            if what == "added" and sender.configured():
+                # Double opt-in: send the confirmation now. A send failure is logged, not surfaced -
+                # the contact is saved either way and the email can be re-sent from the Contacts tab.
+                try:
+                    with c.cursor() as cur:
+                        cur.execute("SELECT id, email, name, confirm_token, unsub_token FROM contacts WHERE id=%s", (cid,))
+                        row = cur.fetchone()
+                    sender.send_confirmation(c, dict(zip(("id", "email", "name", "confirm_token", "unsub_token"), row)))
+                except Exception as e:
+                    sender.log_event(c, cmod.normalize(s.email), "error", detail=f"confirmation: {type(e).__name__}: {e}"[:300])
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     if what == "invalid":
         raise HTTPException(400, "Please enter a valid email address.")
     return {"ok": True, "status": "pending",
-            "message": "Thanks — you're on the list. Confirmation email coming soon."}
+            "message": "Thanks — check your inbox for a confirmation link."}
+
+
+# ---- Email: double opt-in, unsubscribe and the SES feedback loop (email_sender.py) ---------------
+# /confirm, /unsubscribe and /api/email/sns are the only email paths the tunnel exposes.
+PUBLIC_SITE = os.environ.get("PUBLIC_SITE_URL", "https://transit411.net").rstrip("/")
+
+
+def esc_html(s):
+    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _page(title, body, ok=True):
+    """A small self-contained page for links people click from an email."""
+    from fastapi.responses import HTMLResponse
+    accent = "#1F6B4A" if ok else "#C0341F"
+    return HTMLResponse(
+        "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>" + esc_html(title) + " - Transit411</title></head>"
+        "<body style='margin:0;background:#F2EEE4;color:#17140F;font-family:Georgia,serif'>"
+        "<div style='max-width:560px;margin:8vh auto;background:#fff;border:1px solid #D8D2C4;padding:32px'>"
+        "<div style='font-family:Arial,sans-serif;font-weight:800;font-size:22px;letter-spacing:-.5px'>"
+        "TRANSIT<span style='color:#C0341F'>411</span></div>"
+        "<h1 style='font-family:Arial,sans-serif;font-size:21px;margin:18px 0 10px;color:" + accent + "'>"
+        + esc_html(title) + "</h1>"
+        "<div style='font-size:16px;line-height:1.6'>" + body + "</div>"
+        "<p style='margin-top:26px'><a href='" + PUBLIC_SITE + "' style='color:#C0341F;font-family:Arial,sans-serif;"
+        "font-weight:700'>Go to Transit411</a></p></div></body></html>")
+
+
+@app.get("/confirm")
+def confirm(t: str = ""):
+    """Double opt-in: the link in the confirmation email. Only this makes someone subscribed."""
+    import contacts as cmod
+    if not t or len(t) > 100:
+        return _page("That link doesn't look right", "<p>Please use the button in the confirmation email.</p>", False)
+    try:
+        with _db() as c, c.cursor() as cur:
+            cmod.create_tables(c)
+            cur.execute("SELECT id, email, status FROM contacts WHERE confirm_token=%s", (t,))
+            row = cur.fetchone()
+            if not row:
+                return _page("That link has expired", "<p>We couldn't match that confirmation link. Sign up again "
+                             "on the site and we'll send a fresh one.</p>", False)
+            cid, email, status = row
+            if cmod.is_suppressed(c, email):
+                return _page("This address is unsubscribed", "<p>" + esc_html(email) + " asked not to receive email "
+                             "from us, so we've left it that way. Sign up again if that was a mistake.</p>", False)
+            if status != "subscribed":
+                cmod.set_status(c, cid, "subscribed", event="confirmed opt-in")
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return _page("You're subscribed", "<p>Thanks &mdash; <strong>" + esc_html(email) + "</strong> is confirmed for "
+                 "Transit411 Weekly Intelligence, every Thursday.</p><p>Every issue has a one-click unsubscribe link.</p>")
+
+
+def _unsubscribe_token(t):
+    """Mark the holder of this token unsubscribed and suppress the address. Returns the address."""
+    import contacts as cmod
+    with _db() as c, c.cursor() as cur:
+        cmod.create_tables(c)
+        cur.execute("SELECT id, email, status FROM contacts WHERE unsub_token=%s", (t,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cid, email, status = row
+        if status != "unsubscribed":
+            cmod.set_status(c, cid, "unsubscribed", event="unsubscribed via link")
+        else:
+            cmod.suppress(c, email, "unsubscribed")
+        return email
+
+
+@app.get("/unsubscribe")
+def unsubscribe(t: str = ""):
+    """One click, done - no confirmation step, no login. The address is suppressed for good."""
+    if not t or len(t) > 100:
+        return _page("That link doesn't look right", "<p>Please use the unsubscribe link in the email.</p>", False)
+    try:
+        email = _unsubscribe_token(t)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not email:
+        return _page("Already unsubscribed", "<p>We couldn't match that link, which usually means the address is "
+                     "already off the list.</p>")
+    return _page("You're unsubscribed", "<p><strong>" + esc_html(email) + "</strong> has been removed and added to "
+                 "our do-not-email list. You won't get Transit411 email again unless you sign up afresh.</p>")
+
+
+@app.post("/unsubscribe")
+async def unsubscribe_one_click(request: Request, t: str = ""):
+    """RFC 8058 one-click: the mail client POSTs here from the List-Unsubscribe-Post header."""
+    import re as _re
+    if not t:
+        body = (await request.body()).decode("utf-8", errors="replace")
+        m = _re.search(r"(?:^|&)t=([^&\s]+)", body)
+        t = m.group(1) if m else ""
+    if not t:
+        raise HTTPException(400, "Missing token.")
+    try:
+        email = _unsubscribe_token(t)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"ok": True, "unsubscribed": bool(email)}
+
+
+@app.post("/api/email/sns")
+async def email_sns(request: Request):
+    """SES bounce and complaint notifications, via SNS. Every message is verified against the SNS
+    signing certificate before it can change anything; a hard bounce or a complaint suppresses the
+    address permanently."""
+    import asyncio
+    import json
+    import email_sender as sender
+    raw = await request.body()
+    if len(raw) > 512 * 1024:
+        raise HTTPException(413, "Too large.")
+    try:
+        msg = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        raise HTTPException(400, "Expected an SNS JSON message.")
+    if not await asyncio.to_thread(sender.verify_sns, msg):
+        raise HTTPException(403, "That message didn't verify as coming from SNS.")
+
+    def work():
+        with _db() as c:
+            return sender.handle_sns(c, msg)
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't process that notification: {type(e).__name__}")
+
+
+@app.get("/api/email/status")
+def email_status():
+    """Is SES wired up, and what has it done lately (Command Center only)."""
+    import email_sender as sender
+    out = {"configured": sender.configured(), "region": sender.REGION, "from": sender.FROM,
+           "link_base": sender.LINK_BASE, "max_per_second": sender.MAX_PER_SECOND,
+           "topic_arn": sender.SNS_TOPIC_ARN or None, "events": [], "by_type": {}}
+    try:
+        with _db() as c, c.cursor() as cur:
+            sender.create_tables(c)
+            cur.execute("SELECT type, count(*) FROM email_events GROUP BY type ORDER BY 2 DESC")
+            out["by_type"] = {t: n for t, n in cur.fetchall()}
+            cur.execute("SELECT to_char(created_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), "
+                        "email, type, detail FROM email_events ORDER BY id DESC LIMIT 25")
+            out["events"] = [dict(zip(("at", "email", "type", "detail"), r)) for r in cur.fetchall()]
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return out
+
+
+@app.post("/api/contacts/{contact_id}/confirmation")
+async def send_confirmation_email(contact_id: int):
+    """Send (or re-send) the double opt-in email to one contact."""
+    import asyncio
+    import email_sender as sender
+
+    def work():
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT id, email, name, confirm_token, unsub_token, status FROM contacts WHERE id=%s",
+                        (contact_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "No such contact.")
+            contact = dict(zip(("id", "email", "name", "confirm_token", "unsub_token", "status"), row))
+            return sender.send_confirmation(c, contact), contact["email"]
+    try:
+        mid, email = await asyncio.to_thread(work)
+        return {"sent": True, "email": email, "message_id": mid}
+    except HTTPException:
+        raise
+    except sender.NotConfigured as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"SES error: {type(e).__name__}: {e}")
+
+
+class TestEmail(BaseModel):
+    email: str
+
+
+@app.post("/api/email/test")
+async def email_test(t: TestEmail):
+    """Send a one-off test message (in the SES sandbox, only to addresses verified in SES)."""
+    import asyncio
+    import contacts as cmod
+    import email_sender as sender
+    to = cmod.normalize(t.email)
+    if not to:
+        raise HTTPException(400, "That doesn't look like an email address.")
+
+    def work():
+        with _db() as c:
+            if cmod.is_suppressed(c, to):
+                raise ValueError("That address is on the do-not-email list.")
+            return sender.send_test(c, to)
+    try:
+        return {"sent": True, "email": to, "message_id": await asyncio.to_thread(work)}
+    except sender.NotConfigured as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"SES error: {type(e).__name__}: {e}")
 
 
 # ---- Sources tab: the collector's registry (sources table), editable here ------------------------
@@ -1583,8 +1801,9 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   </div>
   <div class="panel" id="p-contacts">
     <div class="askhead"><div><h2 class="disp">Contacts</h2><p class="lead">The newsletter list &mdash; ours, in Postgres. Signups from the site arrive as <b>pending</b>; only <b>subscribed</b> contacts will ever be emailed. Unsubscribed, bounced and complained addresses are suppressed and can't be re-added by an import.</p></div>
-      <div style="display:flex;gap:8px"><button class="newq" id="kAddBtn" type="button">Add contact</button><button class="newq" id="kImportBtn" type="button">Import CSV</button><a class="newq" id="kExport" href="/api/contacts/export.csv" style="text-decoration:none;display:inline-block">Export CSV</a><button class="newq" id="kRefresh" type="button">Refresh</button></div></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="kAddBtn" type="button">Add contact</button><button class="newq" id="kImportBtn" type="button">Import CSV</button><a class="newq" id="kExport" href="/api/contacts/export.csv" style="text-decoration:none;display:inline-block">Export CSV</a><button class="newq" id="kTestBtn" type="button" title="Send a test message through SES">Send test</button><button class="newq" id="kRefresh" type="button">Refresh</button></div></div>
     <input type="file" id="kFile" accept=".csv,text/csv" hidden>
+    <div id="kEmail" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 12px"></div>
     <div id="kCounts" style="margin-bottom:12px"></div>
     <form class="csearch" id="kSearchForm">
       <input type="text" id="kQ" placeholder="Search email or name" aria-label="Search contacts" autocomplete="off">
@@ -1940,11 +2159,14 @@ function kDate(iso){return iso?esc(new Date(iso).toLocaleDateString(undefined,{m
 function kRow(x){
   return '<tr><td style="font-weight:600">'+esc(x.email)+'</td><td>'+esc(x.name||"")+'</td><td>'+kBadge(x.status)+'</td>'
     +'<td>'+esc(x.source||"")+'</td><td style="white-space:normal">'+(x.tags||[]).map(t=>'<span class="chip-sm">'+esc(t)+'</span>').join(" ")+'</td>'
-    +'<td>'+kDate(x.created_at)+'</td><td style="white-space:nowrap"><button class="t411-linkbtn" data-kedit="'+x.id+'">Edit</button>'
+    +'<td>'+kDate(x.created_at)+'</td><td style="white-space:nowrap">'
+    +(["pending"].includes(x.status)?'<button class="t411-linkbtn" data-kconfirm="'+x.id+'" title="Send the double opt-in email">Send confirmation</button> ':"")
+    +'<button class="t411-linkbtn" data-kedit="'+x.id+'">Edit</button>'
     +(["unsubscribed","bounced","complained"].includes(x.status)?"":' <button class="t411-linkbtn" data-kunsub="'+x.id+'">Unsubscribe</button>')+'</td></tr>';
 }
 async function loadContacts(){
   const out=document.getElementById("kOut");
+  loadEmailStatus();
   if(!kData)out.innerHTML='<div class="rcard"><div class="loading">Loading contacts...</div></div>';
   const qs=new URLSearchParams();
   if(kFilter.q)qs.set("q",kFilter.q);if(kFilter.status)qs.set("status",kFilter.status);if(kFilter.tag)qs.set("tag",kFilter.tag);
@@ -1970,6 +2192,31 @@ async function loadContacts(){
       +(L.length?L.map(kRow).join(""):'<tr><td colspan="7" style="color:var(--muted)">No contacts match.</td></tr>')+'</tbody></table></div></div>';
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load contacts.</div></div>';}
 }
+// SES status + test send + resending the double opt-in email.
+async function loadEmailStatus(){
+  const el=document.getElementById("kEmail");
+  try{
+    const r=await fetch("/api/email/status");if(!r.ok){el.textContent="";return;}
+    const s=await r.json();
+    const t=s.by_type||{};
+    const bits=Object.keys(t).length?Object.keys(t).map(k=>t[k]+" "+k).join(" · "):"nothing sent yet";
+    el.innerHTML=s.configured
+      ? "SES ready — sending as "+esc(s.from)+" ("+esc(s.region)+", "+s.max_per_second+"/sec) · links at "+esc(s.link_base)+"<br>"+esc(bits)
+      : '<span style="color:var(--accent)">SES isn\'t configured yet</span> — add AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and SES_FROM to .env on the NAS. Signups are still captured as pending.';
+    document.getElementById("kTestBtn").disabled=!s.configured;
+  }catch(e){el.textContent="";}
+}
+document.getElementById("kTestBtn").onclick=async()=>{
+  const to=prompt("Send a test message to (in the SES sandbox this must be an address verified in SES):","");
+  if(!to)return;
+  kMsg("loading","Sending a test to "+esc(to)+"...");
+  try{
+    const r=await fetch("/api/email/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:to})});
+    const t=await r.text();
+    kMsg(r.ok?"loading":"err",r.ok?"Test sent to "+esc(to)+" (SES id "+esc(JSON.parse(t).message_id)+").":"Not sent: "+errText(t));
+  }catch(e){kMsg("err","Couldn't reach the Command Center.");}
+  loadEmailStatus();
+};
 document.getElementById("kAddBtn").onclick=()=>kShowForm(null);
 function kShowForm(x){
   const inp='style="padding:9px 10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:14px;font-family:Spectral,serif;border-radius:8px"';
@@ -2019,6 +2266,13 @@ document.getElementById("kFile").addEventListener("change",async e=>{
 document.getElementById("p-contacts").addEventListener("click",async e=>{
   const ed=e.target.closest("[data-kedit]");
   if(ed){const x=(kData.contacts||[]).find(c=>c.id===+ed.dataset.kedit);if(x)kShowForm(x);return;}
+  const cf=e.target.closest("[data-kconfirm]");
+  if(cf){const x=(kData.contacts||[]).find(c=>c.id===+cf.dataset.kconfirm);if(!x)return;
+    kMsg("loading","Sending the confirmation email to "+esc(x.email)+"...");
+    try{const r=await fetch("/api/contacts/"+x.id+"/confirmation",{method:"POST"});const t=await r.text();
+      kMsg(r.ok?"loading":"err",r.ok?"Confirmation sent to "+esc(x.email)+". They're subscribed once they click it.":"Not sent: "+errText(t));}
+    catch(err){kMsg("err","Couldn't reach the Command Center.");}
+    loadContacts();return;}
   const un=e.target.closest("[data-kunsub]");
   if(un){const x=(kData.contacts||[]).find(c=>c.id===+un.dataset.kunsub);if(!x)return;
     if(!confirm("Mark "+x.email+" unsubscribed? They go on the do-not-email list and can't be re-added by an import."))return;

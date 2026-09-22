@@ -31,6 +31,8 @@ ASK_PER_IP_HOUR = int(os.environ.get("ASK_PER_IP_HOUR", "20"))
 ASK_PER_DAY = int(os.environ.get("ASK_PER_DAY", "200"))
 ASK_MAX_CHARS = int(os.environ.get("ASK_MAX_CHARS", "500"))
 MAX_BODY = 16 * 1024
+SNS_PATH = "/api/email/sns"
+SNS_MAX_BODY = 512 * 1024
 _ip_hits = defaultdict(deque)       # visitor ip -> timestamps of asks in the last hour
 _day = {"date": None, "count": 0}   # asks today (UTC), across all visitors
 
@@ -54,6 +56,10 @@ ALLOW = {
     ("POST", "/api/ask"),
     ("POST", "/api/cig/ask"),
     ("POST", "/api/subscribe"),    # the ONLY public write: creates a pending newsletter contact
+    ("GET", "/confirm"),           # double opt-in link from the confirmation email
+    ("GET", "/unsubscribe"),       # one-click unsubscribe (human click)
+    ("POST", "/unsubscribe"),      # one-click unsubscribe (RFC 8058, from the mail client)
+    ("POST", "/api/email/sns"),    # SES bounce/complaint notifications (verified against SNS)
 }
 
 # Read-only paths with one path segment: GET /api/posts/<slug> (an article page's post). The slug is
@@ -150,7 +156,7 @@ async def proxy(path: str, request: Request):
             m == request.method and p.match(full) for m, p in ALLOW_PATTERNS):
         raise HTTPException(status_code=404, detail="Not found")
     body = await request.body()
-    if len(body) > MAX_BODY:
+    if len(body) > (SNS_MAX_BODY if full == SNS_PATH else MAX_BODY):
         raise HTTPException(413, "Request too large.")
     if full in ASK_PATHS:
         body = _check_ask(request, body)
