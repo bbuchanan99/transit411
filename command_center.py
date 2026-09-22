@@ -163,10 +163,82 @@ def collection_action(item_id: int, action: str):
             _ensure_posts_link(cur)
             cur.execute("UPDATE content_posts SET status='draft' WHERE item_id=%s AND status='published'",
                         (item_id,))
+            took_down = cur.rowcount > 0
             c.commit()
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
+    if took_down:
+        _request_site_rebuild("post taken down")
     return {"id": item_id, "status": mapping[action]}
+
+
+# ---- Public site rebuilds (Cloudflare Pages deploy hook) ------------------------------------------
+# The site is static, so published/unpublished posts show up after a rebuild. With CF_PAGES_DEPLOY_HOOK
+# set (in .env; it's a secret URL), publish/unpublish request one, delayed REBUILD_DELAY seconds so a
+# burst of publishes becomes a single build.
+import threading  # noqa: E402
+
+DEPLOY_HOOK = os.environ.get("CF_PAGES_DEPLOY_HOOK", "").strip()
+DEPLOY_HOOK_PREFIX = "https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/"
+REBUILD_DELAY = 60
+_rebuild = {"pending_since": None, "reason": None, "last_at": None, "last_ok": None, "last_detail": None}
+_rebuild_lock = threading.Lock()
+
+
+def _hook_ok():
+    return DEPLOY_HOOK.startswith(DEPLOY_HOOK_PREFIX)
+
+
+def _fire_rebuild():
+    from datetime import datetime, timezone
+    ok, detail = False, None
+    try:
+        r = httpx.post(DEPLOY_HOOK, timeout=20)
+        ok = r.status_code < 300
+        detail = "build started" if ok else f"Cloudflare returned HTTP {r.status_code}"
+    except httpx.HTTPError as e:
+        detail = f"couldn't reach Cloudflare ({type(e).__name__})"
+    with _rebuild_lock:
+        _rebuild.update(pending_since=None, last_at=datetime.now(timezone.utc).isoformat(), last_ok=ok,
+                        last_detail=detail)
+
+
+def _request_site_rebuild(reason, delay=REBUILD_DELAY):
+    """Schedule one rebuild (no-op if the hook isn't configured or one is already scheduled)."""
+    from datetime import datetime, timezone
+    if not _hook_ok():
+        return False
+    with _rebuild_lock:
+        if _rebuild["pending_since"]:
+            return True
+        _rebuild.update(pending_since=datetime.now(timezone.utc).isoformat(), reason=reason)
+    t = threading.Timer(delay, _fire_rebuild)
+    t.daemon = True
+    t.start()
+    return True
+
+
+def _rebuild_state():
+    with _rebuild_lock:
+        s = dict(_rebuild)
+    s["configured"] = _hook_ok()
+    s["misconfigured"] = bool(DEPLOY_HOOK) and not _hook_ok()
+    s["delay_seconds"] = REBUILD_DELAY
+    return s
+
+
+@app.get("/api/site/rebuild")
+def site_rebuild_status():
+    return _rebuild_state()
+
+
+@app.post("/api/site/rebuild")
+def site_rebuild_now():
+    """The Publish tab's "Rebuild site now" button (runs in a few seconds)."""
+    if not _hook_ok():
+        raise HTTPException(400, "Site rebuilds aren't set up: add CF_PAGES_DEPLOY_HOOK to .env on the NAS.")
+    _request_site_rebuild("manual", delay=2)
+    return _rebuild_state()
 
 
 class Toggle(BaseModel):
@@ -262,6 +334,7 @@ def publish_item(item_id: int):
         raise
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
+    _request_site_rebuild("post published")
     return {"post_id": post_id, "item_id": item_id, "status": "published"}
 
 
@@ -324,6 +397,7 @@ def unpublish(post_id: int):
         raise
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
+    _request_site_rebuild("post unpublished")
     return {"post_id": post_id, "status": "draft"}
 
 
@@ -834,7 +908,8 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   </div>
   <div class="panel" id="p-sources"><div class="soon">Source registry - phase 2b. The watchlist that feeds the collection engine.</div></div>
   <div class="panel" id="p-publish">
-    <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads.</p></div><button class="newq" id="pRefresh" type="button">Refresh</button></div>
+    <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads - and the site rebuilds itself about a minute later.</p></div><div style="display:flex;gap:8px"><button class="newq" id="pRebuild" type="button">Rebuild site now</button><button class="newq" id="pRefresh" type="button">Refresh</button></div></div>
+    <div id="pSite" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 14px"></div>
     <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:6px 0 10px">Ready to publish</div>
     <div id="pReady"></div>
     <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 0 10px">Published</div>
@@ -1070,10 +1145,33 @@ acSwitch.onclick=async()=>{
 loadAuto();setInterval(loadAuto,60000);
 // ---- Publish tab ----
 document.getElementById("pRefresh").onclick=loadPublish;
+// Public-site rebuild status (Cloudflare Pages deploy hook).
+async function loadSiteStatus(){
+  const el=document.getElementById("pSite");
+  try{
+    const s=await (await fetch("/api/site/rebuild")).json();
+    const t=iso=>iso?new Date(iso).toLocaleString(undefined,{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):"";
+    let msg;
+    if(!s.configured) msg=s.misconfigured?"Site rebuilds: CF_PAGES_DEPLOY_HOOK in .env doesn't look like a Cloudflare Pages deploy hook URL."
+      :"Site rebuilds aren't set up yet (add CF_PAGES_DEPLOY_HOOK to .env on the NAS). Until then, redeploy in Cloudflare after publishing.";
+    else if(s.pending_since) msg="Site rebuild scheduled ("+esc(s.reason||"")+") - it starts within a minute; the live site updates 1-2 minutes after that.";
+    else if(s.last_at) msg="Last site rebuild: "+t(s.last_at)+" - "+(s.last_ok?"started OK":"failed: "+esc(s.last_detail||""))+".";
+    else msg="Site rebuilds are set up. Publishing or unpublishing triggers one automatically.";
+    el.innerHTML=msg;
+    document.getElementById("pRebuild").disabled=!s.configured;
+    if(s.pending_since)setTimeout(loadSiteStatus,15000);
+  }catch(e){el.textContent="";}
+}
+document.getElementById("pRebuild").onclick=async()=>{
+  const r=await fetch("/api/site/rebuild",{method:"POST"});
+  if(!r.ok)alert(errText(await r.text()));
+  loadSiteStatus();
+};
 document.querySelector('.tab[data-t="publish"]').addEventListener("click",loadPublish);
 async function loadPublish(){
   const ready=document.getElementById("pReady"),posts=document.getElementById("pPosts");
   ready.innerHTML='<div class="rcard"><div class="loading">Loading...</div></div>';
+  loadSiteStatus();
   try{const d=await (await fetch("/api/publish/ready")).json();
     ready.innerHTML=(d.items&&d.items.length)?d.items.map(pReadyCard).join(""):'<div class="rcard"><div class="loading">Nothing approved yet - approve items in the Collection tab.</div></div>';
   }catch(e){ready.innerHTML='<div class="rcard"><div class="err">Could not load approved items.</div></div>';}

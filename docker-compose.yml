@@ -56,6 +56,8 @@ services:
       # Ask CIG turns questions into SQL itself (the Ask NTD API does its own), so it needs the key too.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ASK_NTD_MODEL=${ASK_NTD_MODEL:-claude-haiku-4-5}
+      # Cloudflare Pages deploy hook (secret URL): publishing/unpublishing rebuilds the public site.
+      - CF_PAGES_DEPLOY_HOOK=${CF_PAGES_DEPLOY_HOOK:-}
     volumes:
       # Kept copies of every loaded CIG dashboard PDF (Grants tab > Dashboard files).
       - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig

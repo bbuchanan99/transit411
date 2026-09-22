@@ -193,6 +193,7 @@ curl https://api.transit411.net/api/cig                   # must return 200
 | `DATA_DIR` | NAS path for data volumes (DuckDB, Postgres, kept CIG PDFs) |
 | `COLLECT_AT` / `COLLECT_TZ` | Daily collector schedule (defaults `06:00`, `America/New_York`) |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Cloudflare Tunnel token |
+| `CF_PAGES_DEPLOY_HOOK` | Cloudflare Pages deploy hook URL (secret). Publishing/unpublishing rebuilds the site ~1 minute later; the Publish tab also has **Rebuild site now** |
 | `PUBLIC_ASK_ENABLED` | Public ask endpoints on/off (default `true`) |
 | `ASK_PER_IP_HOUR` / `ASK_PER_DAY` / `ASK_MAX_CHARS` | Public ask limits (defaults 20 / 200 / 500) |
 
@@ -224,7 +225,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - Read-only public API + Cloudflare Tunnel, secured by allowlist; `api.transit411.net` live. ✅
 
 **Pending / next:**
-- Rebuild the site automatically when posts are published (a Cloudflare Pages deploy hook called from the Publish tab, or a scheduled rebuild).
+- Add the Cloudflare Pages deploy hook to `.env` (`CF_PAGES_DEPLOY_HOOK`) so publishing rebuilds the site automatically (the wiring is in place).
 - Build the CIG pipeline page and Ask NTD/CIG pages on the site using the shared bundle.
 - Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
