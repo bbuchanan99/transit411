@@ -439,26 +439,31 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
             if not cur.fetchone()[0]:  # nothing loaded yet: an empty pipeline, not an error
                 return empty
             cigmod.create_table(c)  # adds milestone columns to a table created before they existed
+            import cig_profiles
+            cig_profiles.create_tables(c)
             cur.execute("SELECT max(snapshot_date), count(DISTINCT snapshot_date) FROM cig_projects")
             snap, n_snaps = cur.fetchone()
             if not snap:
                 return empty
-            where, params = ["snapshot_date=%s"], [snap]
+            where, params = ["p.snapshot_date=%s"], [snap]
             for col, val in (("phase", phase), ("mode", mode), ("rating", rating), ("state", state)):
                 if val:
-                    where.append(f"{col}=%s"); params.append(val)
+                    where.append(f"p.{col}=%s"); params.append(val)
             if sponsor:
-                where.append("sponsor ILIKE %s"); params.append(f"%{sponsor}%")
+                where.append("p.sponsor ILIKE %s"); params.append(f"%{sponsor}%")
             cur.execute("SELECT count(*), COALESCE(sum(cig_request_musd),0) FROM cig_projects WHERE snapshot_date=%s",
                         (snap,))
             total_projects, total_cig = cur.fetchone()
             cur.execute("SELECT phase, count(*) FROM cig_projects WHERE snapshot_date=%s GROUP BY phase", (snap,))
             by_phase = {ph: n for ph, n in cur.fetchall()}
-            cur.execute("SELECT id, project_name, sponsor, city, state, mode, phase, cost_musd, cost_raw, "
-                        "cig_request_musd, cig_request_raw, cig_share, rating, noncig_status, est_grant, "
-                        "nepa, pd_entry, eng_entry, lonp_req, lonp_dec, lonp_action, req_rating_date, "
-                        "proj_rating_date, mode_source, profile_file FROM cig_projects WHERE " + " AND ".join(where) +
-                        " ORDER BY cig_request_musd DESC NULLS LAST, project_name", params)
+            # profile_url = the project's page on FTA's Current CIG Projects list (cig_profile_pages).
+            cur.execute("SELECT p.id, p.project_name, p.sponsor, p.city, p.state, p.mode, p.phase, p.cost_musd, "
+                        "p.cost_raw, p.cig_request_musd, p.cig_request_raw, p.cig_share, p.rating, p.noncig_status, "
+                        "p.est_grant, p.nepa, p.pd_entry, p.eng_entry, p.lonp_req, p.lonp_dec, p.lonp_action, "
+                        "p.req_rating_date, p.proj_rating_date, p.mode_source, p.profile_file, g.profile_url "
+                        "FROM cig_projects p LEFT JOIN cig_profile_pages g "
+                        "ON g.project_name=p.project_name AND g.sponsor=coalesce(p.sponsor,'') WHERE "
+                        + " AND ".join(where) + " ORDER BY p.cig_request_musd DESC NULLS LAST, p.project_name", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 pr = dict(zip(names, row))

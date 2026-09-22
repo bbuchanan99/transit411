@@ -2,7 +2,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY build_db.py query.py serve.py command_center.py collection.py cig.py readonly_api.py ./
+COPY build_db.py query.py serve.py command_center.py collection.py cig.py cig_profiles.py readonly_api.py ./
 COPY static ./static
 COPY reference ./reference
 ENV NTD_DB=/data/ntd.duckdb

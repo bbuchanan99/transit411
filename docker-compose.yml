@@ -53,6 +53,7 @@ services:
       - API_URL=http://api:8000
       - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
       - CIG_PDF_DIR=/data/cig
+      - CIG_PROFILE_DIR=/data/cig_profiles
       # Ask CIG turns questions into SQL itself (the Ask NTD API does its own), so it needs the key too.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ASK_NTD_MODEL=${ASK_NTD_MODEL:-claude-haiku-4-5}
@@ -61,6 +62,8 @@ services:
     volumes:
       # Kept copies of every loaded CIG dashboard PDF (Grants tab > Dashboard files).
       - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig
+      # Archived versions of every project's FTA profile PDF (and the inbox for new downloads).
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig_profiles:/data/cig_profiles
     ports:
       - "8088:8080"
     depends_on:
@@ -112,6 +115,24 @@ services:
     depends_on:
       - db
     entrypoint: ["python", "cig.py"]
+
+  # CIG project profile archive: every version of each project's FTA profile PDF, with diffs.
+  #   docker compose run --rm cig-profiles --listing /data/cig_profiles/inbox/<saved page>.html
+  #   docker compose run --rm cig-profiles --weekly     # inbox + one try of FTA's listing page
+  # The scheduler runs the weekly check; the Grants tab has upload buttons for pages and PDFs.
+  cig-profiles:
+    build: .
+    profiles: ["tools"]
+    environment:
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - CIG_PDF_DIR=/data/cig
+      - CIG_PROFILE_DIR=/data/cig_profiles
+    volumes:
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig_profiles:/data/cig_profiles
+    depends_on:
+      - db
+    entrypoint: ["python", "cig_profiles.py"]
 
   # Read-only public API: the ONLY thing the Cloudflare tunnel exposes. It allowlists the safe
   # read/ask endpoints and forwards them to the Command Center; everything else returns 404.
