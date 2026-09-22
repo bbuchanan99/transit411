@@ -66,6 +66,8 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .newsletter p{margin:0;color:var(--muted);font-size:14px}
 .newsletter form{display:flex;gap:10px;flex-wrap:wrap}
 .newsletter input{padding:13px 15px;border:1px solid var(--ink);background:var(--card);color:var(--ink);font-size:15px;width:260px;font-family:'Spectral',serif}
+.nl-status{width:100%;font-family:'Archivo',sans-serif;font-size:13px;color:var(--muted);margin:10px 0 0;min-height:1.2em}
+.nl-status.err{color:var(--accent)}
 .newsletter button{background:var(--ink);color:var(--panel);border:none;padding:0 26px;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:.5px;cursor:pointer}
 
 /* footer */

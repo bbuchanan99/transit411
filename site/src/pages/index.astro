@@ -1,7 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import PostItem from "../components/PostItem.astro";
-import { getPosts, getCigSummary } from "../lib/content.js";
+import { API_BASE, getPosts, getCigSummary } from "../lib/content.js";
 
 // Live content, fetched at build time (featured placements first, then newest).
 const posts = await getPosts();
@@ -81,10 +81,49 @@ const stats = [
         <h2 class="disp">Transit411 Weekly Intelligence</h2>
         <p>Funding news, procurement notices, and career moves &mdash; every Thursday.</p>
       </div>
-      <form onsubmit="event.preventDefault();">
-        <input type="email" placeholder="you@agency.gov" aria-label="Email address" />
+      <form id="subscribe-form" data-api={API_BASE}>
+        <input type="email" name="email" required placeholder="you@agency.gov" aria-label="Email address" />
         <button type="submit">Subscribe</button>
       </form>
+      <p class="nl-status" role="status" aria-live="polite"></p>
     </section>
   </div>
 </Base>
+
+<script>
+  // Newsletter signup -> POST /api/subscribe (the only public write). The address is stored as a
+  // pending contact; the confirmation email comes later, so nobody is subscribed by this alone.
+  const form = document.getElementById("subscribe-form");
+  if (form) {
+    const status = document.querySelector(".nl-status");
+    const btn = form.querySelector("button");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = form.email.value.trim();
+      if (!email) return;
+      btn.disabled = true;
+      status.textContent = "Signing you up...";
+      status.classList.remove("err");
+      try {
+        const r = await fetch(`${form.dataset.api}/api/subscribe`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, source: "site: homepage" }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) {
+          form.reset();
+          status.textContent = d.message || "Thanks — you're on the list.";
+        } else {
+          status.textContent = d.detail || "That didn't work. Please try again.";
+          status.classList.add("err");
+        }
+      } catch {
+        status.textContent = "Couldn't reach Transit411. Please try again in a moment.";
+        status.classList.add("err");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+</script>

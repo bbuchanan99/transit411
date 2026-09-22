@@ -700,6 +700,164 @@ def cig_profile(file: str):
                         filename=os.path.basename(path))
 
 
+# ---- Contacts: the master list we own (contacts.py). Command Center only, except /api/subscribe ----
+class ContactIn(BaseModel):
+    email: Optional[str] = None
+    name: Optional[str] = None
+    tags: Optional[List[str]] = None
+    source: Optional[str] = None
+    status: Optional[str] = None
+
+
+CONTACT_COLS = ["id", "email", "name", "status", "source", "tags", "created_at", "confirmed_at",
+                "unsubscribed_at", "last_event_at", "last_event"]
+
+
+def _contact_json(row):
+    d = dict(zip(CONTACT_COLS, row))
+    for k in ("created_at", "confirmed_at", "unsubscribed_at", "last_event_at"):
+        d[k] = d[k].isoformat() if d.get(k) else None
+    return d
+
+
+@app.get("/api/contacts")
+def list_contacts(status: Optional[str] = None, tag: Optional[str] = None, q: Optional[str] = None,
+                  limit: int = 200, offset: int = 0):
+    """The contact list with counts by status and the tags in use."""
+    import contacts as cmod
+    where, params = [], []
+    if status:
+        where.append("status=%s"); params.append(status)
+    if tag:
+        where.append("%s = ANY(tags)"); params.append(tag)
+    if q:
+        where.append("(email ILIKE %s OR coalesce(name,'') ILIKE %s)")
+        params += [f"%{q.strip()}%"] * 2
+    try:
+        with _db() as c, c.cursor() as cur:
+            cmod.create_tables(c)
+            cur.execute(f"SELECT {', '.join(CONTACT_COLS)} FROM contacts"
+                        + (" WHERE " + " AND ".join(where) if where else "")
+                        + " ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s",
+                        params + [max(1, min(limit, 1000)), max(0, offset)])
+            rows = [_contact_json(r) for r in cur.fetchall()]
+            cur.execute("SELECT count(*) FROM contacts" + (" WHERE " + " AND ".join(where) if where else ""), params)
+            matching = cur.fetchone()[0]
+            cur.execute("SELECT DISTINCT unnest(tags) FROM contacts ORDER BY 1")
+            tags = [r[0] for r in cur.fetchall()]
+            stats = cmod.counts(c)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"contacts": rows, "matching": matching, "counts": stats, "tags": tags, "statuses": cmod.STATUSES}
+
+
+@app.post("/api/contacts")
+def add_contact(c_in: ContactIn):
+    """Add one contact by hand (status defaults to subscribed here - you added them deliberately)."""
+    import contacts as cmod
+    status = c_in.status or "subscribed"
+    if status not in cmod.STATUSES:
+        raise HTTPException(400, f"status must be one of: {', '.join(cmod.STATUSES)}")
+    try:
+        with _db() as c:
+            cid, what = cmod.upsert(c, c_in.email, c_in.name, c_in.source or "manual", c_in.tags or [], status)
+            if what == "invalid":
+                raise HTTPException(400, "That doesn't look like an email address.")
+            if what == "suppressed":
+                raise HTTPException(409, "That address unsubscribed, bounced or complained; it stays suppressed.")
+            with c.cursor() as cur:
+                cur.execute(f"SELECT {', '.join(CONTACT_COLS)} FROM contacts WHERE id=%s", (cid,))
+                return {"contact": _contact_json(cur.fetchone()), "result": what}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.put("/api/contacts/{contact_id}")
+def update_contact(contact_id: int, c_in: ContactIn):
+    """Edit a contact's name, tags or status. Setting a suppressed status also adds a suppression."""
+    import contacts as cmod
+    try:
+        with _db() as c, c.cursor() as cur:
+            cmod.create_tables(c)
+            cur.execute("SELECT id FROM contacts WHERE id=%s", (contact_id,))
+            if not cur.fetchone():
+                raise HTTPException(404, "No such contact.")
+            if c_in.name is not None:
+                cur.execute("UPDATE contacts SET name=%s WHERE id=%s", (c_in.name.strip() or None, contact_id))
+            if c_in.tags is not None:
+                clean = sorted({t.strip()[:40] for t in c_in.tags if t and t.strip()})
+                cur.execute("UPDATE contacts SET tags=%s WHERE id=%s", (clean, contact_id))
+            c.commit()
+            if c_in.status:
+                cmod.set_status(c, contact_id, c_in.status, event="edited in Command Center")
+            cur.execute(f"SELECT {', '.join(CONTACT_COLS)} FROM contacts WHERE id=%s", (contact_id,))
+            return {"contact": _contact_json(cur.fetchone())}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.post("/api/contacts/import")
+async def import_contacts(request: Request, source: str = "csv import", tags: str = ""):
+    """Import a CSV (raw body). Dedupes on email; suppressed addresses are never re-added."""
+    import contacts as cmod
+    body = await request.body()
+    if len(body) > 5 * 1024 * 1024:
+        raise HTTPException(413, "That file is over 5 MB.")
+    text = body.decode("utf-8-sig", errors="replace")
+    default_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    try:
+        with _db() as c:
+            return cmod.import_csv(c, text, source, default_tags)
+    except Exception as e:
+        raise HTTPException(422, f"Couldn't read that CSV ({type(e).__name__}: {e}).")
+
+
+@app.get("/api/contacts/export.csv")
+def export_contacts(status: Optional[str] = None):
+    from fastapi.responses import Response as FileResp
+    import contacts as cmod
+    try:
+        with _db() as c:
+            csv_text = cmod.export_csv(c, status)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    stamp = datetime_now().strftime("%Y-%m-%d")
+    return FileResp(csv_text, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="transit411-contacts-{stamp}.csv"'})
+
+
+class Subscribe(BaseModel):
+    email: str
+    name: Optional[str] = None
+    source: Optional[str] = None
+
+
+@app.post("/api/subscribe")
+def subscribe(s: Subscribe):
+    """Public newsletter signup (the only public write, proxied by readonly-api). Creates a PENDING
+    contact - nothing is sent yet and nobody is subscribed until they confirm (phase 2). The reply is
+    deliberately the same whether or not the address is already on the list or suppressed, so this
+    can't be used to find out who is."""
+    import contacts as cmod
+    try:
+        with _db() as c:
+            cid, what = cmod.upsert(c, s.email, (s.name or "")[:120], (s.source or "site")[:60], [], "pending")
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if what == "invalid":
+        raise HTTPException(400, "Please enter a valid email address.")
+    return {"ok": True, "status": "pending",
+            "message": "Thanks — you're on the list. Confirmation email coming soon."}
+
+
 # ---- Sources tab: the collector's registry (sources table), editable here ------------------------
 # Command Center only (not in readonly-api's allowlist). collection.py reads the table fresh on every
 # run, so changes apply to the next run; --seed leaves rows edited, added or deleted here alone.
@@ -1368,6 +1526,7 @@ td{padding:8px 12px 8px 0;border-bottom:1px solid var(--soft);white-space:nowrap
 details{margin:4px 18px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 summary{cursor:pointer;padding:10px 13px;font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;color:var(--muted)}
 pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-size:12px;white-space:pre-wrap;color:var(--ink)}
+.chip-sm{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-family:'Archivo',sans-serif;font-size:11px;font-weight:600;color:var(--muted)}
 .soon{padding:40px 24px;text-align:center;color:var(--muted);font-family:'Archivo',sans-serif;border:1px dashed var(--line);border-radius:12px}
 .err{padding:16px 18px;color:var(--accent);font-family:'Archivo',sans-serif;font-size:14px}
 .loading{padding:20px 18px;color:var(--muted);font-family:'Archivo',sans-serif}
@@ -1388,6 +1547,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
   <button class="tab on" data-t="ask">Ask NTD</button>
   <button class="tab" data-t="collect">Collection</button>
   <button class="tab" data-t="sources">Sources</button>
+  <button class="tab" data-t="contacts">Contacts</button>
   <button class="tab" data-t="publish">Publish</button>
   <button class="tab" data-t="grants">Grants</button>
   <button class="tab" data-t="askcig">Ask CIG</button>
@@ -1420,6 +1580,21 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="sForm"></div>
     <div id="sMsg"></div>
     <div id="sOut"></div>
+  </div>
+  <div class="panel" id="p-contacts">
+    <div class="askhead"><div><h2 class="disp">Contacts</h2><p class="lead">The newsletter list &mdash; ours, in Postgres. Signups from the site arrive as <b>pending</b>; only <b>subscribed</b> contacts will ever be emailed. Unsubscribed, bounced and complained addresses are suppressed and can't be re-added by an import.</p></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="kAddBtn" type="button">Add contact</button><button class="newq" id="kImportBtn" type="button">Import CSV</button><a class="newq" id="kExport" href="/api/contacts/export.csv" style="text-decoration:none;display:inline-block">Export CSV</a><button class="newq" id="kRefresh" type="button">Refresh</button></div></div>
+    <input type="file" id="kFile" accept=".csv,text/csv" hidden>
+    <div id="kCounts" style="margin-bottom:12px"></div>
+    <form class="csearch" id="kSearchForm">
+      <input type="text" id="kQ" placeholder="Search email or name" aria-label="Search contacts" autocomplete="off">
+      <select id="kStatus" aria-label="Status"><option value="">All statuses</option></select>
+      <select id="kTag" aria-label="Tag"><option value="">All tags</option></select>
+      <button class="newq" type="submit">Search</button>
+    </form>
+    <div id="kForm"></div>
+    <div id="kMsg"></div>
+    <div id="kOut"></div>
   </div>
   <div class="panel" id="p-publish">
     <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads - and the site rebuilds itself about a minute later.</p></div><div style="display:flex;gap:8px"><button class="newq" id="pRebuild" type="button">Rebuild site now</button><button class="newq" id="pRefresh" type="button">Refresh</button></div></div>
@@ -1748,6 +1923,109 @@ async function pPost(url,what,b){ // POST, and say so if it didn't work instead 
 }
 document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
+// ---- Contacts tab: the newsletter list (contacts + suppressions) ----
+let kData=null,kFilter={q:"",status:"",tag:""};
+document.querySelector('.tab[data-t="contacts"]').addEventListener("click",loadContacts);
+document.getElementById("kRefresh").onclick=loadContacts;
+document.getElementById("kSearchForm").addEventListener("submit",e=>{
+  e.preventDefault();
+  kFilter={q:document.getElementById("kQ").value.trim(),status:document.getElementById("kStatus").value,tag:document.getElementById("kTag").value};
+  loadContacts();
+});
+["kStatus","kTag"].forEach(id=>document.getElementById(id).addEventListener("change",()=>document.getElementById("kSearchForm").requestSubmit()));
+function kMsg(kind,html){document.getElementById("kMsg").innerHTML=html?'<div class="rcard"><div class="'+kind+'">'+html+'</div></div>':"";}
+const KSTATUS={pending:["Pending","var(--muted)"],subscribed:["Subscribed","#1F6B4A"],unsubscribed:["Unsubscribed","var(--accent)"],bounced:["Bounced","var(--accent)"],complained:["Complained","var(--accent)"]};
+function kBadge(s){const x=KSTATUS[s]||[s,"var(--muted)"];return '<span style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;color:'+x[1]+'">'+esc(x[0])+'</span>';}
+function kDate(iso){return iso?esc(new Date(iso).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"})):"";}
+function kRow(x){
+  return '<tr><td style="font-weight:600">'+esc(x.email)+'</td><td>'+esc(x.name||"")+'</td><td>'+kBadge(x.status)+'</td>'
+    +'<td>'+esc(x.source||"")+'</td><td style="white-space:normal">'+(x.tags||[]).map(t=>'<span class="chip-sm">'+esc(t)+'</span>').join(" ")+'</td>'
+    +'<td>'+kDate(x.created_at)+'</td><td style="white-space:nowrap"><button class="t411-linkbtn" data-kedit="'+x.id+'">Edit</button>'
+    +(["unsubscribed","bounced","complained"].includes(x.status)?"":' <button class="t411-linkbtn" data-kunsub="'+x.id+'">Unsubscribe</button>')+'</td></tr>';
+}
+async function loadContacts(){
+  const out=document.getElementById("kOut");
+  if(!kData)out.innerHTML='<div class="rcard"><div class="loading">Loading contacts...</div></div>';
+  const qs=new URLSearchParams();
+  if(kFilter.q)qs.set("q",kFilter.q);if(kFilter.status)qs.set("status",kFilter.status);if(kFilter.tag)qs.set("tag",kFilter.tag);
+  try{
+    const r=await fetch("/api/contacts"+(qs.toString()?"?"+qs:""));
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
+    kData=await r.json();
+    const c=kData.counts||{},bs=c.by_status||{};
+    document.getElementById("kCounts").innerHTML='<div class="rcard" style="padding:14px 18px;display:flex;gap:26px;flex-wrap:wrap;align-items:center">'
+      +gStat(c.total||0,"contacts")+gStat(bs.subscribed||0,"subscribed")+gStat(bs.pending||0,"pending")
+      +gStat((bs.unsubscribed||0)+(bs.bounced||0)+(bs.complained||0),"suppressed")
+      +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-left:auto">'+(c.suppressed||0)+' on the do-not-email list</div></div>';
+    const sel=document.getElementById("kStatus");
+    if(sel.options.length<2)sel.innerHTML='<option value="">All statuses</option>'+(kData.statuses||[]).map(s=>'<option value="'+esc(s)+'">'+esc((KSTATUS[s]||[s])[0])+'</option>').join("");
+    sel.value=kFilter.status;
+    const tsel=document.getElementById("kTag");
+    tsel.innerHTML='<option value="">All tags</option>'+(kData.tags||[]).map(t=>'<option value="'+esc(t)+'">'+esc(t)+'</option>').join("");
+    tsel.value=kFilter.tag;
+    const L=kData.contacts||[];
+    out.innerHTML='<div class="rcard"><div style="padding:12px 18px 0;font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">'
+      +(kData.matching||0)+' matching'+(L.length<(kData.matching||0)?' (showing '+L.length+')':'')+'</div>'
+      +'<div class="t411-scroll"><table class="t411-table"><thead><tr><th>Email</th><th>Name</th><th>Status</th><th>Source</th><th>Tags</th><th>Added</th><th></th></tr></thead><tbody>'
+      +(L.length?L.map(kRow).join(""):'<tr><td colspan="7" style="color:var(--muted)">No contacts match.</td></tr>')+'</tbody></table></div></div>';
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load contacts.</div></div>';}
+}
+document.getElementById("kAddBtn").onclick=()=>kShowForm(null);
+function kShowForm(x){
+  const inp='style="padding:9px 10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:14px;font-family:Spectral,serif;border-radius:8px"';
+  const sel='style="padding:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:Archivo,sans-serif;font-size:12px;border-radius:8px"';
+  const lab=(t,inner)=>'<label style="display:flex;flex-direction:column;gap:4px;font-family:Archivo,sans-serif;font-size:11px;font-weight:700;color:var(--muted);flex:1 1 180px">'+t+inner+'</label>';
+  const statuses=(kData&&kData.statuses)||["pending","subscribed","unsubscribed","bounced","complained"];
+  document.getElementById("kForm").innerHTML='<div class="rcard" style="padding:16px 18px"><div style="font-family:Archivo,sans-serif;font-weight:800;font-size:14px;margin-bottom:10px">'
+    +(x?"Edit "+esc(x.email):"Add a contact")+'</div><div style="display:flex;gap:10px;flex-wrap:wrap">'
+    +(x?"":lab("Email",'<input id="kfEmail" type="email" '+inp+' placeholder="name@agency.gov">'))
+    +lab("Name",'<input id="kfName" type="text" '+inp+' value="'+esc(x?x.name||"":"")+'">')
+    +lab("Tags (comma separated)",'<input id="kfTags" type="text" '+inp+' value="'+esc(x?(x.tags||[]).join(", "):"")+'">')
+    +lab("Status",'<select id="kfStatus" '+sel+'>'+statuses.map(s=>'<option value="'+esc(s)+'"'+((x?x.status:"subscribed")===s?" selected":"")+'>'+esc((KSTATUS[s]||[s])[0])+'</option>').join("")+'</select>')
+    +(x?"":lab("Source",'<input id="kfSource" type="text" '+inp+' value="manual">'))
+    +'</div><div style="display:flex;gap:8px;margin-top:12px"><button class="go" id="kfSave" type="button" style="padding:9px 18px">'+(x?"Save":"Add")+'</button>'
+    +'<button class="newq" id="kfCancel" type="button">Cancel</button><span id="kfErr" class="err" style="padding:8px 4px"></span></div></div>';
+  document.getElementById("kfCancel").onclick=()=>{document.getElementById("kForm").innerHTML="";};
+  document.getElementById("kfSave").onclick=async()=>{
+    const v=id=>{const e=document.getElementById(id);return e?e.value:undefined;};
+    const tags=(v("kfTags")||"").split(",").map(t=>t.trim()).filter(Boolean);
+    const body=x?{name:v("kfName"),tags,status:v("kfStatus")}
+      :{email:v("kfEmail"),name:v("kfName"),tags,status:v("kfStatus"),source:v("kfSource")};
+    const b=document.getElementById("kfSave");b.disabled=true;
+    try{
+      const r=await fetch(x?"/api/contacts/"+x.id:"/api/contacts",{method:x?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const t=await r.text();
+      if(!r.ok){document.getElementById("kfErr").textContent=errText(t);b.disabled=false;return;}
+      document.getElementById("kForm").innerHTML="";kMsg("loading",(x?"Saved ":"Added ")+esc(JSON.parse(t).contact.email)+".");loadContacts();
+    }catch(e){document.getElementById("kfErr").textContent="Couldn't reach the Command Center.";b.disabled=false;}
+  };
+}
+document.getElementById("kImportBtn").onclick=()=>document.getElementById("kFile").click();
+document.getElementById("kFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;
+  const tags=prompt("Tag every contact in this file with (optional, comma separated):","")||"";
+  kMsg("loading","Importing "+esc(f.name)+"...");
+  try{
+    const r=await fetch("/api/contacts/import?source="+encodeURIComponent("csv: "+f.name)+"&tags="+encodeURIComponent(tags),
+      {method:"POST",headers:{"Content-Type":"text/csv"},body:f});
+    const t=await r.text();
+    if(!r.ok){kMsg("err","Not imported: "+errText(t));return;}
+    const d=JSON.parse(t);
+    kMsg("loading","Imported "+esc(f.name)+": "+d.added+" added, "+d.updated+" already on the list, "+d.suppressed+" suppressed (skipped), "
+      +d.invalid+" not valid addresses"+(d.duplicate_in_file?", "+d.duplicate_in_file+" duplicate rows in the file":"")+" — "+d.rows+" rows read.");
+    loadContacts();
+  }catch(err){kMsg("err","Couldn't reach the Command Center.");}
+});
+document.getElementById("p-contacts").addEventListener("click",async e=>{
+  const ed=e.target.closest("[data-kedit]");
+  if(ed){const x=(kData.contacts||[]).find(c=>c.id===+ed.dataset.kedit);if(x)kShowForm(x);return;}
+  const un=e.target.closest("[data-kunsub]");
+  if(un){const x=(kData.contacts||[]).find(c=>c.id===+un.dataset.kunsub);if(!x)return;
+    if(!confirm("Mark "+x.email+" unsubscribed? They go on the do-not-email list and can't be re-added by an import."))return;
+    const r=await fetch("/api/contacts/"+x.id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"unsubscribed"})});
+    kMsg(r.ok?"loading":"err",r.ok?esc(x.email)+" is unsubscribed and suppressed.":esc(errText(await r.text())));loadContacts();}
+});
+
 // ---- Sources tab: the collector's registry (feeds + Google News keyword searches) ----
 let sData=null;
 document.querySelector('.tab[data-t="sources"]').addEventListener("click",loadSources);

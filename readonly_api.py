@@ -34,6 +34,15 @@ MAX_BODY = 16 * 1024
 _ip_hits = defaultdict(deque)       # visitor ip -> timestamps of asks in the last hour
 _day = {"date": None, "count": 0}   # asks today (UTC), across all visitors
 
+# Newsletter signups: no model cost, but still rate-limited so the form can't be used to flood the
+# contact list (or to probe who is on it - the API's reply is the same either way).
+SUBSCRIBE_PATH = "/api/subscribe"
+SUB_PER_IP_HOUR = int(os.environ.get("SUBSCRIBE_PER_IP_HOUR", "5"))
+SUB_PER_DAY = int(os.environ.get("SUBSCRIBE_PER_DAY", "500"))
+SUB_MAX_CHARS = 254
+_sub_ip_hits = defaultdict(deque)
+_sub_day = {"date": None, "count": 0}
+
 # (method, exact path) pairs that are safe to expose publicly.
 ALLOW = {
     ("GET", "/api/posts"),
@@ -44,6 +53,7 @@ ALLOW = {
     ("GET", "/api/agencies"),      # the agency reference table (names, NTD ids, links) the site builds from
     ("POST", "/api/ask"),
     ("POST", "/api/cig/ask"),
+    ("POST", "/api/subscribe"),    # the ONLY public write: creates a pending newsletter contact
 }
 
 # Read-only paths with one path segment: GET /api/posts/<slug> (an article page's post). The slug is
@@ -105,6 +115,34 @@ def _check_ask(request, body):
     return json.dumps({"question": q.strip(), "history": hist}).encode()
 
 
+def _check_subscribe(request, body):
+    """Validate and rate-limit a signup, and pass on only email/name/source."""
+    try:
+        data = json.loads(body or b"{}")
+        email = (data.get("email") or "").strip()
+    except (ValueError, AttributeError):
+        raise HTTPException(400, "Send JSON with an 'email'.")
+    if not email or len(email) > SUB_MAX_CHARS or "@" not in email:
+        raise HTTPException(400, "Please enter a valid email address.")
+    now = time.time()
+    today = datetime.now(timezone.utc).date()
+    if _sub_day["date"] != today:
+        _sub_day["date"], _sub_day["count"] = today, 0
+    if _sub_day["count"] >= SUB_PER_DAY:
+        raise HTTPException(429, "Too many signups right now. Please try again later.",
+                            headers={"Retry-After": "3600"})
+    hits = _sub_ip_hits[_visitor(request)]
+    while hits and hits[0] < now - 3600:
+        hits.popleft()
+    if len(hits) >= SUB_PER_IP_HOUR:
+        raise HTTPException(429, "You've tried that a few times already. Please try again later.",
+                            headers={"Retry-After": str(int(hits[0] + 3600 - now) + 1)})
+    hits.append(now)
+    _sub_day["count"] += 1
+    return json.dumps({"email": email, "name": str(data.get("name") or "")[:120],
+                       "source": str(data.get("source") or "site")[:60]}).encode()
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST"])
 async def proxy(path: str, request: Request):
     full = "/" + path
@@ -116,12 +154,14 @@ async def proxy(path: str, request: Request):
         raise HTTPException(413, "Request too large.")
     if full in ASK_PATHS:
         body = _check_ask(request, body)
+    elif full == SUBSCRIBE_PATH:
+        body = _check_subscribe(request, body)
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             up = await client.request(
                 request.method, UPSTREAM + full,
                 params=dict(request.query_params), content=body,
-                headers={"content-type": "application/json" if full in ASK_PATHS
+                headers={"content-type": "application/json" if full in ASK_PATHS or full == SUBSCRIBE_PATH
                          else request.headers.get("content-type", "application/json")},
             )
     except httpx.HTTPError:
