@@ -98,9 +98,11 @@ def source_name(a):
     return f"Agency: {a['name']}"
 
 
-def sync_searches(conn, days=None, dry_run=False):
+def sync_searches(conn, days=None, dry_run=False, activate=False):
     """One `sources` row per search-enabled agency (type 'Agency', fetched like the keyword searches).
-    Rows for agencies switched off stay in the table, disabled, so their settings and history survive."""
+    New rows are created switched OFF unless activate=True, so nobody pays for a run of searches they
+    haven't seen; switch them on in the Sources tab (or --searches --activate). Rows for agencies
+    switched off stay in the table, disabled, so their settings and history survive."""
     import collection
     collection.migrate_sources(conn)
     agencies = all_agencies(conn)
@@ -120,7 +122,7 @@ def sync_searches(conn, days=None, dry_run=False):
                 cur.execute("INSERT INTO sources (name, url, pillar, type, method, trust, notes, query, search_days, "
                             "origin, enabled) VALUES (%s,%s,'News','Agency','RSS','Med',%s,%s,%s,'registry',%s)",
                             (name, url, f"Daily Google News search for {a['name']}.", q,
-                             days or SEARCH_WINDOW_DAYS, a["search_enabled"]))
+                             days or SEARCH_WINDOW_DAYS, bool(a["search_enabled"]) and activate))
                 added += 1
             elif not row[2]:  # not edited in the Sources tab: keep its URL/query in step with the agency
                 cur.execute("UPDATE sources SET url=%s, query=%s, search_days=%s WHERE id=%s",
@@ -140,6 +142,8 @@ def main():
     ap.add_argument("--list", action="store_true", help="show stored agencies")
     ap.add_argument("--searches", action="store_true", help="create/refresh each enabled agency's daily search")
     ap.add_argument("--days", type=int, help="search window for --searches (default %d)" % SEARCH_WINDOW_DAYS)
+    ap.add_argument("--activate", action="store_true",
+                    help="with --searches: switch new agency searches on (they are created off)")
     ap.add_argument("--file", help="a different agencies.json")
     a = ap.parse_args()
     import psycopg
@@ -149,7 +153,7 @@ def main():
             added, updated, total = sync(conn, a.file)
             print(f"Agencies: {added} added, {updated} updated ({total} in reference/agencies.json).")
         if a.searches:
-            print("Agency searches:", sync_searches(conn, a.days))
+            print("Agency searches:", sync_searches(conn, a.days, activate=a.activate))
         if a.list:
             rows = all_agencies(conn)
             print(f"{len(rows)} agencies; {sum(1 for r in rows if r['search_enabled'])} with a daily search:")
