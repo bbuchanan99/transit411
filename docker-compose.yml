@@ -95,6 +95,13 @@ services:
       - COLLECT_MODEL=${COLLECT_MODEL:-claude-haiku-4-5}
       - COLLECT_AT=${COLLECT_AT:-06:00}
       - COLLECT_TZ=${COLLECT_TZ:-America/New_York}
+      # Weekly CIG profile check on this day (mon..sun), at COLLECT_AT.
+      - CIG_PROFILES_DAY=${CIG_PROFILES_DAY:-mon}
+      - CIG_PDF_DIR=/data/cig
+      - CIG_PROFILE_DIR=/data/cig_profiles
+    volumes:
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig
+      - ${DATA_DIR:-/share/Container/transit411/data}/cig_profiles:/data/cig_profiles
     depends_on:
       - db
     entrypoint: ["python", "collection.py", "--schedule"]

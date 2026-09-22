@@ -445,6 +445,16 @@ def schedule_loop(dsn):
                 time.sleep(min(remaining, 300))
             with psycopg.connect(dsn) as conn:
                 stamp = datetime.now(tz).isoformat()
+                # Weekly CIG profile check (inbox + one try of FTA's listing page). No model tokens, so it
+                # runs whether or not Auto-collect is on.
+                if datetime.now(tz).strftime("%a").lower() == os.environ.get("CIG_PROFILES_DAY", "mon").lower()[:3]:
+                    try:
+                        import cig_profiles
+                        out = cig_profiles.weekly(conn, "weekly")
+                        print(f"Scheduler: CIG profiles: {out['listing_status']}; {len(out['results'])} files", flush=True)
+                    except Exception as e:
+                        conn.rollback()
+                        print(f"Scheduler: CIG profile check failed: {e}", flush=True)
                 if not auto_collect_enabled(conn):
                     print("Scheduler: auto-collect is off; skipping this run.", flush=True)
                     set_setting(conn, "collect_last_run", {"at": stamp, "skipped": True})
