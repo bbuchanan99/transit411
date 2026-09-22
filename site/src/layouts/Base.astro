@@ -1,7 +1,10 @@
 ---
 import "../styles/dispatch.css";
 import { getPosts } from "../lib/content.js";
-const { title = "Transit411 — Transit funding, procurement & talent" } = Astro.props;
+const {
+  title = "Transit411 — Transit funding, procurement & talent",
+  description = "Independent coverage of transit funding, procurement, and the people moving public transportation — plus data tools over the National Transit Database and the FTA CIG pipeline.",
+} = Astro.props;
 const latest = (await getPosts())[0];
 const sections = ["News", "Funding", "Procurement", "People", "Policy", "Data"];
 const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
@@ -12,7 +15,7 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>{title}</title>
-  <meta name="description" content="Independent coverage of transit funding, procurement, and the people moving public transportation — plus data tools over the National Transit Database and the FTA CIG pipeline." />
+  <meta name="description" content={description} />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

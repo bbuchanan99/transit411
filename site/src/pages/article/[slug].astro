@@ -1,0 +1,127 @@
+---
+// One page per published post, pre-rendered at build time from the read-only API.
+// What's on it is Transit411's own work: our rewritten headline, our paraphrase, the metadata we
+// tagged, and a link out to the source. The source's article text is never reproduced here.
+import Base from "../../layouts/Base.astro";
+import PostItem from "../../components/PostItem.astro";
+import { API_BASE, SECTIONS, getPosts, getRelated } from "../../lib/content.js";
+
+export async function getStaticPaths() {
+  const posts = await getPosts();
+  return posts.filter((p) => p.slug).map((post) => ({ params: { slug: post.slug }, props: { post } }));
+}
+
+const { post } = Astro.props;
+const related = await getRelated(post);
+const pillarPath = Object.entries(SECTIONS).find(([, s]) => s.pillar === post.pillar)?.[0];
+const canonical = new URL(`/article/${post.slug}`, Astro.site).href;
+const description = (post.deck || post.title).slice(0, 300);
+// Metadata chips. The section pages don't filter by facet yet, so these are labels for now; the
+// pillar (above the headline) is the one link, and CIG programs point at the pipeline page.
+const chips = [
+  ...(post.state ? [{ label: post.state, href: null }] : []),
+  ...post.agencies.map((a) => ({ label: a, href: null })),
+  ...post.programs.map((p) => ({ label: p, href: p.startsWith("CIG") ? "/cig" : null })),
+  ...post.mode.map((m) => ({ label: m, href: null })),
+  ...post.tags.slice(0, 6).map((t) => ({ label: t, href: null })),
+];
+// The data panel (client-side) only makes sense when we have something to match on.
+const cigAgencies = post.agencies.filter(Boolean);
+const showData = cigAgencies.length > 0 || post.programs.some((p) => p.startsWith("CIG"));
+---
+<Base title={`${post.title} — Transit411`} description={description}>
+  <Fragment slot="head">
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="Transit411" />
+    <meta property="og:title" content={post.title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    {post.publishedAt && <meta property="article:published_time" content={post.publishedAt} />}
+    {post.pillar && <meta property="article:section" content={post.pillar} />}
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={post.title} />
+    <meta name="twitter:description" content={description} />
+    {showData && <link rel="stylesheet" href="/vendor/t411.css" />}
+    {showData && <script is:inline src="/vendor/t411.js"></script>}
+  </Fragment>
+
+  <article class="wrap article">
+    <div class="art-k">
+      {pillarPath ? <a href={`/${pillarPath}`}>{post.pillar}</a> : post.pillar}
+      {post.featured && <span class="post-flag">{post.sponsor ? `Featured · ${post.sponsor}` : "Featured"}</span>}
+    </div>
+    <h1 class="art-title disp">{post.title}</h1>
+    {post.date && <div class="art-meta">{post.date}{post.source && <span> · Reported by {post.source}</span>}</div>}
+
+    <div class="art-body">
+      {post.paragraphs.length
+        ? post.paragraphs.map((p) => <p>{p}</p>)
+        : <p>{post.deck}</p>}
+    </div>
+
+    {post.url && (
+      <a class="art-out" href={post.url} target="_blank" rel="noopener noreferrer">
+        Read the full story at {post.source || "the source"} <span aria-hidden="true">→</span>
+      </a>
+    )}
+    <p class="art-note">Transit411 summarizes and tags the story; the full reporting stays with the publisher.</p>
+
+    {chips.length > 0 && (
+      <div class="art-tags">
+        {chips.map((c) => (c.href ? <a class="chip" href={c.href}>{c.label}</a> : <span class="chip">{c.label}</span>))}
+      </div>
+    )}
+
+    {showData && (
+      <section id="art-data" class="art-data" data-api={API_BASE} data-agencies={JSON.stringify(cigAgencies)} hidden>
+        <h2 class="section-h art-data-h">Related data</h2>
+        <p class="art-data-sub">From the FTA Capital Investment Grants pipeline, matched to this story's agency.</p>
+        <div id="art-cig"></div>
+        <p class="cig-source">Source: FTA CIG dashboard · <a href="/cig">See the full pipeline</a></p>
+      </section>
+    )}
+
+    {related.length > 0 && (
+      <section class="art-related">
+        <h2 class="section-h">More on this</h2>
+        <div class="post-list">
+          {related.map((p) => <PostItem post={p} size="compact" />)}
+        </div>
+      </section>
+    )}
+  </article>
+</Base>
+
+<script>
+  // Related data: the CIG projects whose sponsor matches an agency this story is tagged with.
+  // Fetched at view time so it reflects the latest dashboard, and the panel stays hidden if nothing matches.
+  const el = document.getElementById("art-data");
+  if (el) {
+    const api = el.dataset.api;
+    const agencies = JSON.parse(el.dataset.agencies || "[]");
+    const fetchHistory = (p) =>
+      fetch(`${api}/api/cig/history?name=${encodeURIComponent(p.project_name)}&sponsor=${encodeURIComponent(p.sponsor || "")}`)
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then((d) => d.history || []);
+
+    Promise.all(agencies.map((a) =>
+      fetch(`${api}/api/cig?sponsor=${encodeURIComponent(a)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)))
+      .then((results) => {
+        const seen = new Set();
+        const rows = [];
+        for (const d of results) {
+          for (const p of (d && d.projects) || []) {
+            const k = p.project_name + "|" + (p.sponsor || "");
+            if (!seen.has(k)) { seen.add(k); rows.push(p); }
+          }
+        }
+        if (!rows.length || !window.T411) return;  // nothing matched: leave the panel hidden
+        el.hidden = false;
+        window.T411.renderCigTable(document.getElementById("art-cig"), rows, { fetchHistory, apiBase: api });
+      })
+      .catch(() => {});
+  }
+</script>
