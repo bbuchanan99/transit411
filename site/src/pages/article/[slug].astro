@@ -4,7 +4,8 @@
 // tagged, and a link out to the source. The source's article text is never reproduced here.
 import Base from "../../layouts/Base.astro";
 import PostItem from "../../components/PostItem.astro";
-import { API_BASE, SECTIONS, getPosts, getRelated } from "../../lib/content.js";
+import { API_BASE, SECTIONS, getPosts, getRelated, getAgencies, getCig, matchAgency, cigProjectsFor }
+  from "../../lib/content.js";
 
 export async function getStaticPaths() {
   const posts = await getPosts();
@@ -12,7 +13,48 @@ export async function getStaticPaths() {
 }
 
 const { post } = Astro.props;
-const related = await getRelated(post);
+const related = await getRelated(post, 6);
+
+// ---- Explore: built from this article's tags + the agency reference table, at build time.
+// No model calls, no client-side fetching: everything below is already known when the page is built.
+const agencies = await getAgencies();
+const cig = await getCig();
+const agency = post.agencies.map((a) => matchAgency(a, agencies)).find(Boolean) || null;
+const cigProjects = cigProjectsFor(agency, cig);
+const cigProgram = post.programs.find((p) => p.startsWith("CIG")) || null;
+const money = (n) => (n == null ? null : `$${Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 })}M`);
+const ask = (page, q) => `/${page}?q=${encodeURIComponent(q)}`;
+
+const actions = [
+  ...(agency && cigProjects.length
+    ? [{ href: `/cig?agency=${encodeURIComponent(agency.name)}`,
+         label: `See ${agency.name} in the CIG pipeline`,
+         note: `${cigProjects.length} project${cigProjects.length === 1 ? "" : "s"} seeking funding` }]
+    : []),
+  ...(agency && agency.ntd_id
+    ? [{ href: ask("ask-ntd", `${agency.name} ridership and cost per rider over the last five years`),
+         label: `Ask NTD: ${agency.name} ridership & cost per rider`, note: "Opens the question, ready to run" }]
+    : []),
+  ...(cigProgram || cigProjects.length
+    ? [{ href: ask("ask-cig", agency && cigProjects.length
+           ? `What is the status of ${agency.name}'s CIG projects?`
+           : `Which ${cigProgram} projects are furthest along?`),
+         label: `Ask CIG about ${agency && cigProjects.length ? agency.name : cigProgram}`,
+         note: "Opens the question, ready to run" }]
+    : []),
+];
+
+// Reference links: only what the table actually has, plus the archived FTA profile for a matched project.
+const profileFile = cigProjects.find((p) => p.profile_file)?.profile_file || null;
+const refLinks = [
+  ...(agency?.website ? [{ href: agency.website, label: `${agency.name} website` }] : []),
+  ...(agency?.newsroom ? [{ href: agency.newsroom, label: `${agency.name} newsroom` }] : []),
+  ...(agency?.procurement_url ? [{ href: agency.procurement_url, label: `${agency.name} procurement` }] : []),
+  ...(profileFile ? [{ href: `${API_BASE}/api/cig/profile?file=${encodeURIComponent(profileFile)}`,
+                       label: "FTA project profile (PDF)" }] : []),
+  ...(post.url ? [{ href: post.url, label: `Original story at ${post.source || "the source"}` }] : []),
+];
+const showExplore = related.length > 0 || actions.length > 0 || refLinks.length > 0 || cigProjects.length > 0;
 const pillarPath = Object.entries(SECTIONS).find(([, s]) => s.pillar === post.pillar)?.[0];
 const canonical = new URL(`/article/${post.slug}`, Astro.site).href;
 const description = (post.deck || post.title).slice(0, 300);
@@ -25,9 +67,6 @@ const chips = [
   ...post.mode.map((m) => ({ label: m, href: null })),
   ...post.tags.slice(0, 6).map((t) => ({ label: t, href: null })),
 ];
-// The data panel (client-side) only makes sense when we have something to match on.
-const cigAgencies = post.agencies.filter(Boolean);
-const showData = cigAgencies.length > 0 || post.programs.some((p) => p.startsWith("CIG"));
 ---
 <Base title={`${post.title} — Transit411`} description={description}>
   <Fragment slot="head">
@@ -42,8 +81,6 @@ const showData = cigAgencies.length > 0 || post.programs.some((p) => p.startsWit
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content={post.title} />
     <meta name="twitter:description" content={description} />
-    {showData && <link rel="stylesheet" href="/vendor/t411.css" />}
-    {showData && <script is:inline src="/vendor/t411.js"></script>}
   </Fragment>
 
   <article class="wrap article">
@@ -73,55 +110,61 @@ const showData = cigAgencies.length > 0 || post.programs.some((p) => p.startsWit
       </div>
     )}
 
-    {showData && (
-      <section id="art-data" class="art-data" data-api={API_BASE} data-agencies={JSON.stringify(cigAgencies)} hidden>
-        <h2 class="section-h art-data-h">Related data</h2>
-        <p class="art-data-sub">From the FTA Capital Investment Grants pipeline, matched to this story's agency.</p>
-        <div id="art-cig"></div>
-        <p class="cig-source">Source: FTA CIG dashboard · <a href="/cig">See the full pipeline</a></p>
-      </section>
-    )}
+    {showExplore && (
+      <section class="explore">
+        <h2 class="section-h">Explore</h2>
 
-    {related.length > 0 && (
-      <section class="art-related">
-        <h2 class="section-h">More on this</h2>
-        <div class="post-list">
-          {related.map((p) => <PostItem post={p} size="compact" />)}
-        </div>
+        {related.length > 0 && (
+          <div class="explore-block">
+            <div class="explore-h">Related coverage</div>
+            <div class="post-list">
+              {related.map((p) => <PostItem post={p} size="compact" />)}
+            </div>
+          </div>
+        )}
+
+        {cigProjects.length > 0 && (
+          <div class="explore-block">
+            <div class="explore-h">{agency.name} in the CIG pipeline</div>
+            <ul class="explore-cig">
+              {cigProjects.slice(0, 4).map((p) => (
+                <li>
+                  <span class="explore-cig-n">{p.project_name}</span>
+                  <span class="explore-cig-d">
+                    {[p.phase === "Eng" ? "Engineering" : "Project Development", p.mode || "Unspecified",
+                      money(p.cig_request_musd) && `${money(p.cig_request_musd)} sought`,
+                      p.rating && `rated ${p.rating}`].filter(Boolean).join(" · ")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p class="explore-note">From the FTA Capital Investment Grants dashboard of {cig?.summary?.snapshot}.</p>
+          </div>
+        )}
+
+        {actions.length > 0 && (
+          <div class="explore-block">
+            <div class="explore-h">Go deeper</div>
+            <div class="explore-actions">
+              {actions.map((a) => (
+                <a class="explore-action" href={a.href}>
+                  <span class="explore-action-l">{a.label}</span>
+                  <span class="explore-action-n">{a.note}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {refLinks.length > 0 && (
+          <div class="explore-block">
+            <div class="explore-h">Reference</div>
+            <div class="explore-refs">
+              {refLinks.map((l) => <a href={l.href} target="_blank" rel="noopener noreferrer">{l.label}</a>)}
+            </div>
+          </div>
+        )}
       </section>
     )}
   </article>
 </Base>
-
-<script>
-  // Related data: the CIG projects whose sponsor matches an agency this story is tagged with.
-  // Fetched at view time so it reflects the latest dashboard, and the panel stays hidden if nothing matches.
-  const el = document.getElementById("art-data");
-  if (el) {
-    const api = el.dataset.api;
-    const agencies = JSON.parse(el.dataset.agencies || "[]");
-    const fetchHistory = (p) =>
-      fetch(`${api}/api/cig/history?name=${encodeURIComponent(p.project_name)}&sponsor=${encodeURIComponent(p.sponsor || "")}`)
-        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-        .then((d) => d.history || []);
-
-    Promise.all(agencies.map((a) =>
-      fetch(`${api}/api/cig?sponsor=${encodeURIComponent(a)}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)))
-      .then((results) => {
-        const seen = new Set();
-        const rows = [];
-        for (const d of results) {
-          for (const p of (d && d.projects) || []) {
-            const k = p.project_name + "|" + (p.sponsor || "");
-            if (!seen.has(k)) { seen.add(k); rows.push(p); }
-          }
-        }
-        if (!rows.length || !window.T411) return;  // nothing matched: leave the panel hidden
-        el.hidden = false;
-        window.T411.renderCigTable(document.getElementById("art-cig"), rows, { fetchHistory, apiBase: api });
-      })
-      .catch(() => {});
-  }
-</script>

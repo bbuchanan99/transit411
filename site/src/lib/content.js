@@ -102,6 +102,32 @@ export async function getRelated(post, limit = 4) {
     .sort((a, b) => b[0] - a[0]).slice(0, limit).map(([, p]) => p);
 }
 
+// The agency reference table (reference/agencies.json, served by /api/agencies): names, aliases,
+// NTD ids, CIG sponsor names and official links. Fetched once per build.
+let agenciesPromise;
+export function getAgencies() {
+  agenciesPromise ??= getJson("/api/agencies").then((d) => (d && Array.isArray(d.agencies) ? d.agencies : []));
+  return agenciesPromise;
+}
+
+// An agency tag on a post -> its reference row (by name, alias or CIG sponsor name), or null.
+export function matchAgency(name, agencies) {
+  const n = (name || "").trim().toLowerCase();
+  if (!n) return null;
+  return agencies.find((a) =>
+    a.name.toLowerCase() === n ||
+    (a.aliases || []).some((x) => x.toLowerCase() === n) ||
+    (a.cig_sponsor || "").toLowerCase() === n) || null;
+}
+
+// The CIG pipeline rows for one reference agency (matched on the dashboard's sponsor name).
+export function cigProjectsFor(agency, cig) {
+  if (!agency || !cig) return [];
+  const names = [agency.cig_sponsor, agency.name, ...(agency.aliases || [])]
+    .filter(Boolean).map((s) => s.toLowerCase());
+  return (cig.projects || []).filter((p) => names.includes((p.sponsor || "").toLowerCase()));
+}
+
 // Latest CIG pipeline snapshot ({summary, projects}) from /api/cig; null if unavailable.
 let cigPromise;
 export function getCig() {

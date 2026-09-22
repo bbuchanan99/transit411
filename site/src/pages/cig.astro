@@ -4,8 +4,13 @@
 // newer dashboard has loaded. The table, milestones and snapshot history are the shared component
 // bundle (static/t411.js, copied to /vendor at build time), the same code the Command Center runs.
 import Base from "../layouts/Base.astro";
-import { API_BASE, getCig, getCigChanges } from "../lib/content.js";
+import { API_BASE, getCig, getCigChanges, getAgencies } from "../lib/content.js";
 
+// name/alias -> the sponsor name on the dashboard, so /cig?agency=LA%20Metro (from an article's
+// Explore module) filters to that agency's projects.
+const sponsorByName = Object.fromEntries(
+  (await getAgencies()).filter((a) => a.cig_sponsor).flatMap((a) =>
+    [a.name, a.cig_sponsor, ...(a.aliases || [])].map((n) => [n.toLowerCase(), a.cig_sponsor])));
 const cig = await getCig();
 const changes = await getCigChanges();
 const s = cig?.summary;
@@ -58,6 +63,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       <button type="button" class="cig-chip" data-phase="Eng">Engineering</button>
     </div>
     <div class="cig-filters" id="cig-modes" role="group" aria-label="Filter by mode"></div>
+    <p id="cig-agency-note" class="cig-agency-note" hidden></p>
     <div id="cig-table" data-api={API_BASE}>
       <noscript><div class="empty"><strong>This table needs JavaScript.</strong></div></noscript>
     </div>
@@ -67,6 +73,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       Dollar figures in millions. Ratings: H High, MH Medium-High, M Medium, ML Medium-Low, L Low.
     </p>
   </div>
+  <script type="application/json" id="cig-sponsors" set:html={JSON.stringify(sponsorByName).replace(/</g, "\\u003c")}></script>
   <script type="application/json" id="cig-data" set:html={embedded}></script>
   <script type="application/json" id="cig-changes-data" set:html={embeddedChanges}></script>
 </Base>
@@ -78,6 +85,11 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
   let data = JSON.parse(document.getElementById("cig-data").textContent || "null");
   let phase = "";
   let mode = "";  // "" = all; "Unspecified" = FTA's sources don't state one
+  // ?agency=<name or alias> or ?sponsor=<dashboard sponsor>: show just that agency's projects.
+  const sponsors = JSON.parse(document.getElementById("cig-sponsors").textContent || "{}");
+  const params = new URLSearchParams(location.search);
+  const wanted = params.get("sponsor") || params.get("agency") || "";
+  let sponsor = wanted ? (sponsors[wanted.toLowerCase()] || wanted) : "";
   const MODE_ORDER = ["BRT", "Light Rail", "Heavy Rail", "Commuter Rail", "Streetcar", "Unspecified"];
   const modeOf = (p) => p.mode || "Unspecified";
 
@@ -110,6 +122,21 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => d.history || []);
 
+  // When an agency filter is on, say so and offer a way back to the whole pipeline.
+  function renderAgencyNote(shown) {
+    const note = document.getElementById("cig-agency-note");
+    note.hidden = !sponsor;
+    if (!sponsor) return;
+    note.innerHTML = "";
+    note.append(`Showing ${shown} project${shown === 1 ? "" : "s"} for ${wanted} — `);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "cig-linkbtn";
+    b.textContent = "show the whole pipeline";
+    b.onclick = () => { sponsor = ""; renderModeChips(); render(); };
+    note.append(b);
+  }
+
   function render() {
     const T411 = window.T411;
     if (!T411) {
@@ -117,12 +144,14 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
       return;
     }
     const all = (data && data.projects) || [];
-    const rows = all.filter((p) => (!phase || p.phase === phase) && (!mode || modeOf(p) === mode));
+    const rows = all.filter((p) => (!phase || p.phase === phase) && (!mode || modeOf(p) === mode)
+      && (!sponsor || (p.sponsor || "").toLowerCase() === sponsor.toLowerCase()));
     T411.renderCigTable(el, rows, {
       fetchHistory,
       apiBase: api,  // FTA profile PDFs are served by the public API
-      emptyText: all.length ? "No projects match this phase and mode." : "The pipeline isn't available right now. Please check back soon.",
+      emptyText: all.length ? "No projects match these filters." : "The pipeline isn't available right now. Please check back soon.",
     });
+    renderAgencyNote(rows.length);
   }
 
   function fmtStats(s) {

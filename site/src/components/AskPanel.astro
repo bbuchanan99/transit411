@@ -75,6 +75,16 @@ const { endpoint, examples = [], placeholder = "Ask a question..." } = Astro.pro
   }
 
   root.querySelector(".ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask(input.value); });
+
+  // ?q=... (e.g. from an article's Explore module) fills the box. It is NOT run automatically: the
+  // reader presses Ask, so no question — and no model call — happens without them asking for it.
+  const preset = new URLSearchParams(location.search).get("q");
+  if (preset) {
+    input.value = preset.slice(0, 500);
+    setStatus("Question ready — press Ask to run it.");
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
   root.querySelectorAll(".ask-ex").forEach((b) => b.addEventListener("click", () => {
     thread = []; out.innerHTML = ""; ctl.hidden = true;  // an example starts a fresh question
     input.value = b.dataset.q; ask(b.dataset.q);
