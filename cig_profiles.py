@@ -55,6 +55,13 @@ def create_tables(conn):
             prev_version_id BIGINT REFERENCES cig_profile_versions(id),
             text TEXT, diff TEXT, lines_added INTEGER, lines_removed INTEGER)""")
         cur.execute("CREATE INDEX IF NOT EXISTS cig_pv_proj ON cig_profile_versions (project_name, sponsor, captured_at)")
+        # PDF link found on a project's FTA page by a browser pass (load_pdf_links), when known.
+        cur.execute("ALTER TABLE cig_profile_pages ADD COLUMN IF NOT EXISTS pdf_url TEXT")
+        cur.execute("ALTER TABLE cig_profile_pages ADD COLUMN IF NOT EXISTS pdf_checked_at TIMESTAMPTZ")
+        # Every distinct copy of FTA's listing page (its project rows), and what changed vs. the one before.
+        cur.execute("""CREATE TABLE IF NOT EXISTS cig_profile_listings (
+            id BIGSERIAL PRIMARY KEY, captured_at TIMESTAMPTZ DEFAULT now(), source TEXT,
+            rows_sha256 TEXT, rows JSONB, changes JSONB)""")
         # Each weekly/on-demand check: what it tried and what it found.
         cur.execute("""CREATE TABLE IF NOT EXISTS cig_profile_runs (
             id BIGSERIAL PRIMARY KEY, ran_at TIMESTAMPTZ DEFAULT now(), trigger TEXT,
@@ -119,12 +126,80 @@ def match_listing(rows, projects):
     return pairs, [r for r in rows if id(r) not in matched], [p for p in projects if p not in {q for q, _ in pairs}]
 
 
-def load_listing(conn, page):
-    """Store each current project's profile_url from a listing page. Returns a coverage report."""
+def _lkey(r):
+    return (r["state"], cig.norm_name(r["name"]))
+
+
+def listing_changes(old, new):
+    """What changed between two listing snapshots (lists of rows): added, removed, stage and link changes."""
+    o, n = {_lkey(r): r for r in old}, {_lkey(r): r for r in new}
+    out = []
+    for k, r in n.items():
+        if k not in o:
+            out.append({"kind": "added", "name": r["name"], "state": r["state"], "profile_url": r["profile_url"],
+                        "detail": f"new on FTA's page ({r['stage'] or 'stage ?'})"})
+            continue
+        was = o[k]
+        if (was.get("stage") or "") != (r.get("stage") or ""):
+            out.append({"kind": "stage", "name": r["name"], "state": r["state"], "profile_url": r["profile_url"],
+                        "detail": f"stage {was.get('stage') or '?'} → {r.get('stage') or '?'}"})
+        if (was.get("profile_url") or "") != (r.get("profile_url") or ""):
+            out.append({"kind": "link", "name": r["name"], "state": r["state"], "profile_url": r["profile_url"],
+                        "detail": "profile link changed"})
+    for k, r in o.items():
+        if k not in n:
+            out.append({"kind": "removed", "name": r["name"], "state": r["state"], "profile_url": r["profile_url"],
+                        "detail": "no longer on FTA's page"})
+    return out
+
+
+def to_download(conn, changes=()):
+    """Profiles worth downloading: current projects whose listing entry changed (new, stage, link) or
+    whose FTA page links a PDF we haven't archived, plus current projects with no archived version."""
+    with conn.cursor() as cur:
+        cur.execute("""SELECT g.project_name, g.sponsor, g.listing_name, g.state, g.profile_url, g.pdf_url,
+                         (SELECT count(*) FROM cig_profile_versions v WHERE v.project_name=g.project_name AND v.sponsor=g.sponsor),
+                         EXISTS (SELECT 1 FROM cig_profile_versions v WHERE v.project_name=g.project_name AND v.sponsor=g.sponsor
+                                 AND (v.pdf_url=g.pdf_url OR v.file_name=regexp_replace(g.pdf_url, '^.*/', '')))
+                       FROM cig_profile_pages g
+                       JOIN (SELECT DISTINCT project_name, coalesce(sponsor,'') AS sponsor FROM cig_projects
+                             WHERE snapshot_date=(SELECT max(snapshot_date) FROM cig_projects)) p
+                         ON p.project_name=g.project_name AND p.sponsor=g.sponsor ORDER BY g.project_name""")
+        pages = cur.fetchall()
+    changed = {(c["state"], cig.norm_name(c["name"])): c["detail"] for c in changes if c["kind"] != "removed"}
+    out = []
+    for name, sponsor, lname, state, url, pdf, n, have_pdf in pages:
+        why = []
+        if (state, cig.norm_name(lname or "")) in changed:
+            why.append(changed[(state, cig.norm_name(lname or ""))])
+        if pdf and not have_pdf:
+            why.append("FTA's page links a file not yet archived: " + pdf.rsplit("/", 1)[-1])
+        if not n:
+            why.append("no archived version")
+        if why:
+            out.append({"project_name": name, "sponsor": sponsor, "profile_url": url, "pdf_url": pdf, "why": "; ".join(why)})
+    return out
+
+
+def load_listing(conn, page, source="upload"):
+    """Store each current project's profile_url from a listing page, keep the listing as a snapshot, and
+    report what changed since the previous one and which profiles to download. Returns a coverage report."""
+    import json
     create_tables(conn)
     rows = parse_listing(page)
     if not rows:
         raise ValueError("No project table found. Save FTA's Current CIG Projects page (Ctrl+S) and load that file.")
+    rows_json = json.dumps(sorted(rows, key=lambda r: (r["state"], r["name"])), sort_keys=True)
+    rows_sha = hashlib.sha256(rows_json.encode()).hexdigest()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, to_char(captured_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), rows_sha256, rows "
+                    "FROM cig_profile_listings ORDER BY id DESC LIMIT 1")
+        prev = cur.fetchone()
+    changes = listing_changes(prev[3], rows) if prev else []
+    if not prev or prev[2] != rows_sha:  # a listing identical to the last one isn't stored again
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO cig_profile_listings (source, rows_sha256, rows, changes) VALUES (%s,%s,%s::jsonb,%s::jsonb)",
+                        (source, rows_sha, rows_json, json.dumps(changes)))
     projects = current_projects(conn)
     pairs, extra, missing = match_listing(rows, projects)
     with conn.cursor() as cur:
@@ -137,9 +212,24 @@ def load_listing(conn, page):
                         (name, sponsor, state, r["profile_url"], r["name"], r["stage"]))
     conn.commit()
     return {"listed": len(rows), "projects": len(projects), "matched": len(pairs),
+            "compared_with": prev[1] if prev else None, "changes": changes, "to_download": to_download(conn, changes),
             "renamed": [f"{p[0]} <- {r['name']}" for p, r in pairs if cig.norm_name(p[0]) != cig.norm_name(r["name"])],
             "listed_not_in_dashboard": [f"{r['state']} {r['name']}" for r in extra],
             "projects_not_listed": [f"{p[2]} {p[0]}" for p in missing]}
+
+
+def load_pdf_links(conn, links):
+    """Record the PDF each project's FTA page links to ({profile_url: pdf_url}, e.g. read in a browser),
+    so to_download() can tell which profiles FTA has replaced. Returns to_download()."""
+    from urllib.parse import urlparse
+    create_tables(conn)
+    with conn.cursor() as cur:
+        for page, pdf in links.items():
+            if pdf and urlparse(pdf).hostname not in FTA_HOSTS:
+                continue
+            cur.execute("UPDATE cig_profile_pages SET pdf_url=%s, pdf_checked_at=now() WHERE profile_url=%s", (pdf, page))
+    conn.commit()
+    return to_download(conn)
 
 
 # ---- Step 3: archive versions ---------------------------------------------------------------------
@@ -404,6 +494,8 @@ def main():
     ap.add_argument("--ingest", nargs="+", metavar="PDF", help="archive these profile PDFs")
     ap.add_argument("--weekly", action="store_true", help="inbox + one polite try of FTA's listing page")
     ap.add_argument("--rediff", action="store_true", help="recompute every stored diff")
+    ap.add_argument("--pdf-links", metavar="JSON", help="{profile page url: pdf url} read from FTA's pages in a browser")
+    ap.add_argument("--to-download", action="store_true", help="list the profiles worth downloading")
     a = ap.parse_args()
     import psycopg
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
@@ -413,7 +505,22 @@ def main():
             with open(a.listing, encoding="utf-8", errors="replace") as fh:
                 rep = load_listing(conn, fh.read())
             for k, v in rep.items():
-                print(f"{k}: {v}")
+                if isinstance(v, list) and v and isinstance(v[0], dict):
+                    print(f"{k}: {len(v)}")
+                    for x in v:
+                        print("   ", x.get("kind") or x.get("project_name"), "|", x.get("name") or "", x.get("detail") or x.get("why"))
+                else:
+                    print(f"{k}: {v}")
+        if a.pdf_links:
+            import json
+            with open(a.pdf_links, encoding="utf-8") as fh:
+                load_pdf_links(conn, json.load(fh))
+            a.to_download = True
+        if a.to_download:
+            todo = to_download(conn)
+            print(f"TO DOWNLOAD: {len(todo)}")
+            for x in todo:
+                print(f"   {x['project_name'][:48]:48} {x['why']}")
         if a.seed:
             print("SEED")
             _print(seed(conn))

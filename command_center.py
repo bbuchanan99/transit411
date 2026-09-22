@@ -788,11 +788,17 @@ def cig_profiles_status():
                         "listing_status, files, new_versions, changed, unchanged, unmatched FROM cig_profile_runs "
                         "WHERE trigger IN ('weekly','manual','command line') ORDER BY id DESC LIMIT 1")
             last = cur.fetchone()
+            cur.execute("SELECT to_char(captured_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), changes "
+                        "FROM cig_profile_listings ORDER BY id DESC LIMIT 1")
+            listing = cur.fetchone()
+            todo = cig_profiles.to_download(c, listing[1] if listing else [])
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     keys = ["at", "trigger", "listing_status", "files", "new_versions", "changed", "unchanged", "unmatched"]
     return {"projects": projects, "linked": linked, "archived": archived, "versions": versions, "changed": changed,
-            "inbox": cig_profiles.INBOX_DIR, "last_check": dict(zip(keys, last)) if last else None}
+            "inbox": cig_profiles.INBOX_DIR, "last_check": dict(zip(keys, last)) if last else None,
+            "listing_at": listing[0] if listing else None, "listing_changes": listing[1] if listing else [],
+            "to_download": todo}
 
 
 class CigLink(BaseModel):
@@ -1117,6 +1123,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
       <button class="newq" id="gProfCheck" type="button" title="Process the inbox folder and try FTA's listing page once">Check now</button>
       <input type="file" id="gProfFile" accept="application/pdf,.pdf" multiple hidden>
       <input type="file" id="gListFile" accept=".html,.htm,text/html" hidden>
+      <div id="gProfTodo" style="flex-basis:100%"></div>
     </div>
     <details class="rcard" id="gLoadsBox" style="padding:0 18px;margin-bottom:14px">
       <summary style="padding:13px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px;cursor:pointer">Dashboard files <span id="gLoadsCount" style="font-weight:600;color:var(--muted)"></span></summary>
@@ -1484,7 +1491,17 @@ async function loadProfStatus(){
     const s=await r.json(),lc=s.last_check;
     el.innerHTML=esc(s.archived+" of "+s.projects+" projects archived · "+s.linked+" linked to FTA's page · "+s.versions+" versions ("+s.changed+" revisions)")
       +(lc?'<br>Last check '+esc(lc.at)+': '+esc(lc.listing_status||"")+(lc.files?" · "+esc(lc.files+" file(s) from the inbox"):""):"<br>No weekly check yet")
-      +'<br><span title="'+esc(s.inbox)+'">Inbox: data/cig_profiles/inbox on the NAS</span>';
+      +'<br><span title="'+esc(s.inbox)+'">Inbox: data/cig_profiles/inbox on the NAS</span>'
+      +(s.listing_at?' · FTA page loaded '+esc(s.listing_at)+((s.listing_changes||[]).length?" ("+s.listing_changes.length+" change(s) vs. the copy before)":""):"");
+    // What to fetch next: listing changes (new, stage, link), a newer PDF on FTA's page, or nothing archived.
+    const td=s.to_download||[],box=document.getElementById("gProfTodo");
+    box.innerHTML=td.length?'<details'+(td.length<=8?" open":"")+'><summary style="cursor:pointer;font-family:Archivo,sans-serif;font-weight:700;font-size:12px">To download ('+td.length+')</summary>'
+      +'<div style="font-family:Archivo,sans-serif;font-size:12px;padding:6px 0 2px">'+td.map(x=>{
+        const u=safeUrl(x.pdf_url)||safeUrl(x.profile_url);
+        return '<div style="padding:3px 0">'+(u?'<a href="'+esc(u)+'" target="_blank" rel="noopener noreferrer">'+esc(x.project_name)+'</a>':esc(x.project_name))
+          +' <span style="color:var(--muted)">— '+esc(x.why)+'</span></div>';}).join("")
+      +'<div style="color:var(--muted);padding-top:4px">Open each in your browser, download the PDF, then Upload profiles (or drop them in the inbox).</div></div></details>'
+      :'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">Nothing to download: every listed project has its current profile archived.</div>';
   }catch(e){el.textContent="";}
 }
 document.getElementById("gProfUpBtn").onclick=()=>document.getElementById("gProfFile").click();
@@ -1508,6 +1525,8 @@ document.getElementById("gListFile").addEventListener("change",async e=>{
     if(!r.ok){gNote("err","Not loaded: "+errText(t));}
     else{const d=JSON.parse(t);
       gNote("loading","Profile links: "+d.matched+" of "+d.projects+" projects matched ("+d.listed+" on FTA's page)."
+        +(d.compared_with?" Compared with the copy from "+d.compared_with+": "+(d.changes.length?d.changes.map(c=>c.name+" ("+c.detail+")").join("; "):"no changes")+".":"")
+        +" To download: "+d.to_download.length+"."
         +(d.projects_not_listed.length?" Not on FTA's page: "+d.projects_not_listed.join(", ")+".":"")
         +(d.listed_not_in_dashboard.length?" On FTA's page but not the dashboard: "+d.listed_not_in_dashboard.join(", ")+".":""));
       loadCIG();loadProfStatus();}
