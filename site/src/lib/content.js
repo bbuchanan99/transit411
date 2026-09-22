@@ -46,12 +46,17 @@ function formatDate(iso) {
   return isNaN(d) ? null : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "America/New_York" });
 }
 
-// API post -> what the pages render.
+// API post -> what the pages render. `body` is Transit411's own paraphrase (never the source's
+// article text); the "Source: name - url" line the API appends is stripped and shown as a link.
 function toPost(p) {
   const summary = p.summary ?? (p.body || "").split("\n\nSource:")[0].trim();
   return {
     id: p.id,
     slug: p.slug,
+    href: p.slug ? `/article/${p.slug}` : null,
+    paragraphs: (summary || "").split(/\n{2,}/).map((s) => s.trim()).filter(Boolean),
+    mode: Array.isArray(p.mode) ? p.mode : [],
+    programs: Array.isArray(p.programs) ? p.programs : [],
     pillar: p.pillar || "News",
     title: p.title,
     deck: summary || null,
@@ -79,6 +84,22 @@ function allPosts() {
 export async function getPosts(pillar) {
   const posts = await allPosts();
   return pillar ? posts.filter((p) => p.pillar === pillar) : posts;
+}
+
+// One post by slug (its article page), or null.
+export async function getPost(slug) {
+  return (await allPosts()).find((p) => p.slug === slug) || null;
+}
+
+// Other posts worth reading next to this one: same agency first, then same pillar.
+export async function getRelated(post, limit = 4) {
+  const posts = (await allPosts()).filter((p) => p.slug && p.slug !== post.slug);
+  const score = (p) =>
+    (p.agencies.some((a) => post.agencies.includes(a)) ? 4 : 0) +
+    (p.programs.some((x) => post.programs.includes(x)) ? 2 : 0) +
+    (p.pillar === post.pillar ? 1 : 0) + (p.state && p.state === post.state ? 1 : 0);
+  return posts.map((p) => [score(p), p]).filter(([s]) => s > 0)
+    .sort((a, b) => b[0] - a[0]).slice(0, limit).map(([, p]) => p);
 }
 
 // Latest CIG pipeline snapshot ({summary, projects}) from /api/cig; null if unavailable.

@@ -283,6 +283,15 @@ def _ensure_posts_link(cur):
     cur.execute("ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS item_id BIGINT")
 
 
+def _ensure_slugs(cur):
+    """Every post needs a stable slug: it is its page on the site (/article/<slug>). Fills in any
+    missing one from the title and id, and keeps them unique."""
+    cur.execute("""UPDATE content_posts SET slug = left(regexp_replace(lower(coalesce(title,'post')),
+                     '[^a-z0-9]+', '-', 'g'), 60) || '-' || id
+                   WHERE slug IS NULL OR btrim(slug) = ''""")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS content_posts_slug_uniq ON content_posts (slug)")
+
+
 @app.get("/api/publish/ready")
 def publish_ready():
     items = []
@@ -378,8 +387,11 @@ def publish_item(item_id: int):
 @app.get("/api/posts")
 def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Optional[str] = None,
           program: Optional[str] = None, tag: Optional[str] = None, state: Optional[str] = None,
-          featured: Optional[bool] = None):
+          featured: Optional[bool] = None, slug: Optional[str] = None):
+    """Published posts. `slug` returns just that post (its page on the site is /article/<slug>)."""
     where, params = ["status='published'"], []
+    if slug:
+        where.append("slug=%s"); params.append(slug)
     if pillar:
         where.append("pillar=%s"); params.append(pillar)
     if agency:
@@ -402,6 +414,8 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
     out = []
     try:
         with _db() as c, c.cursor() as cur:
+            _ensure_slugs(cur)
+            c.commit()
             cur.execute(sql, params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
