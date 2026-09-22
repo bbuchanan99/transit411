@@ -156,11 +156,11 @@ def listing_changes(old, new):
 def to_download(conn, changes=()):
     """Profiles worth downloading: current projects whose listing entry changed (new, stage, link) or
     whose FTA page links a PDF we haven't archived, plus current projects with no archived version."""
+    from urllib.parse import unquote
     with conn.cursor() as cur:
         cur.execute("""SELECT g.project_name, g.sponsor, g.listing_name, g.state, g.profile_url, g.pdf_url,
-                         (SELECT count(*) FROM cig_profile_versions v WHERE v.project_name=g.project_name AND v.sponsor=g.sponsor),
-                         EXISTS (SELECT 1 FROM cig_profile_versions v WHERE v.project_name=g.project_name AND v.sponsor=g.sponsor
-                                 AND (v.pdf_url=g.pdf_url OR v.file_name=regexp_replace(g.pdf_url, '^.*/', '')))
+                         (SELECT array_agg(coalesce(v.pdf_url,'') || '|' || coalesce(v.file_name,'')) FROM cig_profile_versions v
+                          WHERE v.project_name=g.project_name AND v.sponsor=g.sponsor)
                        FROM cig_profile_pages g
                        JOIN (SELECT DISTINCT project_name, coalesce(sponsor,'') AS sponsor FROM cig_projects
                              WHERE snapshot_date=(SELECT max(snapshot_date) FROM cig_projects)) p
@@ -168,7 +168,11 @@ def to_download(conn, changes=()):
         pages = cur.fetchall()
     changed = {(c["state"], cig.norm_name(c["name"])): c["detail"] for c in changes if c["kind"] != "removed"}
     out = []
-    for name, sponsor, lname, state, url, pdf, n, have_pdf in pages:
+    for name, sponsor, lname, state, url, pdf, archived in pages:
+        archived = [a.split("|", 1) for a in (archived or [])]
+        n = len(archived)
+        # Have we archived the file FTA's page links? Same link, or the same file name (links are URL-encoded).
+        have_pdf = bool(pdf) and any(u == pdf or f == unquote(pdf.rsplit("/", 1)[-1]) for u, f in archived)
         why = []
         if (state, cig.norm_name(lname or "")) in changed:
             why.append(changed[(state, cig.norm_name(lname or ""))])
