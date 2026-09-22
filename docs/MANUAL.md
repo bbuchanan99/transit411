@@ -57,13 +57,21 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
-  - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can be fetched by link.
+  - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can usually be fetched by link. Not always: on 2026-09-22 the same PDF link was served once and then refused. When Load from link says 403, download the PDF and upload it.
   - Command line: `--url <pdf>` (a specific/archived month), `--file <pdf>`. A PDF that parses to fewer than 20 projects (a layout change — e.g. dashboards before mid-2026) is refused and existing data is left unchanged.
   - Every load or refusal is logged in `cig_loads`, and each loaded PDF is kept in `DATA_DIR/cig`.
   - **Mode comes only from FTA — never guessed.** The dashboard has no mode column. A project is **BRT** when the dashboard's *Length of Exclusive BRT* column has a value (a number or TBD; N/A = not BRT). Otherwise its mode is the **Proposed Project** field of its FTA project profile PDF. Otherwise, or when the two disagree (e.g. Interstate Bridge Replacement, light rail plus BRT), it's **NULL, shown as "Unspecified"**. `mode_source` records which applied, and `profile_file` links the profile.
   - **Profiles:** FTA's profile pages block automated access, so download the profile PDFs in a browser (Current CIG Projects / annual report). Then run `docker compose run --rm -v <folder>:/in cig --profiles /in --out /in/cig_modes.json --remode`. It reads the PDFs, keeps copies in `DATA_DIR/cig/profiles`, writes the lookup and re-applies modes to every stored snapshot. Copy `cig_modes.json` into the repo's `reference/` folder (it's committed and reviewable), then rebuild the images so the served lookup matches. Project Development profiles are prose only (no Proposed Project field), so those projects stay Unspecified unless the dashboard's BRT column says BRT. Name matching is within the same state: exact normalized name, then a unique word-containment match, then a strict fuzzy match.
   - Coverage (2026-09-11): 40 of 47 sourced (31 from the BRT column, 9 from profiles), 7 Unspecified, and 46 of 47 linked to a profile (not Green Line BRT).
-- **API** — `/api/cig` (latest snapshot, filterable; rows include `mode_source` and `profile_file`), `/api/cig/history` (a project's month-by-month trajectory), `/api/cig/changes` (what changed between two snapshots), `/api/cig/loads` (load history, with the kept PDFs), `/api/cig/profile?file=` (a project's FTA profile PDF; only files listed in the lookup). An expanded project row links **FTA project profile (PDF)**.
+- **Profile archive (`cig_profiles.py`)** keeps every version of each project's FTA profile, with change tracking, the same way the dashboard is kept month by month.
+  - **Limits:** transit.dot.gov blocks automated access (Akamai 403) to the Current CIG Projects page and to each project's profile page, and we don't work around it. So links and PDFs come from your browser.
+  - **Profile links:** save the Current CIG Projects page (Ctrl+S, "Webpage, HTML only") and load it with **Load projects page** on the Grants tab. You can also drop it in the inbox, or run `cig-profiles --listing FILE`. That fills `cig_profile_pages.profile_url` (one row per project). On 2026-09-22: 51 listed, 46 of 47 current projects matched; Green Line BRT isn't on FTA's page.
+  - **Profile PDFs:** use **Upload profiles** (several at once), or drop them in the NAS folder `data/cig_profiles/inbox`. Each PDF is matched to a project by its title and state. One that doesn't match goes to `inbox/unmatched`; open that project and use **Upload a newer version**.
+  - **Versions** (`cig_profile_versions`): the PDF text is normalized and hashed (sha256). A new version is stored only when the text differs from every stored version of that project, so re-uploads and duplicates store nothing. A revision is marked `changed`, linked to `prev_version_id`, and diffed against it. Files are in `DATA_DIR/cig_profiles/<state-project>/<captured_at>.pdf`.
+  - **Baseline:** 46 versions, seeded from the PDFs kept by `cig.py --profiles`.
+  - **Weekly check:** the scheduler runs it on `CIG_PROFILES_DAY` (default Monday) at `COLLECT_AT`, and **Check now** runs it on demand. It processes the inbox and makes one request for FTA's listing page, logged in `cig_profile_runs`. Today that request gets a 403 and nothing else is requested. If FTA ever serves the page, profiles are fetched politely, and a PDF whose link matches the latest archived one isn't downloaded again.
+  - **Grants tab:** each project shows **Profile versions**, with capture date, FTA's date, the PDF and **Show changes** (the diff). A **profile updated** badge marks projects with a revision. This is Command Center only; the public API doesn't expose the archive.
+- **API** — `/api/cig` (latest snapshot, filterable; rows include `mode_source`, `profile_file`, `profile_url`, `profile_versions`, `profile_changed_at`), `/api/cig/history` (a project's month-by-month trajectory), `/api/cig/changes` (what changed between two snapshots), `/api/cig/loads` (load history, with the kept PDFs), `/api/cig/profile?file=` (a project's FTA profile PDF; only files listed in the lookup). An expanded project row links **FTA project profile (PDF)**.
 - **Ask CIG** — `/api/cig/ask`: plain-English → read-only SQL over `cig_projects` (its own Command Center tab). Queries run as the restricted `cig_reader` database role (can read `cig_projects` only), in a read-only transaction with a 5-second limit; the prompt lists the loaded snapshot dates.
 - The **Grants** tab shows the pipeline summary (with a stale warning after 45 days), a **Dashboard files** list, the project table (clicking a project expands its milestones and snapshot history), and below it a **What changed** panel (latest vs. previous month or any earlier one: new/dropped projects, phase moves, rating, grant-date, cost and CIG-request changes). The public `/cig` page uses the same order: table first, then What changed.
 
@@ -98,6 +106,9 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - `content_posts` — published posts the site reads (title, body, pillar, facets, featured/sponsor, `item_id` link).
 - `cig_projects` — the CIG pipeline, versioned by `snapshot_date`, with milestone dates.
 - `cig_loads` — every CIG dashboard load or refusal (source, name/link, projects, kept PDF path).
+- `cig_profile_pages` — each project's profile page on FTA's site (`profile_url`), from the saved listing page.
+- `cig_profile_versions` — every distinct version of each project's profile PDF: text hash, file, `changed`, `prev_version_id`, diff.
+- `cig_profile_runs` — each weekly/manual profile check and upload batch.
 - `subscribers` — newsletter list (schema present).
 - `app_settings` — small key/values (the auto-collect toggle, the scheduler's next/last run).
 
@@ -120,8 +131,9 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 | `ingest` | on-demand | `build_db.py` — (re)build the NTD DuckDB |
 | `collect` | on-demand | `collection.py` — run the collector / seed / migrate / backfill / normalize |
 | `cig` | on-demand | `cig.py` — load a CIG dashboard snapshot from the command line |
+| `cig-profiles` | on-demand | `cig_profiles.py` — profile archive: `--listing FILE`, `--ingest PDF...`, `--seed`, `--weekly`, `--rediff` |
 
-On-demand services use the `tools` profile: run with `docker compose run --rm <service> <args>`. Note that plain `docker compose build` skips them — also run `docker compose --profile tools build ingest collect cig` after code changes.
+On-demand services use the `tools` profile: run with `docker compose run --rm <service> <args>`. Note that plain `docker compose build` skips them — also run `docker compose --profile tools build ingest collect cig cig-profiles` after code changes.
 
 **Naming:** the compose file sets `name: transit411`, so every container, network and image is prefixed (`transit411-<service>-1`). Give new services plain names; the prefix is automatic.
 
@@ -135,7 +147,7 @@ All run on the NAS (via Claude Code or SSH), from the app folder `/share/Contain
 ```
 # (the NAS isn't a git checkout: copy the changed files into the app folder first — see §7)
 docker compose build
-docker compose --profile tools build ingest collect cig
+docker compose --profile tools build ingest collect cig cig-profiles
 docker compose up -d
 ```
 

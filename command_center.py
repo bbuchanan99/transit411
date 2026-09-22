@@ -456,13 +456,19 @@ def cig(phase: Optional[str] = None, mode: Optional[str] = None, rating: Optiona
             total_projects, total_cig = cur.fetchone()
             cur.execute("SELECT phase, count(*) FROM cig_projects WHERE snapshot_date=%s GROUP BY phase", (snap,))
             by_phase = {ph: n for ph, n in cur.fetchall()}
-            # profile_url = the project's page on FTA's Current CIG Projects list (cig_profile_pages).
+            # profile_url = the project's page on FTA's Current CIG Projects list (cig_profile_pages);
+            # profile_versions / profile_changed_at summarize its archived profile versions.
             cur.execute("SELECT p.id, p.project_name, p.sponsor, p.city, p.state, p.mode, p.phase, p.cost_musd, "
                         "p.cost_raw, p.cig_request_musd, p.cig_request_raw, p.cig_share, p.rating, p.noncig_status, "
                         "p.est_grant, p.nepa, p.pd_entry, p.eng_entry, p.lonp_req, p.lonp_dec, p.lonp_action, "
-                        "p.req_rating_date, p.proj_rating_date, p.mode_source, p.profile_file, g.profile_url "
+                        "p.req_rating_date, p.proj_rating_date, p.mode_source, p.profile_file, g.profile_url, "
+                        "v.n AS profile_versions, v.changed_at AS profile_changed_at "
                         "FROM cig_projects p LEFT JOIN cig_profile_pages g "
-                        "ON g.project_name=p.project_name AND g.sponsor=coalesce(p.sponsor,'') WHERE "
+                        "ON g.project_name=p.project_name AND g.sponsor=coalesce(p.sponsor,'') "
+                        "LEFT JOIN (SELECT project_name, sponsor, count(*) AS n, "
+                        "  to_char(max(captured_at) FILTER (WHERE changed), 'YYYY-MM-DD') AS changed_at "
+                        "  FROM cig_profile_versions GROUP BY 1, 2) v "
+                        "ON v.project_name=p.project_name AND v.sponsor=coalesce(p.sponsor,'') WHERE "
                         + " AND ".join(where) + " ORDER BY p.cig_request_musd DESC NULLS LAST, p.project_name", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
@@ -627,6 +633,166 @@ def cig_profile(file: str):
         raise HTTPException(404, "No FTA profile with that name.")
     return FileResponse(path, media_type="application/pdf", content_disposition_type="inline",
                         filename=os.path.basename(path))
+
+
+# ---- CIG project profile archive (cig_profiles.py): every version of each profile, with diffs ----
+# Command Center only (not in readonly-api's allowlist).
+MAX_LISTING_HTML = 10 * 1024 * 1024
+
+
+def _pv_row(r):
+    keys = ["id", "captured_at", "fta_date", "source", "file_name", "file_bytes", "changed", "prev_version_id",
+            "lines_added", "lines_removed", "has_file"]
+    return dict(zip(keys, r))
+
+
+@app.get("/api/cig/profile-versions")
+def cig_profile_versions(name: str, sponsor: Optional[str] = ""):
+    """A project's profile page link and every archived version of its profile, newest first."""
+    import cig_profiles
+    try:
+        with _db() as c, c.cursor() as cur:
+            cig_profiles.create_tables(c)
+            cur.execute("SELECT profile_url, listing_name, listing_stage FROM cig_profile_pages "
+                        "WHERE project_name=%s AND sponsor=%s", (name, sponsor or ""))
+            page = cur.fetchone()
+            cur.execute("SELECT id, to_char(captured_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), fta_date, "
+                        "source, file_name, file_bytes, changed, prev_version_id, lines_added, lines_removed, "
+                        "file_path IS NOT NULL FROM cig_profile_versions WHERE project_name=%s AND sponsor=%s "
+                        "ORDER BY captured_at DESC, id DESC", (name, sponsor or ""))
+            versions = [_pv_row(r) for r in cur.fetchall()]
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"name": name, "sponsor": sponsor, "profile_url": page[0] if page else None,
+            "listing_name": page[1] if page else None, "listing_stage": page[2] if page else None,
+            "versions": versions}
+
+
+def _pv_get(version_id, cols):
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute(f"SELECT {cols} FROM cig_profile_versions WHERE id=%s", (version_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not row:
+        raise HTTPException(404, "No such profile version.")
+    return row
+
+
+@app.get("/api/cig/profile-versions/{version_id}/file")
+def cig_profile_version_file(version_id: int):
+    """The archived PDF of one profile version (only ever from the archive folder)."""
+    import cig_profiles
+    from fastapi.responses import FileResponse
+    fp, fname = _pv_get(version_id, "file_path, file_name")
+    base = os.path.realpath(cig_profiles.ARCHIVE_DIR)
+    path = os.path.realpath(fp) if fp else None
+    if not path or not path.startswith(base + os.sep) or not os.path.isfile(path):
+        raise HTTPException(404, "The archived file is missing.")
+    return FileResponse(path, media_type="application/pdf", content_disposition_type="inline",
+                        filename=fname or os.path.basename(path))
+
+
+@app.get("/api/cig/profile-versions/{version_id}/diff")
+def cig_profile_version_diff(version_id: int):
+    """What changed in this version's text vs. the version before it."""
+    diff, added, removed, prev = _pv_get(version_id, "diff, lines_added, lines_removed, prev_version_id")
+    return {"id": version_id, "prev_version_id": prev, "diff": diff, "lines_added": added, "lines_removed": removed}
+
+
+@app.post("/api/cig/profiles/upload")
+async def cig_profiles_upload(request: Request, filename: str = "", name: Optional[str] = None,
+                              sponsor: Optional[str] = None):
+    """Archive a profile PDF downloaded in a browser (raw body). Matched to a project by its title and
+    state, or to name/sponsor when given (for a PDF that doesn't match on its own)."""
+    import asyncio
+    import cig_profiles
+    body = await request.body()
+    if len(body) > MAX_CIG_PDF:
+        raise HTTPException(413, "That file is over 25 MB.")
+    if not body.startswith(b"%PDF"):
+        raise HTTPException(400, "That isn't a PDF.")
+
+    def work():
+        with _db() as c:
+            project = None
+            if name:
+                with c.cursor() as cur:
+                    cur.execute("SELECT project_name, coalesce(sponsor,''), state FROM cig_projects WHERE project_name=%s "
+                                "AND coalesce(sponsor,'')=%s ORDER BY snapshot_date DESC LIMIT 1", (name, sponsor or ""))
+                    project = cur.fetchone()
+                if not project:
+                    raise HTTPException(404, "No such project.")
+            r = cig_profiles.ingest(c, body, os.path.basename(filename) or "upload.pdf", "upload", project=project)
+            cig_profiles.record_run(c, "upload", None, [r])
+            return r
+    try:
+        return await asyncio.to_thread(work)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(422, f"Couldn't read that PDF ({type(e).__name__}: {e}).")
+
+
+@app.post("/api/cig/profiles/listing")
+async def cig_profiles_listing(request: Request):
+    """Load profile links from FTA's Current CIG Projects page, saved in a browser (raw HTML body)."""
+    import cig_profiles
+    body = await request.body()
+    if len(body) > MAX_LISTING_HTML:
+        raise HTTPException(413, "That file is over 10 MB.")
+    try:
+        with _db() as c:
+            return cig_profiles.load_listing(c, body.decode("utf-8", errors="replace"))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.post("/api/cig/profiles/check")
+async def cig_profiles_check():
+    """Run the weekly check now: the inbox folder, then one try of FTA's listing page."""
+    import asyncio
+    import cig_profiles
+
+    def work():
+        with _db() as c:
+            out = cig_profiles.weekly(c, "manual")
+        return {"listing_status": out["listing_status"], "listing": out["listing"],
+                "results": [{k: r.get(k) for k in ("status", "file", "project_name", "message")} for r in out["results"]]}
+    try:
+        return await asyncio.to_thread(work)
+    except Exception as e:
+        raise HTTPException(502, f"Check failed: {e}")
+
+
+@app.get("/api/cig/profiles/status")
+def cig_profiles_status():
+    """Archive coverage against the current dashboard, and the last check."""
+    import cig_profiles
+    try:
+        with _db() as c, c.cursor() as cur:
+            cig_profiles.create_tables(c)
+            cur.execute("""SELECT count(*), count(g.profile_url), count(v.k)
+                           FROM cig_projects p
+                           LEFT JOIN cig_profile_pages g ON g.project_name=p.project_name AND g.sponsor=coalesce(p.sponsor,'')
+                           LEFT JOIN (SELECT DISTINCT project_name, sponsor, 1 AS k FROM cig_profile_versions) v
+                             ON v.project_name=p.project_name AND v.sponsor=coalesce(p.sponsor,'')
+                           WHERE p.snapshot_date=(SELECT max(snapshot_date) FROM cig_projects)""")
+            projects, linked, archived = cur.fetchone()
+            cur.execute("SELECT count(*), count(*) FILTER (WHERE changed) FROM cig_profile_versions")
+            versions, changed = cur.fetchone()
+            cur.execute("SELECT to_char(ran_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), trigger, "
+                        "listing_status, files, new_versions, changed, unchanged, unmatched FROM cig_profile_runs "
+                        "WHERE trigger IN ('weekly','manual','command line') ORDER BY id DESC LIMIT 1")
+            last = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    keys = ["at", "trigger", "listing_status", "files", "new_versions", "changed", "unchanged", "unmatched"]
+    return {"projects": projects, "linked": linked, "archived": archived, "versions": versions, "changed": changed,
+            "inbox": cig_profiles.INBOX_DIR, "last_check": dict(zip(keys, last)) if last else None}
 
 
 class CigLink(BaseModel):
@@ -943,6 +1109,15 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     </form>
     <div id="gMsg"></div>
     <div id="gSummary" style="margin-bottom:14px"></div>
+    <div class="rcard" id="gProf" style="padding:12px 18px;margin-bottom:14px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="font-family:Archivo,sans-serif;font-weight:800;font-size:14px">Project profiles</div>
+      <div id="gProfStat" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);flex:1;min-width:240px"></div>
+      <button class="newq" id="gProfUpBtn" type="button" title="Profile PDFs downloaded from each project's page on transit.dot.gov">Upload profiles</button>
+      <button class="newq" id="gListBtn" type="button" title="FTA's Current CIG Projects page, saved in your browser (Ctrl+S, Webpage HTML only)">Load projects page</button>
+      <button class="newq" id="gProfCheck" type="button" title="Process the inbox folder and try FTA's listing page once">Check now</button>
+      <input type="file" id="gProfFile" accept="application/pdf,.pdf" multiple hidden>
+      <input type="file" id="gListFile" accept=".html,.htm,text/html" hidden>
+    </div>
     <details class="rcard" id="gLoadsBox" style="padding:0 18px;margin-bottom:14px">
       <summary style="padding:13px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px;cursor:pointer">Dashboard files <span id="gLoadsCount" style="font-weight:600;color:var(--muted)"></span></summary>
       <div id="gLoads" style="padding-bottom:12px"></div>
@@ -1259,7 +1434,7 @@ function gStat(v,l){return '<div><div style="font-family:Archivo,sans-serif;font
 async function loadCIG(){
   const out=document.getElementById("gOut"),sum=document.getElementById("gSummary");
   out.innerHTML='<div class="rcard"><div class="loading">Loading the pipeline...</div></div>';
-  loadChanges();loadLoads();
+  loadChanges();loadLoads();loadProfStatus();
   try{
     const q=gPhase?("?phase="+encodeURIComponent(gPhase)):"";
     const d=await (await fetch("/api/cig"+q)).json();
@@ -1273,10 +1448,81 @@ async function loadCIG(){
           +(stale?' &middot; '+age+' days old - time to upload a new one':'')
           +(s.snapshots>1?' &middot; '+s.snapshots+' months of history':'')+'</div>';})()+'</div>';
     if(!d.projects||!d.projects.length){out.innerHTML='<div class="rcard"><div class="loading">'+(s.projects?'No projects in this phase.':'No projects loaded yet. Download the CIG dashboard PDF at transit.dot.gov/CIG, then click Upload dashboard.')+'</div></div>';return;}
-    // Shared component (static/t411.js): the same table, milestones and history the public site uses.
-    T411.renderCigTable(out, d.projects);
+    // Shared component (static/t411.js): the same table, milestones and history the public site uses,
+    // plus (here only) each project's archived profile versions and diffs.
+    T411.renderCigTable(out, d.projects, {
+      profileVersions: p => fetch("/api/cig/profile-versions?name="+encodeURIComponent(p.project_name)+"&sponsor="+encodeURIComponent(p.sponsor||""))
+        .then(r => r.ok ? r.json() : Promise.reject(r.status)),
+      profileOpts: {
+        fileUrl: id => "/api/cig/profile-versions/"+id+"/file",
+        fetchDiff: id => fetch("/api/cig/profile-versions/"+id+"/diff").then(r => r.ok ? r.json() : Promise.reject(r.status)),
+        onUpload: async (p, f) => {
+          const r = await fetch("/api/cig/profiles/upload?filename="+encodeURIComponent(f.name)+"&name="+encodeURIComponent(p.project_name)
+            +"&sponsor="+encodeURIComponent(p.sponsor||""), {method:"POST", headers:{"Content-Type":"application/pdf"}, body:f});
+          const t = await r.text();
+          if (!r.ok) throw new Error("Not archived: "+errText(t));
+          const x = JSON.parse(t);
+          return {text: gProfText(x), reload: () => { loadCIG(); loadProfStatus(); }};
+        }
+      }
+    });
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load the pipeline.</div></div>';}
 }
+
+// ---- Project profiles: archive status, uploads, the saved listing page, and the weekly check ----
+function gProfText(x){
+  const who=x.project_name?" ("+x.project_name+")":"";
+  return {new:"Archived as the first version"+who+".",changed:"New version archived"+who+": +"+(x.lines_added||0)+" / −"+(x.lines_removed||0)+" lines changed.",
+    unchanged:"Already archived"+who+" - same text as "+(x.is_latest?"the current":"an earlier")+" version, so nothing was stored.",
+    unmatched:"Not archived: "+(x.message||"no matching project")+". Open the project below and use Upload a newer version.",
+    unreadable:"Not archived: "+(x.message||"unreadable")+"."}[x.status]||x.status;
+}
+async function loadProfStatus(){
+  const el=document.getElementById("gProfStat");
+  try{
+    const r=await fetch("/api/cig/profiles/status");if(!r.ok){el.textContent="";return;}
+    const s=await r.json(),lc=s.last_check;
+    el.innerHTML=esc(s.archived+" of "+s.projects+" projects archived · "+s.linked+" linked to FTA's page · "+s.versions+" versions ("+s.changed+" revisions)")
+      +(lc?'<br>Last check '+esc(lc.at)+': '+esc(lc.listing_status||"")+(lc.files?" · "+esc(lc.files+" file(s) from the inbox"):""):"<br>No weekly check yet")
+      +'<br><span title="'+esc(s.inbox)+'">Inbox: data/cig_profiles/inbox on the NAS</span>';
+  }catch(e){el.textContent="";}
+}
+document.getElementById("gProfUpBtn").onclick=()=>document.getElementById("gProfFile").click();
+document.getElementById("gProfFile").addEventListener("change",async e=>{
+  const files=[...e.target.files];e.target.value="";if(!files.length)return;
+  const btn=document.getElementById("gProfUpBtn");btn.disabled=true;const lines=[];
+  for(const f of files){
+    gNote("loading","Archiving "+f.name+"...");
+    try{const r=await fetch("/api/cig/profiles/upload?filename="+encodeURIComponent(f.name),{method:"POST",headers:{"Content-Type":"application/pdf"},body:f});
+      const t=await r.text();lines.push(f.name+": "+(r.ok?gProfText(JSON.parse(t)):"Not archived: "+errText(t)));}
+    catch(err){lines.push(f.name+": couldn't reach the Command Center.");}
+  }
+  gNote("loading",lines.join("  •  "));btn.disabled=false;loadCIG();loadProfStatus();
+});
+document.getElementById("gListBtn").onclick=()=>document.getElementById("gListFile").click();
+document.getElementById("gListFile").addEventListener("change",async e=>{
+  const f=e.target.files[0];e.target.value="";if(!f)return;
+  gNote("loading","Reading "+f.name+"...");
+  try{const r=await fetch("/api/cig/profiles/listing",{method:"POST",headers:{"Content-Type":"text/html"},body:f});
+    const t=await r.text();
+    if(!r.ok){gNote("err","Not loaded: "+errText(t));}
+    else{const d=JSON.parse(t);
+      gNote("loading","Profile links: "+d.matched+" of "+d.projects+" projects matched ("+d.listed+" on FTA's page)."
+        +(d.projects_not_listed.length?" Not on FTA's page: "+d.projects_not_listed.join(", ")+".":"")
+        +(d.listed_not_in_dashboard.length?" On FTA's page but not the dashboard: "+d.listed_not_in_dashboard.join(", ")+".":""));
+      loadCIG();loadProfStatus();}
+  }catch(err){gNote("err","Couldn't reach the Command Center.");}
+});
+document.getElementById("gProfCheck").onclick=async()=>{
+  const btn=document.getElementById("gProfCheck");btn.disabled=true;gNote("loading","Checking the inbox and FTA's listing page...");
+  try{const r=await fetch("/api/cig/profiles/check",{method:"POST"});const t=await r.text();
+    if(!r.ok)gNote("err",errText(t));
+    else{const d=JSON.parse(t),res=d.results||[];
+      gNote("loading","FTA: "+d.listing_status+". Inbox: "+(res.length?res.map(x=>x.file+" → "+x.status).join(", "):"empty")+".");
+      loadCIG();}
+  }catch(err){gNote("err","Couldn't reach the Command Center.");}
+  btn.disabled=false;loadProfStatus();
+};
 
 // ---- What changed (shared component) ----
 let gSince="";

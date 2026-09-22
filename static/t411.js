@@ -7,16 +7,20 @@
   function esc(s) { return (s == null ? "" : String(s)).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function amt(num, raw) { return num != null ? ("$" + Number(num).toLocaleString(undefined, { maximumFractionDigits: 0 }) + "M") : (raw ? esc(raw) : "-"); }
 
-  function cigRow(p, i) {
+  function cigRow(p, i, opts) {
     const rt = p.rating ? ('<span title="' + esc(RATING[p.rating] || "") + '">' + esc(p.rating) + '</span>') : '-';
-    return '<tr class="t411-row" data-i="' + i + '" title="Show milestone dates"><td style="font-weight:600">' + esc(p.project_name) + '</td><td>' + esc(p.sponsor) + '</td>'
+    const pv = !!(opts && opts.profileVersions);
+    const upd = pv && p.profile_changed_at
+      ? ' <span class="t411-badge t411-k-date" title="FTA revised this project\'s profile (archived ' + esc(p.profile_changed_at) + ')">profile updated</span>' : '';
+    return '<tr class="t411-row" data-i="' + i + '" title="Show milestone dates"><td style="font-weight:600">' + esc(p.project_name) + upd + '</td><td>' + esc(p.sponsor) + '</td>'
       + '<td>' + esc(p.city || "") + ', ' + esc(p.state || "") + '</td>' + (p.mode ? '<td title="' + esc(p.mode_source ? "Source: " + p.mode_source : "") + '">' + esc(p.mode) + '</td>'
         : '<td class="t411-unspec" title="' + esc(p.mode_source ? "Not stated: " + p.mode_source : "Not stated by FTA sources") + '">Unspecified</td>') + '<td>' + esc(p.phase) + '</td>'
       + '<td class="num">' + amt(p.cost_musd, p.cost_raw) + '</td><td class="num">' + amt(p.cig_request_musd, p.cig_request_raw) + '</td>'
       + '<td class="num">' + esc(p.cig_share || "-") + '</td><td>' + rt + '</td><td>' + esc(p.est_grant || "-") + '</td></tr>'
       + '<tr class="t411-detail" data-i="' + i + '" hidden><td colspan="10"><div class="t411-ms-title">Milestones</div>'
       + '<div class="t411-ms-box"></div><button type="button" class="t411-btn" data-hist="' + i + '">Show snapshot history</button>'
-      + '<div class="t411-tl-box"></div></td></tr>';
+      + (pv ? ' <button type="button" class="t411-btn" data-pv="' + i + '">Profile versions' + (p.profile_versions ? ' (' + p.profile_versions + ')' : '') + '</button>' : '')
+      + '<div class="t411-tl-box"></div>' + (pv ? '<div class="t411-pv-box"></div>' : '') + '</td></tr>';
   }
 
   function defaultHistory(p) {
@@ -36,17 +40,29 @@
   function renderCigTable(el, projects, opts) {
     opts = opts || {};
     if (!projects || !projects.length) { el.innerHTML = '<div class="t411-empty">' + esc(opts.emptyText || "No projects.") + '</div>'; return; }
-    el._t411 = { projects: projects, fetchHistory: opts.fetchHistory || defaultHistory, apiBase: opts.apiBase || "" };
+    // opts.profileVersions(project) -> Promise of /api/cig/profile-versions data (Command Center only):
+    // adds a "Profile versions" button to each project and a "profile updated" badge.
+    el._t411 = { projects: projects, fetchHistory: opts.fetchHistory || defaultHistory, apiBase: opts.apiBase || "",
+                 profileVersions: opts.profileVersions, profileOpts: opts.profileOpts || {} };
     el.innerHTML = '<div class="t411-card"><div class="t411-scroll"><table class="t411-table"><thead><tr>'
       + '<th>Project</th><th>Sponsor</th><th>Location</th><th title="' + esc(MODE_NOTE) + '">Mode<sup class="t411-fn">*</sup></th>'
       + '<th>Phase</th><th>Cost</th><th>CIG</th><th>Share</th><th>Rating</th><th>Est. grant</th>'
-      + '</tr></thead><tbody>' + projects.map(cigRow).join("") + '</tbody></table></div>'
+      + '</tr></thead><tbody>' + projects.map((p, i) => cigRow(p, i, opts)).join("") + '</tbody></table></div>'
       + '<div class="t411-footnote"><sup class="t411-fn">*</sup> ' + esc(MODE_NOTE) + '</div>'
       + '</div>';
     if (el._t411Bound) return;
     el._t411Bound = true;
     el.addEventListener("click", function (e) {
       const st = el._t411;
+      const vb = e.target.closest("[data-pv]");
+      if (vb && st.profileVersions) {
+        const p = st.projects[+vb.dataset.pv], box = vb.parentElement.querySelector(".t411-pv-box");
+        box.innerHTML = '<div class="t411-empty">Loading...</div>';
+        st.profileVersions(p).then(d => renderCigProfileVersions(box, d, Object.assign({ project: p }, st.profileOpts)))
+          .catch(() => { box.innerHTML = '<div class="t411-empty">Could not load profile versions.</div>'; });
+        return;
+      }
+      if (e.target.closest(".t411-pv-box")) return;  // clicks inside the versions panel are its own
       const hb = e.target.closest("[data-hist]");
       if (hb) {
         const p = st.projects[+hb.dataset.hist], box = hb.parentElement.querySelector(".t411-tl-box");
@@ -67,10 +83,12 @@
   // Per-project milestone dates (from a /api/cig row), plus a link to its FTA project profile PDF.
   function renderCigMilestones(el, p, opts) {
     const base = (opts && opts.apiBase) || "";
-    const prof = p.profile_file
-      ? '<a class="t411-prof" href="' + esc(base + "/api/cig/profile?file=" + encodeURIComponent(p.profile_file))
-        + '" target="_blank" rel="noopener noreferrer">FTA project profile (PDF)</a>'
-      : '';
+    const links = [];
+    if (p.profile_file) links.push('<a class="t411-prof" href="' + esc(base + "/api/cig/profile?file=" + encodeURIComponent(p.profile_file))
+      + '" target="_blank" rel="noopener noreferrer">FTA project profile (PDF)</a>');
+    if (/^https:\/\/(www\.)?transit\.dot\.gov\//.test(p.profile_url || ""))
+      links.push('<a class="t411-prof" href="' + esc(p.profile_url) + '" target="_blank" rel="noopener noreferrer">Profile page on transit.dot.gov</a>');
+    const prof = links.length ? '<div class="t411-prof-links">' + links.join(" ") + '</div>' : '';
     const items = [["PD entry", p.pd_entry], ["NEPA complete", p.nepa], ["Engineering entry", p.eng_entry],
       ["LONP request", p.lonp_req], ["LONP decision", p.lonp_dec], ["LONP action", p.lonp_action],
       ["Rating requested", p.req_rating_date], ["Project rated", p.proj_rating_date],
@@ -79,6 +97,55 @@
     const chips = items.filter(x => x[1]).map(x =>
       '<span class="t411-ms"><span class="t411-ms-k">' + x[0] + '</span><span class="t411-ms-v">' + esc(x[1]) + '</span></span>').join("");
     el.innerHTML = (chips || '<div class="t411-empty">No milestone dates recorded.</div>') + prof;
+  }
+
+  // Archived versions of a project's FTA profile (from /api/cig/profile-versions), newest first, each
+  // with its PDF and, when FTA revised it, a diff against the version before. opts.fileUrl(id),
+  // opts.fetchDiff(id) -> Promise of {diff}, and optionally opts.onUpload(project, file) -> Promise
+  // (an "Upload a newer version" button) come from the host page.
+  const PV_SRC = { seed: "first download", upload: "upload", inbox: "inbox", weekly: "inbox (weekly)", manual: "inbox",
+                   fta: "fetched from FTA", "command line": "command line" };
+  function renderCigProfileVersions(el, data, opts) {
+    opts = opts || {};
+    const v = (data && data.versions) || [];
+    const rows = v.map((x, i) => {
+      const badge = !x.prev_version_id ? '<span class="t411-badge">' + (i === v.length - 1 ? "baseline" : "first") + '</span>'
+        : '<span class="t411-badge t411-k-phase">changed</span> <span class="t411-pv-n">+' + (x.lines_added || 0) + ' / −' + (x.lines_removed || 0) + ' lines</span>';
+      return '<div class="t411-pv-row"><span class="t411-tl-date">' + esc(x.captured_at) + '</span>' + badge
+        + (x.fta_date ? ' <span class="t411-pv-n" title="Date in FTA\'s file name">FTA dated ' + esc(x.fta_date) + '</span>' : '')
+        + ' <span class="t411-pv-n">' + esc(PV_SRC[x.source] || x.source || "") + '</span>'
+        + (x.has_file && opts.fileUrl ? ' <a href="' + esc(opts.fileUrl(x.id)) + '" target="_blank" rel="noopener" title="' + esc(x.file_name || "") + '">PDF</a>' : '')
+        + (x.prev_version_id && opts.fetchDiff ? ' <button type="button" class="t411-linkbtn" data-diff="' + x.id + '">Show changes</button>' : '')
+        + '<div class="t411-diff-box" data-for="' + x.id + '"></div></div>';
+    }).join("");
+    const head = '<div class="t411-ms-title">FTA profile versions</div>';
+    const up = opts.onUpload ? '<button type="button" class="t411-btn" data-pvup="1">Upload a newer version</button><input type="file" accept="application/pdf,.pdf" hidden>' : '';
+    el.innerHTML = '<div class="t411-pv">' + head + (rows || '<div class="t411-empty">No archived profile yet.</div>') + up + '<div class="t411-pv-msg"></div></div>';
+    el.onclick = function (e) {
+      const db = e.target.closest("[data-diff]");
+      if (db) {
+        const box = el.querySelector('.t411-diff-box[data-for="' + db.dataset.diff + '"]');
+        if (box.innerHTML) { box.innerHTML = ""; db.textContent = "Show changes"; return; }
+        box.innerHTML = '<div class="t411-empty">Loading...</div>';
+        opts.fetchDiff(+db.dataset.diff).then(d => { box.innerHTML = diffHtml(d.diff); db.textContent = "Hide changes"; })
+          .catch(() => { box.innerHTML = '<div class="t411-empty">Could not load the changes.</div>'; });
+        return;
+      }
+      if (e.target.closest("[data-pvup]")) el.querySelector('input[type="file"]').click();
+    };
+    const inp = el.querySelector('input[type="file"]');
+    if (inp) inp.onchange = function () {
+      const f = inp.files[0]; inp.value = ""; if (!f) return;
+      const msg = el.querySelector(".t411-pv-msg"); msg.textContent = "Reading " + f.name + "...";
+      opts.onUpload(opts.project, f).then(r => { msg.textContent = r.text || ""; if (r.reload) r.reload(); })
+        .catch(err => { msg.textContent = String(err && err.message || err); });
+    };
+  }
+  function diffHtml(diff) {
+    if (!diff) return '<div class="t411-empty">No text changes recorded.</div>';
+    return '<pre class="t411-diff">' + diff.split("\n").filter(l => !/^(---|\+\+\+) /.test(l)).map(l =>
+      '<span class="' + (l.startsWith("+") ? "t411-d-add" : l.startsWith("-") ? "t411-d-del" : l.startsWith("@@") ? "t411-d-hunk" : "") + '">'
+      + esc(l.startsWith("@@") ? "…" : l) + '</span>').join("\n") + '</pre>';
   }
 
   // Snapshot history / change log (from /api/cig/history). Shows what moved each month.
@@ -253,5 +320,6 @@
   }
 
   window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
+                  renderCigProfileVersions,
                   colLabel, colKind, fmtCell, errorText, askCardHtml };
 })();
