@@ -164,5 +164,79 @@
     return true;
   }
 
-  window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject };
+  // ---- Ask NTD / Ask CIG answers ---------------------------------------------------------------
+  // Column-type formatting (same rules as the Command Center): money by name, *_musd = $ millions,
+  // percent/ratio/year columns, big numbers shortened to M/B.
+  const LABELS = {
+    upt: "Trips", agency: "Agency", mode: "Mode", mode_code: "Mode code", state: "State", city: "City",
+    ntd_id: "NTD ID", report_year: "Year", operating_expense: "Operating expense", cost_per_rider: "Cost per rider",
+    fare_recovery: "Fare recovery", fares: "Fares", voms: "Peak vehicles", passenger_miles: "Passenger miles",
+    vehicle_revenue_miles: "Revenue miles", vehicle_revenue_hours: "Revenue hours",
+    cost_per_revenue_hour: "Cost per revenue hour", avg_trip_miles: "Avg trip (miles)", project_name: "Project",
+    sponsor: "Sponsor", phase: "Phase", rating: "Rating", cig_share: "CIG share", est_grant: "Est. grant",
+    noncig_status: "Local match", snapshot_date: "Snapshot", cost_musd: "Cost", cig_request_musd: "CIG request",
+  };
+  function colLabel(c) {
+    const real = /_real(_|$)/.test(c);
+    const base = c.replace(/_real(_|$)/, "$1").replace(/_$/, "");
+    let s = LABELS[base] || base.replace(/_musd$/, "").replace(/_/g, " ");
+    s = s.charAt(0).toUpperCase() + s.slice(1);
+    return real ? s + " (inflation-adj.)" : s;
+  }
+  function colKind(c, rows) {
+    const n = c.toLowerCase(), vals = rows.map(r => r[c]).filter(v => v != null);
+    if (!vals.length || !vals.every(v => typeof v === "number" && isFinite(v))) return "text";
+    if (/(^|_)(year|yr)$|^year/.test(n)) return "year";
+    if (/(^|_)id$/.test(n)) return "text";
+    if (/musd/.test(n)) return "musd";
+    if (/percent|pct/.test(n)) return "pct";
+    if (/recovery|ratio/.test(n)) return "ratio";
+    if (/factor|cpi/.test(n)) return "num";
+    if (/cost|expense|opex|fare|dollar|spend|price|cpr|_real/.test(n)) return "money";
+    return "num";
+  }
+  function fmtCell(v, k) {
+    if (v == null) return "—";
+    if (k === "text") return String(v);
+    if (k === "year") return String(Math.round(v));
+    if (k === "pct") return v.toFixed(1) + "%";
+    if (k === "ratio") return (v * 100).toFixed(1) + "%";
+    if (k === "musd") return (v < 0 ? "-" : "") + "$" + Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 1 }) + "M";
+    const a = Math.abs(v); let s;
+    if (a >= 1e9) s = (a / 1e9).toFixed(2) + "B";
+    else if (a >= 1e6) s = (a / 1e6).toFixed(1) + "M";
+    else if (Number.isInteger(v) || a >= 1000) s = Math.round(a).toLocaleString();
+    else s = a.toLocaleString(undefined, { minimumFractionDigits: k === "money" ? 2 : 0, maximumFractionDigits: 2 });
+    return (v < 0 ? "-" : "") + (k === "money" ? "$" : "") + s;
+  }
+
+  // Readable message from an API error body ({"detail": "..."} or {"detail": {"error": ...}}).
+  function errorText(body, status) {
+    let t = body;
+    for (let i = 0; i < 2; i++) {
+      try { const d = JSON.parse(t).detail; t = typeof d === "string" ? d : (d && d.error) || JSON.stringify(d); } catch (_) { break; }
+    }
+    return t || ("Something went wrong (HTTP " + status + ").");
+  }
+
+  // One answer card: heading, table and the SQL that produced it. `res` is the /api/ask or
+  // /api/cig/ask response ({question, sql, columns, rows}; rows may be objects or arrays).
+  function askCardHtml(res, opts) {
+    opts = opts || {};
+    const cols = res.columns || [];
+    const rows = (res.rows || []).map(r => Array.isArray(r) ? Object.fromEntries(cols.map((c, i) => [c, r[i]])) : r);
+    const kinds = Object.fromEntries(cols.map(c => [c, colKind(c, rows)]));
+    const head = '<div class="t411-ask-head">' + (opts.followUp ? '<span class="t411-ask-fu">Follow-up</span>' : "")
+      + esc(res.question) + ' <span class="t411-ask-n">' + rows.length + (rows.length === 1 ? " row" : " rows") + '</span></div>';
+    const table = rows.length
+      ? '<div class="t411-scroll"><table class="t411-table"><thead><tr>' + cols.map(c => '<th class="' + (kinds[c] === "text" ? "" : "num") + '" title="' + esc(c) + '">' + esc(colLabel(c)) + '</th>').join("")
+        + '</tr></thead><tbody>' + rows.map(r => '<tr>' + cols.map(c => '<td class="' + (kinds[c] === "text" ? "" : "num") + '">' + esc(fmtCell(r[c], kinds[c])) + '</td>').join("") + '</tr>').join("")
+        + '</tbody></table></div>'
+      : '<div class="t411-empty">No matching rows. Try different years, modes, agencies or wording.</div>';
+    const sql = res.sql ? '<details class="t411-sql"><summary>Show the query used to answer this</summary><pre>' + esc(res.sql) + '</pre></details>' : "";
+    return '<div class="t411-card t411-ask">' + head + table + sql + '</div>';
+  }
+
+  window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
+                  colLabel, colKind, fmtCell, errorText, askCardHtml };
 })();

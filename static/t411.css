@@ -21,6 +21,15 @@
 .t411-btn{font-family:'Archivo',system-ui,sans-serif;font-size:12px;font-weight:600;padding:7px 12px;margin-top:4px;border:1px solid var(--line,#ddd);background:transparent;color:var(--ink,#111);border-radius:999px;cursor:pointer}
 .t411-btn:hover{border-color:var(--accent,#c0341f);color:var(--accent,#c0341f)}
 .t411-row.t411-flash td{background:#FCE9C9;transition:background .3s}
+/* Ask NTD / Ask CIG answers */
+.t411-ask{margin-bottom:14px}
+.t411-ask-head{background:var(--ink,#111);color:var(--panel,#f7f7f7);padding:11px 18px;font-family:'Archivo',system-ui,sans-serif;font-size:14px;font-weight:700}
+.t411-ask-fu{color:var(--accent-lite,#EE6A54);font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin-right:8px}
+.t411-ask-n{font-weight:600;opacity:.7;font-size:12px;margin-left:6px}
+.t411-table th.num,.t411-table td.num{text-align:right}
+.t411-sql{margin:0 18px 14px;border:1px solid var(--line,#ddd);background:var(--panel,#f7f7f7)}
+.t411-sql summary{cursor:pointer;padding:9px 12px;font-family:'Archivo',system-ui,sans-serif;font-size:12px;font-weight:700;color:var(--muted,#666)}
+.t411-sql pre{margin:0;padding:0 12px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;white-space:pre-wrap;color:var(--ink,#111)}
 /* What changed */
 .t411-ch{padding:14px 18px;margin-bottom:14px}
 .t411-ch-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px}

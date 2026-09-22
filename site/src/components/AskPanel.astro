@@ -1,0 +1,85 @@
+---
+// Plain-English question box over the public API (Ask NTD / Ask CIG). Mirrors the Command Center:
+// answers show as a table with the generated SQL; follow-ups ("what about Texas?") refine the previous
+// question until "New question". Answers are drawn by the shared bundle (T411.askCardHtml), so the page
+// that uses this must load /vendor/t411.js + /vendor/t411.css.
+import { API_BASE } from "../lib/content.js";
+const { endpoint, examples = [], placeholder = "Ask a question..." } = Astro.props;
+---
+<div class="ask" data-api={API_BASE} data-endpoint={endpoint}>
+  <form class="ask-form">
+    <label class="ask-label" for="ask-q">Your question</label>
+    <div class="ask-row">
+      <input id="ask-q" type="text" name="q" maxlength="500" autocomplete="off" placeholder={placeholder} />
+      <button type="submit" class="ask-go">Ask</button>
+    </div>
+  </form>
+  <div class="ask-bar">
+    <div class="ask-examples">
+      <span class="ask-ex-h">Try:</span>
+      {examples.map((q) => <button type="button" class="ask-ex" data-q={q}>{q}</button>)}
+    </div>
+    <div class="ask-thread-ctl" hidden>
+      <span>Follow-ups build on your last question.</span>
+      <button type="button" class="ask-new">New question</button>
+    </div>
+  </div>
+  <div class="ask-status" role="status" aria-live="polite"></div>
+  <div class="ask-out"></div>
+  <p class="ask-fine">
+    Each question is turned into a read-only database query by AI and run against the data; check the query
+    shown with each answer before relying on it. Questions are limited per visitor per hour.
+  </p>
+</div>
+
+<script>
+  const root = document.querySelector(".ask");
+  const api = root.dataset.api, endpoint = root.dataset.endpoint;
+  const input = root.querySelector("#ask-q"), out = root.querySelector(".ask-out");
+  const status = root.querySelector(".ask-status"), ctl = root.querySelector(".ask-thread-ctl");
+  const go = root.querySelector(".ask-go");
+  let thread = [];  // [{question, sql}] sent as history so follow-ups refine the last query
+
+  function setStatus(text, isError) {
+    status.textContent = text || "";
+    status.classList.toggle("err", !!isError);
+  }
+
+  async function ask(q) {
+    q = q.trim();
+    if (!q) return;
+    const T411 = window.T411;
+    if (!T411) { setStatus("The answer viewer didn't load. Please refresh the page.", true); return; }
+    go.disabled = true;
+    setStatus(thread.length ? "Working on your follow-up..." : "Working on it — this usually takes a few seconds...");
+    try {
+      const r = await fetch(api + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, history: thread.slice(-6) }),
+      });
+      const text = await r.text();
+      if (!r.ok) { setStatus(T411.errorText(text, r.status), true); return; }
+      const res = JSON.parse(text);
+      out.insertAdjacentHTML("afterbegin", T411.askCardHtml(res, { followUp: thread.length > 0 }));
+      thread.push({ question: res.question || q, sql: res.sql || "" });
+      ctl.hidden = false;
+      input.value = "";
+      setStatus("");
+    } catch (e) {
+      setStatus("Couldn't reach the Transit411 data service. Please try again in a moment.", true);
+    } finally {
+      go.disabled = false;
+      input.focus();
+    }
+  }
+
+  root.querySelector(".ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask(input.value); });
+  root.querySelectorAll(".ask-ex").forEach((b) => b.addEventListener("click", () => {
+    thread = []; out.innerHTML = ""; ctl.hidden = true;  // an example starts a fresh question
+    input.value = b.dataset.q; ask(b.dataset.q);
+  }));
+  root.querySelector(".ask-new").addEventListener("click", () => {
+    thread = []; out.innerHTML = ""; ctl.hidden = true; setStatus(""); input.value = ""; input.focus();
+  });
+</script>

@@ -103,6 +103,25 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .empty{display:flex;flex-direction:column;gap:6px;padding:28px;margin:8px 0 20px;border:1px dashed var(--line);font-size:15px;color:var(--muted)}
 .empty strong{font-family:'Archivo',sans-serif;font-size:17px;color:var(--ink)}
 .empty-lead{margin:34px 0 0;padding:40px}
+/* Ask NTD / Ask CIG pages (answer tables come from /vendor/t411.css) */
+.ask{margin:6px 0 20px}
+.ask-label{display:block;font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.ask-row{display:flex;gap:10px;flex-wrap:wrap}
+.ask-row input{flex:1 1 320px;min-width:0;padding:14px 15px;border:1px solid var(--ink);background:var(--card);color:var(--ink);font-size:16px;font-family:'Spectral',serif}
+.ask-row input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.ask-go{background:var(--accent);color:#fff;border:none;padding:0 28px;font-family:'Archivo',sans-serif;font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;min-height:48px}
+.ask-go:disabled{opacity:.6;cursor:progress}
+.ask-bar{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;margin:12px 0 16px}
+.ask-examples{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ask-ex-h{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;color:var(--muted)}
+.ask-ex{font-family:'Archivo',sans-serif;font-size:12px;font-weight:600;padding:6px 12px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;cursor:pointer;text-align:left}
+.ask-ex:hover{border-color:var(--accent);color:var(--accent)}
+.ask-thread-ctl{display:flex;gap:10px;align-items:center;font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+.ask-new{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;padding:7px 12px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.ask-status{font-family:'Archivo',sans-serif;font-size:14px;color:var(--muted);min-height:1.2em;margin-bottom:10px}
+.ask-status.err{color:var(--accent)}
+.ask-out .t411-card{border-radius:0;border-left:none;border-right:none;border-top:3px solid var(--ink)}
+.ask-fine{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:16px 0 0;max-width:720px}
 /* CIG pipeline page (table styles come from /vendor/t411.css) */
 .cig-page{padding-top:22px;padding-bottom:24px}
 .cig-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}

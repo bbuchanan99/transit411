@@ -1,0 +1,25 @@
+---
+import Base from "../layouts/Base.astro";
+import AskPanel from "../components/AskPanel.astro";
+const examples = [
+  "Which subway systems have the lowest cost per rider?",
+  "How has national transit ridership recovered since 2019?",
+  "Show MBTA's inflation-adjusted cost per rider each year since 2015",
+  "Which 10 bus agencies have the highest fare recovery?",
+];
+---
+<Base title="Ask NTD — Transit411">
+  <Fragment slot="head">
+    <link rel="stylesheet" href="/vendor/t411.css" />
+    <script is:inline src="/vendor/t411.js"></script>
+  </Fragment>
+  <div class="wrap section-page">
+    <h1 class="section-title disp">Ask NTD</h1>
+    <p class="section-blurb">
+      Ask the National Transit Database in plain English &mdash; ridership, operating costs, cost per rider and
+      fares for every U.S. transit agency and mode, 2015 onward, with dollar figures available inflation-adjusted.
+    </p>
+    <AskPanel endpoint="/api/ask" examples={examples} placeholder="e.g. How has bus ridership in Texas changed since 2019?" />
+    <p class="cig-source">Source: Federal Transit Administration, National Transit Database (via data.transportation.gov). Inflation adjustment uses the BLS Consumer Price Index (CPI-U).</p>
+  </div>
+</Base>

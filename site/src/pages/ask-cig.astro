@@ -1,0 +1,25 @@
+---
+import Base from "../layouts/Base.astro";
+import AskPanel from "../components/AskPanel.astro";
+const examples = [
+  "Which projects want the most CIG funding?",
+  "BRT projects seeking over $100M",
+  "Projects in Engineering rated Medium or better",
+  "Which projects' estimated grant dates changed since August?",
+];
+---
+<Base title="Ask CIG — Transit411">
+  <Fragment slot="head">
+    <link rel="stylesheet" href="/vendor/t411.css" />
+    <script is:inline src="/vendor/t411.js"></script>
+  </Fragment>
+  <div class="wrap section-page">
+    <h1 class="section-title disp">Ask CIG</h1>
+    <p class="section-blurb">
+      Ask the FTA Capital Investment Grants pipeline in plain English &mdash; who's seeking what, where, at what
+      stage, and what's changed month to month. See the full list on the <a href="/cig">CIG Pipeline</a> page.
+    </p>
+    <AskPanel endpoint="/api/cig/ask" examples={examples} placeholder="e.g. Light rail projects in California" />
+    <p class="cig-source">Source: Federal Transit Administration, <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">Capital Investment Grants dashboard</a>. Dollar figures in millions.</p>
+  </div>
+</Base>
