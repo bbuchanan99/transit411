@@ -51,7 +51,6 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
   </p>
 
   <div class="wrap cig-page">
-    <div id="cig-changes"></div>
     <h2 class="section-h cig-h">All projects</h2>
     <div class="cig-filters" role="group" aria-label="Filter by phase">
       <button type="button" class="cig-chip on" data-phase="">All phases</button>
@@ -61,6 +60,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
     <div id="cig-table" data-api={API_BASE}>
       <noscript><div class="empty"><strong>This table needs JavaScript.</strong></div></noscript>
     </div>
+    <div id="cig-changes" class="cig-changes-below"></div>
     <p class="cig-source">
       Source: Federal Transit Administration, <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">Capital Investment Grants dashboard</a>.
       Dollar figures in millions. Ratings: H High, MH Medium-High, M Medium, ML Medium-Low, L Low.
@@ -123,7 +123,7 @@ const embeddedChanges = JSON.stringify(changes ?? null).replace(/</g, "\\u003c")
     if (window.T411.openCigProject(el, name, sponsor)) return;
     if (phase) { setPhase(""); if (window.T411.openCigProject(el, name, sponsor)) return; }
     const note = chEl.querySelector(".cig-ch-note");
-    if (note) note.textContent = `${name} is no longer in the pipeline, so it isn't in the table below.`;
+    if (note) note.textContent = `${name} is no longer in the pipeline, so it isn't in the table above.`;
   }
 
   function renderChanges() {

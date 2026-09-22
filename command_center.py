@@ -938,13 +938,13 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     </form>
     <div id="gMsg"></div>
     <div id="gSummary" style="margin-bottom:14px"></div>
-    <div id="gChanges"></div>
     <details class="rcard" id="gLoadsBox" style="padding:0 18px;margin-bottom:14px">
       <summary style="padding:13px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px;cursor:pointer">Dashboard files <span id="gLoadsCount" style="font-weight:600;color:var(--muted)"></span></summary>
       <div id="gLoads" style="padding-bottom:12px"></div>
     </details>
     <div class="examples" id="gChips"></div>
     <div id="gOut"></div>
+    <div id="gChanges" style="margin-top:18px"></div>
   </div>
   <div class="panel" id="p-askcig">
     <div class="askhead"><div><h2 class="disp">Ask CIG</h2><p class="lead">Ask the Capital Investment Grants pipeline in plain English. Your question becomes a read-only SQL query over cig_projects, run and shown.</p></div></div>
