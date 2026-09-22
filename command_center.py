@@ -677,6 +677,240 @@ def cig_profile(file: str):
                         filename=os.path.basename(path))
 
 
+# ---- Sources tab: the collector's registry (sources table), editable here ------------------------
+# Command Center only (not in readonly-api's allowlist). collection.py reads the table fresh on every
+# run, so changes apply to the next run; --seed leaves rows edited, added or deleted here alone.
+SOURCE_PILLARS = ["Funding", "Procurement", "People", "Policy", "Data"]
+SOURCE_TYPES = ["Official", "Trade", "Association", "Aggregator", "Agency", "Data", "Search"]
+SOURCE_METHODS = ["RSS", "API", "Scrape", "Manual", "Retired"]  # only RSS is fetched today
+SOURCE_TRUST = ["High", "Med", "Low"]
+SOURCE_COLS = ["id", "name", "url", "pillar", "type", "method", "trust", "notes", "enabled", "origin", "query",
+               "search_days", "edited_at", "last_fetched_at", "last_ok_at", "last_error", "last_error_at",
+               "fail_streak", "last_entries", "last_new", "last_queued"]
+
+
+class SourceIn(BaseModel):
+    kind: Optional[str] = None          # 'feed' or 'search' (create only)
+    name: Optional[str] = None
+    url: Optional[str] = None
+    query: Optional[str] = None         # keyword searches: the Google News query...
+    search_days: Optional[int] = None   # ...and how many days back it looks
+    pillar: Optional[str] = None
+    type: Optional[str] = None
+    method: Optional[str] = None
+    trust: Optional[str] = None
+    notes: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+def _source_fields(s: SourceIn, is_search: bool, current=None):
+    """Validated column values for a create/update. Keyword searches build their name and URL from the
+    query and window; feeds need an http(s) URL."""
+    import re
+    import collection
+    from urllib.parse import urlparse
+    cur = current or {}
+    out = {}
+
+    def pick(field, allowed, default=None):
+        v = getattr(s, field)
+        if v is None:
+            return cur.get(field, default)
+        if v not in allowed:
+            raise HTTPException(400, f"{field} must be one of: {', '.join(allowed)}")
+        return v
+    out["pillar"] = pick("pillar", SOURCE_PILLARS, "Funding")
+    out["trust"] = pick("trust", SOURCE_TRUST, "Med")
+    if s.notes is not None:
+        out["notes"] = s.notes.strip()[:500] or None
+    if s.enabled is not None:
+        out["enabled"] = bool(s.enabled)
+    if is_search:
+        query = (s.query if s.query is not None else cur.get("query") or "").strip()
+        days = s.search_days if s.search_days is not None else (cur.get("search_days") or 30)
+        if not query:
+            raise HTTPException(400, "Enter the search words.")
+        if len(query) > 200:
+            raise HTTPException(400, "Keep the search under 200 characters.")
+        if not 1 <= int(days) <= 365:
+            raise HTTPException(400, "Look back between 1 and 365 days.")
+        name, url = collection.search_source(query, days)
+        out.update(name=name, url=url, query=re.sub(r"\s+when:\d+d\s*$", "", query), search_days=int(days),
+                   type="Search", method=cur.get("method") if cur.get("method") in ("RSS", "Retired") else "RSS")
+        if s.method in ("RSS", "Retired"):
+            out["method"] = s.method
+    else:
+        name = (s.name if s.name is not None else cur.get("name") or "").strip()
+        url = (s.url if s.url is not None else cur.get("url") or "").strip()
+        if not name or len(name) > 120:
+            raise HTTPException(400, "Enter a name (up to 120 characters).")
+        u = urlparse(url)
+        if u.scheme not in ("http", "https") or not u.netloc:
+            raise HTTPException(400, "Enter the feed's full http(s) URL.")
+        out.update(name=name, url=url, type=pick("type", [t for t in SOURCE_TYPES if t != "Search"], "Trade"),
+                   method=pick("method", SOURCE_METHODS, "RSS"))
+    return out
+
+
+def _source_row(cur, source_id):
+    cur.execute(f"SELECT {', '.join(SOURCE_COLS)} FROM sources WHERE id=%s AND deleted_at IS NULL", (source_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "No such source.")
+    return dict(zip(SOURCE_COLS, row))
+
+
+def _iso(v):
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
+@app.get("/api/sources")
+def list_sources():
+    """Every source (feeds and keyword searches) with its health and the items it has produced."""
+    import collection
+    try:
+        with _db() as c, c.cursor() as cur:
+            collection.migrate_sources(c)
+            cur.execute(f"""SELECT {', '.join('s.' + k for k in SOURCE_COLS)},
+                              count(i.id), count(i.id) FILTER (WHERE i.status='pending'),
+                              count(i.id) FILTER (WHERE i.status IN ('approved','published')),
+                              count(i.id) FILTER (WHERE i.status='published'),
+                              to_char(max(i.collected_at) AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI')
+                            FROM sources s LEFT JOIN collected_items i ON i.source_name = s.name
+                            WHERE s.deleted_at IS NULL GROUP BY s.id ORDER BY (s.type='Search'), s.id""")
+            rows = []
+            for r in cur.fetchall():
+                d = dict(zip(SOURCE_COLS, r[:len(SOURCE_COLS)]))
+                d.update(items=r[-5], pending=r[-4], kept=r[-3], published=r[-2], last_item=r[-1])
+                for k in ("edited_at", "last_fetched_at", "last_ok_at", "last_error_at"):
+                    d[k] = _iso(d[k])
+                rows.append(d)
+            last_run = collection.get_setting(c, "collect_last_run")
+            schedule = collection.get_setting(c, "collect_schedule")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"sources": rows, "last_run": last_run, "schedule": schedule,
+            "choices": {"pillar": SOURCE_PILLARS, "type": [t for t in SOURCE_TYPES if t != "Search"],
+                        "method": SOURCE_METHODS, "trust": SOURCE_TRUST}}
+
+
+@app.post("/api/sources")
+def create_source(s: SourceIn):
+    """Add a feed or a Google News keyword search (origin 'user'; --seed never touches it)."""
+    import collection
+    is_search = s.kind == "search"
+    f = _source_fields(s, is_search)
+    f.setdefault("enabled", True)
+    try:
+        with _db() as c, c.cursor() as cur:
+            collection.migrate_sources(c)
+            cur.execute("SELECT id, deleted_at IS NOT NULL FROM sources WHERE lower(name)=lower(%s)", (f["name"],))
+            clash = cur.fetchone()
+            if clash and not clash[1]:
+                raise HTTPException(409, f"A source named “{f['name']}” already exists.")
+            if clash:  # re-adding a deleted registry source: bring the row back with the new settings
+                cur.execute("DELETE FROM sources WHERE id=%s", (clash[0],))
+            cols = list(f) + ["origin", "edited_at"]
+            cur.execute(f"INSERT INTO sources ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))}) RETURNING id",
+                        list(f.values()) + ["user", datetime_now()])
+            sid = cur.fetchone()[0]
+            c.commit()
+            return _source_json(_source_row(cur, sid))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+def datetime_now():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
+
+
+def _source_json(d):
+    return {k: _iso(v) for k, v in d.items()}
+
+
+@app.put("/api/sources/{source_id}")
+def update_source(source_id: int, s: SourceIn):
+    """Edit a source. Marks it edited, so --seed keeps this version. A rename also relabels the items
+    it has collected (collected_items.source_name), so its counts and dedup history carry over."""
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur_row = _source_row(cur, source_id)
+            f = _source_fields(s, cur_row["type"] == "Search", cur_row)
+            if f["name"].lower() != cur_row["name"].lower():
+                cur.execute("SELECT 1 FROM sources WHERE lower(name)=lower(%s) AND id<>%s", (f["name"], source_id))
+                if cur.fetchone():
+                    raise HTTPException(409, f"A source named “{f['name']}” already exists.")
+            if f["name"] != cur_row["name"]:
+                cur.execute("UPDATE collected_items SET source_name=%s WHERE source_name=%s", (f["name"], cur_row["name"]))
+            f["edited_at"] = datetime_now()
+            cur.execute(f"UPDATE sources SET {', '.join(k + '=%s' for k in f)} WHERE id=%s", list(f.values()) + [source_id])
+            c.commit()
+            return _source_json(_source_row(cur, source_id))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.post("/api/sources/{source_id}/enabled")
+def set_source_enabled(source_id: int, t: Toggle):
+    """Switch a source on or off without losing its settings (the next run skips disabled ones)."""
+    try:
+        with _db() as c, c.cursor() as cur:
+            _source_row(cur, source_id)
+            cur.execute("UPDATE sources SET enabled=%s, edited_at=now() WHERE id=%s", (t.enabled, source_id))
+            c.commit()
+            return _source_json(_source_row(cur, source_id))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+
+@app.delete("/api/sources/{source_id}")
+def delete_source(source_id: int):
+    """Remove a source. Items it already collected stay. A registry source (from collection.py) is kept
+    as a deleted marker so --seed doesn't add it back; one added here is removed outright."""
+    try:
+        with _db() as c, c.cursor() as cur:
+            row = _source_row(cur, source_id)
+            if row["origin"] == "registry":
+                cur.execute("UPDATE sources SET deleted_at=now(), enabled=false WHERE id=%s", (source_id,))
+            else:
+                cur.execute("DELETE FROM sources WHERE id=%s", (source_id,))
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"deleted": source_id, "name": row["name"]}
+
+
+@app.post("/api/sources/{source_id}/test")
+def test_source(source_id: int):
+    """Fetch the feed once, the same way a run does, but without the model or the queue: shows whether
+    it works and what it returns. Records the result as the source's health."""
+    import collection
+    with _db() as c, c.cursor() as cur:
+        row = _source_row(cur, source_id)
+    try:
+        entries = collection.fetch_source(row["url"], limit=50)
+    except collection.FetchError as e:
+        with _db() as c:
+            collection.record_health(c, source_id, error=str(e))
+        return {"ok": False, "error": str(e)}
+    with _db() as c:
+        collection.record_health(c, source_id, entries=len(entries))
+    return {"ok": True, "entries": len(entries),
+            "sample": [{"title": e["title"][:160], "link": e["link"],
+                        "published": e["published"].date().isoformat() if e["published"] else None} for e in entries[:5]]}
+
+
 # ---- CIG project profile archive (cig_profiles.py): every version of each profile, with diffs ----
 # Command Center only (not in readonly-api's allowlist).
 MAX_LISTING_HTML = 10 * 1024 * 1024
@@ -1138,7 +1372,14 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div class="cactive" id="cActive"></div>
     <div id="cOut"></div>
   </div>
-  <div class="panel" id="p-sources"><div class="soon">Source registry - phase 2b. The watchlist that feeds the collection engine.</div></div>
+  <div class="panel" id="p-sources">
+    <div class="askhead"><div><h2 class="disp">Sources</h2><p class="lead">The feeds and Google News keyword searches the collector reads. Changes apply to the next run (the daily one, or <code>collect --run</code> on the NAS). Only enabled <b>RSS</b> sources are fetched; API, Scrape and Manual entries are a watchlist.</p></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="sAddFeed" type="button">Add feed</button><button class="newq" id="sAddSearch" type="button">Add keyword search</button><button class="newq" id="sRefresh" type="button">Refresh</button></div></div>
+    <div id="sRun" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 12px"></div>
+    <div id="sForm"></div>
+    <div id="sMsg"></div>
+    <div id="sOut"></div>
+  </div>
   <div class="panel" id="p-publish">
     <div class="askhead"><div><h2 class="disp">Publish</h2><p class="lead">Approved items become live posts. Publishing writes to content_posts - what the public site reads - and the site rebuilds itself about a minute later.</p></div><div style="display:flex;gap:8px"><button class="newq" id="pRebuild" type="button">Rebuild site now</button><button class="newq" id="pRefresh" type="button">Refresh</button></div></div>
     <div id="pSite" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 14px"></div>
@@ -1466,6 +1707,131 @@ async function pPost(url,what,b){ // POST, and say so if it didn't work instead 
 }
 document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
+// ---- Sources tab: the collector's registry (feeds + Google News keyword searches) ----
+let sData=null;
+document.querySelector('.tab[data-t="sources"]').addEventListener("click",loadSources);
+document.getElementById("sRefresh").onclick=loadSources;
+document.getElementById("sAddFeed").onclick=()=>sShowForm("feed",null);
+document.getElementById("sAddSearch").onclick=()=>sShowForm("search",null);
+function sMsg(kind,html){document.getElementById("sMsg").innerHTML=html?'<div class="rcard"><div class="'+kind+'">'+html+'</div></div>':"";}
+function sAgo(iso){
+  if(!iso)return"";const m=(Date.now()-new Date(iso))/6e4;
+  return m<2?"just now":m<90?Math.round(m)+" min ago":m<2880?Math.round(m/60)+" h ago":Math.round(m/1440)+" days ago";
+}
+function sHealth(x){
+  const muted=t=>'<span style="color:var(--muted)">'+t+'</span>';
+  if(!x.enabled)return muted("Off");
+  if(x.method!=="RSS")return muted(x.method==="Retired"?"Retired - not fetched":"Not fetched ("+esc(x.method)+" - watchlist only)");
+  if(!x.last_fetched_at)return muted("Not fetched yet");
+  const failing=x.last_error&&(!x.last_ok_at||x.last_error_at>x.last_ok_at);
+  if(failing)return '<span style="color:var(--accent);font-weight:700">Failing</span> '+esc(x.last_error)
+    +muted(" · "+x.fail_streak+" run"+(x.fail_streak===1?"":"s")+" in a row · last OK "+(x.last_ok_at?sAgo(x.last_ok_at):"never"));
+  return '<span style="color:#1F6B4A;font-weight:700">OK</span> '+muted(sAgo(x.last_ok_at)
+    +(x.last_entries!=null?" · "+x.last_entries+" in feed":"")+(x.last_new!=null?", "+x.last_new+" new, "+(x.last_queued||0)+" queued":""));
+}
+function sRow(x){
+  const url=safeUrl(x.url);
+  const title=x.type==="Search"
+    ?'<div style="font-weight:700">'+esc(x.query||x.name)+'</div><div style="color:var(--muted);font-size:11px">last '+(x.search_days||30)+' days · '+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">Google News</a>':'')+'</div>'
+    :'<div style="font-weight:700">'+esc(x.name)+'</div><div style="font-size:11px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer" title="'+esc(x.url)+'">'+esc(x.url)+'</a>':esc(x.url))+'</div>';
+  const note=x.notes?'<div style="color:var(--muted);font-size:11px;white-space:normal;max-width:340px">'+esc(x.notes)+'</div>':"";
+  const tag=x.origin==="user"?' <span class="t411-badge" title="Added in this tab">added here</span>':(x.edited_at?' <span class="t411-badge" title="Changed in this tab; collect --seed leaves it as is">edited</span>':'');
+  return '<tr style="'+(x.enabled?'':'opacity:.55')+'"><td><input type="checkbox" data-on="'+x.id+'"'+(x.enabled?" checked":"")+' aria-label="Enabled" title="'+(x.enabled?"On - click to switch off":"Off - click to switch on")+'"></td>'
+    +'<td style="white-space:normal">'+title+note+'</td><td>'+esc(x.pillar||"-")+tag+'</td>'
+    +'<td>'+esc(x.type==="Search"?"Search":x.type||"-")+' · '+esc(x.method||"-")+'</td><td>'+esc(x.trust||"-")+'</td>'
+    +'<td class="num" title="'+x.pending+' pending, '+x.kept+' approved or published'+(x.last_item?", newest "+esc(x.last_item):"")+'">'+x.items+(x.published?' <span style="color:var(--muted)">('+x.published+' pub.)</span>':'')+'</td>'
+    +'<td style="white-space:normal;min-width:200px">'+sHealth(x)+'</td>'
+    +'<td style="white-space:nowrap">'+(x.method==="RSS"?'<button class="t411-linkbtn" data-test="'+x.id+'">Test</button> ':'')
+    +'<button class="t411-linkbtn" data-edit="'+x.id+'">Edit</button> <button class="t411-linkbtn" data-del="'+x.id+'">Delete</button></td></tr>';
+}
+function sTable(title,list){
+  const on=list.filter(x=>x.enabled&&x.method==="RSS").length;
+  return '<div class="rcard"><div style="padding:12px 18px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px">'+title
+    +' <span style="font-weight:600;color:var(--muted)">('+list.length+' · '+on+' fetched each run)</span></div>'
+    +'<div class="t411-scroll"><table class="t411-table"><thead><tr><th>On</th><th>Source</th><th>Pillar</th><th>Type · method</th><th>Trust</th><th>Items</th><th>Health (last run)</th><th></th></tr></thead><tbody>'
+    +(list.length?list.map(sRow).join(""):'<tr><td colspan="8" style="color:var(--muted)">None yet.</td></tr>')+'</tbody></table></div></div>';
+}
+async function loadSources(){
+  const out=document.getElementById("sOut");
+  if(!sData)out.innerHTML='<div class="rcard"><div class="loading">Loading sources...</div></div>';
+  try{
+    const r=await fetch("/api/sources");if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
+    sData=await r.json();
+    const S=sData.sources||[],lr=sData.last_run,sc=sData.schedule;
+    document.getElementById("sRun").innerHTML=(lr&&lr.at?"Last run "+esc(new Date(lr.at).toLocaleString())+(lr.skipped?" - skipped (Auto-collect off)"
+        :(lr.error?" - failed: "+esc(lr.error):" - "+(lr.added||0)+" items queued from "+((lr.sources||0)-((lr.failed||[]).length))+" of "+(lr.sources||0)+" sources"+((lr.failed||[]).length?"; failed: "+esc(lr.failed.join(", ")):""))):"No run recorded yet")
+      +(sc&&sc.next_run?" · next run "+esc(new Date(sc.next_run).toLocaleString()):"");
+    out.innerHTML=sTable("Feeds",S.filter(x=>x.type!=="Search"))+sTable("Google News keyword searches",S.filter(x=>x.type==="Search"));
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load sources.</div></div>';}
+}
+function sOpts(list,cur){return list.map(v=>'<option'+(v===cur?" selected":"")+'>'+esc(v)+'</option>').join("");}
+function sShowForm(kind,x){
+  const ch=(sData&&sData.choices)||{pillar:["Funding","Procurement","People","Policy","Data"],type:["Official","Trade","Association","Aggregator","Agency","Data"],method:["RSS","API","Scrape","Manual","Retired"],trust:["High","Med","Low"]};
+  const lab=(t,inner)=>'<label style="display:flex;flex-direction:column;gap:4px;font-family:Archivo,sans-serif;font-size:11px;font-weight:700;color:var(--muted);flex:1 1 150px">'+t+inner+'</label>';
+  const inp='style="padding:9px 10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:14px;font-family:Spectral,serif;border-radius:8px"';
+  const sel='style="padding:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-family:Archivo,sans-serif;font-size:12px;border-radius:8px"';
+  const search=kind==="search";
+  const f=search
+    ?lab('Search words (Google News syntax: OR, "exact phrase")','<input id="fQuery" type="text" '+inp+' value="'+esc(x?x.query||"":"")+'" placeholder="e.g. transit agency budget deficit">')
+      +lab("Look back (days)",'<input id="fDays" type="number" min="1" max="365" '+inp+' value="'+esc(x?x.search_days||30:30)+'">')
+    :lab("Name",'<input id="fName" type="text" '+inp+' value="'+esc(x?x.name:"")+'" placeholder="e.g. Transit Talent">')
+      +lab("Feed URL (RSS/Atom)",'<input id="fUrl" type="text" '+inp+' value="'+esc(x?x.url:"")+'" placeholder="https://...">')
+      +lab("Type",'<select id="fType" '+sel+'>'+sOpts(ch.type,x?x.type:"Trade")+'</select>')
+      +lab("Method",'<select id="fMethod" '+sel+' title="Only RSS is fetched">'+sOpts(ch.method,x?x.method:"RSS")+'</select>');
+  document.getElementById("sForm").innerHTML='<div class="rcard" style="padding:16px 18px"><div style="font-family:Archivo,sans-serif;font-weight:800;font-size:14px;margin-bottom:10px">'
+    +(x?"Edit "+(search?"keyword search":"source"):"Add "+(search?"a Google News keyword search":"a feed"))+'</div>'
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap">'+f
+    +lab("Pillar",'<select id="fPillar" '+sel+'>'+sOpts(ch.pillar,x?x.pillar:"Funding")+'</select>')
+    +lab("Trust",'<select id="fTrust" '+sel+'>'+sOpts(ch.trust,x?x.trust:"Med")+'</select>')+'</div>'
+    +'<div style="margin-top:10px">'+lab("Notes (optional)",'<input id="fNotes" type="text" '+inp+' value="'+esc(x?x.notes||"":"")+'">')+'</div>'
+    +'<div style="display:flex;gap:8px;margin-top:12px"><button class="go" id="fSave" type="button" style="padding:9px 18px">'+(x?"Save":"Add")+'</button>'
+    +'<button class="newq" id="fCancel" type="button">Cancel</button><span id="fErr" class="err" style="padding:8px 4px"></span></div></div>';
+  document.getElementById("fCancel").onclick=()=>{document.getElementById("sForm").innerHTML="";};
+  document.getElementById("fSave").onclick=async()=>{
+    const v=id=>{const e=document.getElementById(id);return e?e.value:undefined;};
+    const body=search?{kind:"search",query:v("fQuery"),search_days:parseInt(v("fDays"),10)||30,pillar:v("fPillar"),trust:v("fTrust"),notes:v("fNotes")}
+      :{kind:"feed",name:v("fName"),url:v("fUrl"),type:v("fType"),method:v("fMethod"),pillar:v("fPillar"),trust:v("fTrust"),notes:v("fNotes")};
+    const b=document.getElementById("fSave");b.disabled=true;
+    try{const r=await fetch(x?"/api/sources/"+x.id:"/api/sources",{method:x?"PUT":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      const t=await r.text();
+      if(!r.ok){document.getElementById("fErr").textContent=errText(t);b.disabled=false;return;}
+      const d=JSON.parse(t);document.getElementById("sForm").innerHTML="";
+      sMsg("loading",esc((x?"Saved ":"Added ")+(d.type==="Search"?d.query:d.name))+". It applies to the next run."+(d.method==="RSS"?' <button class="t411-linkbtn" data-test="'+d.id+'">Test it now</button>':""));
+      loadSources();
+    }catch(e){document.getElementById("fErr").textContent="Couldn't reach the Command Center.";b.disabled=false;}
+  };
+  document.getElementById("sForm").scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+async function sTest(id){
+  const x=(sData.sources||[]).find(s=>s.id===id);
+  sMsg("loading","Fetching "+esc(x?(x.query||x.name):"the source")+"...");
+  try{const r=await fetch("/api/sources/"+id+"/test",{method:"POST"});const d=await r.json();
+    if(!r.ok)sMsg("err",esc(errText(JSON.stringify(d))));
+    else if(!d.ok)sMsg("err","Test failed: "+esc(d.error)+".");
+    else sMsg("loading","Works: "+d.entries+" item"+(d.entries===1?"":"s")+" in the feed (nothing was queued or sent to the model)."
+      +(d.sample.length?'<ul style="margin:8px 0 0 18px;padding:0">'+d.sample.map(e=>'<li>'+(safeUrl(e.link)?'<a href="'+esc(safeUrl(e.link))+'" target="_blank" rel="noopener noreferrer">'+esc(e.title)+'</a>':esc(e.title))+(e.published?' <span style="color:var(--muted)">'+esc(e.published)+'</span>':"")+'</li>').join("")+'</ul>':""));
+  }catch(e){sMsg("err","Couldn't reach the Command Center.");}
+  loadSources();
+}
+document.getElementById("p-sources").addEventListener("click",async e=>{
+  const t=e.target.closest("[data-test]");if(t){sTest(+t.dataset.test);return;}
+  const ed=e.target.closest("[data-edit]");
+  if(ed){const x=sData.sources.find(s=>s.id===+ed.dataset.edit);if(x)sShowForm(x.type==="Search"?"search":"feed",x);return;}
+  const del=e.target.closest("[data-del]");
+  if(del){const x=sData.sources.find(s=>s.id===+del.dataset.del);if(!x)return;
+    if(!confirm("Delete "+(x.query||x.name)+"? The next run stops fetching it. Items it already collected stay."))return;
+    const r=await fetch("/api/sources/"+x.id,{method:"DELETE"});
+    sMsg(r.ok?"loading":"err",r.ok?"Deleted "+esc(x.query||x.name)+".":esc(errText(await r.text())));loadSources();}
+});
+document.getElementById("p-sources").addEventListener("change",async e=>{
+  const cb=e.target.closest("[data-on]");if(!cb)return;
+  cb.disabled=true;
+  try{const r=await fetch("/api/sources/"+cb.dataset.on+"/enabled",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:cb.checked})});
+    if(!r.ok){sMsg("err",esc(errText(await r.text())));cb.checked=!cb.checked;}}
+  catch(err){cb.checked=!cb.checked;sMsg("err","Couldn't reach the Command Center.");}
+  loadSources();
+});
+
 // ---- CIG Pipeline tab ----
 let gPhase="",gMode="";
 document.getElementById("gRefresh").onclick=loadCIG;

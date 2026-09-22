@@ -47,6 +47,12 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 ### 3.2 Collection engine
 - **`collection.py`** — the content collector. Sources include RSS feeds **and Google News keyword searches**. Sites that refuse automated requests (FTA, Railway Age, APTA, Eno) are marked `Manual` and skipped rather than worked around; the keyword searches surface their coverage through Google News instead. Low-relevance items are stored as `filtered` so they're never re-triaged, and agency names are normalized to one standard public name (`AGENCY_ALIASES`; re-apply with `--normalize`). For each new item it calls the model to produce a pillar, rewritten headline, paraphrased summary, relevance, and metadata facets (agencies, mode, programs, state, tags); computes a freshness score; and writes it to Postgres as `pending`.
 - **Freshness model** — three clocks: news decays fast (~3-day half-life), deadline-driven items stay **Live** until their date then **Expire**, developing stories decay slowly.
+- **Sources tab** (Command Center only) edits the `sources` table: feeds and Google News keyword searches, with pillar, type, method, trust and notes.
+  - **Controls:** add, edit, delete, switch sources on and off, and **Test** a feed, which fetches it once with no model call and nothing queued.
+  - **Health:** each run records every source's last fetch, last success or error (with the failure streak), and its in-feed, new and queued counts, next to the items it has produced.
+  - **When changes apply:** the collector reads the table fresh each run (enabled RSS sources that aren't deleted), so changes apply to the next run. `collect --list-sources` shows what that run will fetch.
+  - **The registry in code:** `SOURCES` / `SEARCH_QUERIES` in `collection.py` still seed the table, but `--seed` leaves alone any source edited, added or deleted in the tab. A deleted registry source is kept as a marker so it isn't re-added.
+  - **Renames:** renaming a source relabels its collected items, so its counts carry over.
 - Runs on demand (`--run`) or on a daily schedule (the `scheduler` service; the Command Center's **Auto-collect** switch turns the daily run off to save model tokens), and can `--seed` sources, `--migrate` schema, `--backfill` facets, and `--normalize` agency names.
 
 ### 3.3 Content pipeline (collect → review → publish)
@@ -252,6 +258,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - **Sortable CIG table** (every column; blanks last; third click restores the default order), on the Grants tab and `/cig`. ✅
 
 - **Mode filter** on `/cig` (chips with counts) and the Grants tab (a dropdown), combinable with the phase filter. "Unspecified" is its own option; `/api/cig?mode=Unspecified` returns projects with no FTA-stated mode, and the summary carries `by_mode`. ✅
+- **Sources tab**: the collector's registry as a control panel (add/edit/delete/enable feeds and keyword searches, Test, per-source health); changes apply to the next run. ✅
 - **Publish all** on the Publish tab: shown when 2+ items are ready. After a confirm with the count, it publishes exactly the items on screen (anything approved after the page loaded waits) in one transaction via `POST /api/publish-all`, with a single site rebuild. ✅
 
 **Pending / next:**

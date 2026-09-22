@@ -9,14 +9,16 @@ Transit411 collection engine - populates the review queue.
   python collection.py --migrate     # add new columns to an existing database
   python collection.py --backfill    # one-off: add facets to items collected before facets existed
   python collection.py --normalize   # re-apply agency name normalization (after editing AGENCY_ALIASES)
+  python collection.py --list-sources  # what the next run will fetch (no fetching)
 
 Writes to `collected_items` and `sources`. The Command Center's Collection tab
-reviews what this produces. The daily run can be switched off from the Command Center's
+reviews what this produces; its Sources tab edits `sources` (each run reads it fresh). The daily run can be switched off from the Command Center's
 Auto-collect toggle (stored in app_settings) to save model tokens during development.
 """
 import argparse
 import math
 import os
+import re
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
 
@@ -94,9 +96,21 @@ def google_news_url(query):
             + "&hl=en-US&gl=US&ceid=US:en")
 
 
+def search_source(query, days):
+    """(name, url) for a Google News keyword search over the last `days` days."""
+    query = re.sub(r"\s+when:\d+d\s*$", "", (query or "").strip())
+    return f"Google News: {query}", google_news_url(f"{query} when:{int(days)}d")
+
+
+def _split_search(q):
+    """'transit funding when:21d' -> ('transit funding', 21)."""
+    m = re.match(r"^(.*?)\s+when:(\d+)d\s*$", q.strip())
+    return (m.group(1), int(m.group(2))) if m else (q.strip(), 30)
+
+
 # Rendered as ordinary RSS sources so the existing fetch/classify/dedup pipeline handles them.
 SEARCH_SOURCES = [
-    (f"Google News: {q.split(' when:')[0]}", google_news_url(q), pillar, "Search", "RSS", "Med",
+    (search_source(*_split_search(q))[0], google_news_url(q), pillar, "Search", "RSS", "Med",
      "Keyword search via Google News RSS.")
     for q, pillar in SEARCH_QUERIES
 ]
@@ -105,27 +119,81 @@ SEARCH_SOURCES = [
 ALL_SOURCES = SOURCES + SEARCH_SOURCES
 
 
+def migrate_sources(conn):
+    """Columns the Sources tab needs. origin: 'registry' (this file) or 'user' (added in the tab);
+    edited_at: changed in the tab, so --seed leaves it alone; deleted_at: a registry source deleted
+    in the tab (kept as a marker so --seed doesn't bring it back); last_*: per-source health from
+    each run. Idempotent."""
+    with conn.cursor() as cur:
+        for col in ("enabled BOOLEAN NOT NULL DEFAULT true", "origin TEXT NOT NULL DEFAULT 'registry'",
+                    "query TEXT", "search_days INTEGER", "edited_at TIMESTAMPTZ", "deleted_at TIMESTAMPTZ",
+                    "last_fetched_at TIMESTAMPTZ", "last_ok_at TIMESTAMPTZ", "last_error TEXT",
+                    "last_error_at TIMESTAMPTZ", "fail_streak INTEGER NOT NULL DEFAULT 0",
+                    "last_entries INTEGER", "last_new INTEGER", "last_queued INTEGER"):
+            cur.execute(f"ALTER TABLE sources ADD COLUMN IF NOT EXISTS {col}")
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS sources_name_uniq ON sources (lower(name))")
+        # Keyword searches keep their query and window, so the tab can edit them (URL rebuilt from these).
+        cur.execute("SELECT id, url FROM sources WHERE type='Search' AND query IS NULL")
+        for sid, url in cur.fetchall():
+            q = parse_qs_q(url)
+            if q:
+                query, days = _split_search(q)
+                cur.execute("UPDATE sources SET query=%s, search_days=%s WHERE id=%s", (query, days, sid))
+    conn.commit()
+
+
 def seed_sources(conn):
     """Sync the registry into Postgres by source name: add new sources and update existing ones
-    (URL, method, notes...), so corrections here reach the database. Keyword searches that were
+    (URL, method, notes...), so corrections here reach the database. Sources edited, added or
+    deleted in the Command Center's Sources tab are left as they are. Registry keyword searches
     removed from SEARCH_QUERIES are marked 'Retired' so --run stops fetching them. Safe to re-run."""
-    added = updated = 0
+    migrate_sources(conn)
+    added = updated = kept = 0
     with conn.cursor() as cur:
         for name, url, pillar, typ, method, trust, notes in ALL_SOURCES:
-            cur.execute("UPDATE sources SET url=%s, pillar=%s, type=%s, method=%s, trust=%s, notes=%s "
-                        "WHERE name=%s", (url, pillar, typ, method, trust, notes, name))
-            if cur.rowcount:
+            query, days = _split_search(parse_qs_q(url)) if typ == "Search" else (None, None)
+            cur.execute("SELECT id, origin, edited_at IS NOT NULL OR deleted_at IS NOT NULL FROM sources "
+                        "WHERE lower(name)=lower(%s)", (name,))
+            row = cur.fetchone()
+            if row and (row[1] != "registry" or row[2]):
+                kept += 1  # changed in the Sources tab: the tab's version wins
+                continue
+            if row:
+                cur.execute("UPDATE sources SET url=%s, pillar=%s, type=%s, method=%s, trust=%s, notes=%s, "
+                            "query=%s, search_days=%s WHERE id=%s",
+                            (url, pillar, typ, method, trust, notes, query, days, row[0]))
                 updated += 1
             else:
-                cur.execute("INSERT INTO sources (name, url, pillar, type, method, trust, notes) "
-                            "VALUES (%s,%s,%s,%s,%s,%s,%s)", (name, url, pillar, typ, method, trust, notes))
+                cur.execute("INSERT INTO sources (name, url, pillar, type, method, trust, notes, query, search_days) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                            (name, url, pillar, typ, method, trust, notes, query, days))
                 added += 1
         cur.execute("UPDATE sources SET method='Retired', notes='No longer in SEARCH_QUERIES.' "
-                    "WHERE type='Search' AND method <> 'Retired' AND NOT (name = ANY(%s))",
-                    ([s[0] for s in SEARCH_SOURCES],))
+                    "WHERE type='Search' AND origin='registry' AND edited_at IS NULL AND deleted_at IS NULL "
+                    "AND method <> 'Retired' AND NOT (lower(name) = ANY(%s))",
+                    ([s[0].lower() for s in SEARCH_SOURCES],))
         retired = cur.rowcount
     conn.commit()
-    return added, updated, retired
+    return added, updated, retired, kept
+
+
+def parse_qs_q(url):
+    from urllib.parse import parse_qs, urlparse
+    return (parse_qs(urlparse(url).query).get("q") or [""])[0]
+
+
+def record_health(conn, source_id, error=None, entries=None, new=None, queued=None):
+    """Per-source health after a fetch: success resets the failure streak; a failure keeps the last
+    good figures and counts consecutive failures."""
+    with conn.cursor() as cur:
+        if error:
+            cur.execute("UPDATE sources SET last_fetched_at=now(), last_error=%s, last_error_at=now(), "
+                        "fail_streak=fail_streak+1 WHERE id=%s", (error[:300], source_id))
+        else:
+            cur.execute("UPDATE sources SET last_fetched_at=now(), last_ok_at=now(), last_error=NULL, fail_streak=0, "
+                        "last_entries=%s, last_new=coalesce(%s, last_new), last_queued=coalesce(%s, last_queued) "
+                        "WHERE id=%s", (entries, new, queued, source_id))
+    conn.commit()
 
 
 def classify(entry):
@@ -342,21 +410,30 @@ def insert_item(conn, pillar, headline, summary, source_name, source_url, publis
     conn.commit()
 
 
+def active_sources(conn):
+    """What --run fetches: enabled RSS sources (feeds and keyword searches) not deleted in the Sources
+    tab. Read fresh on every run, so changes made in the tab apply to the next run."""
+    migrate_sources(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, name, url FROM sources WHERE method = 'RSS' AND enabled AND deleted_at IS NULL "
+                    "ORDER BY id")
+        return cur.fetchall()
+
+
 def run(conn, limit_sources=None):
     migrate(conn)
-    with conn.cursor() as cur:
-        # Only RSS sources are fetched for now; --limit counts those, not skipped API/Scrape ones.
-        cur.execute("SELECT name, url FROM sources WHERE method = 'RSS' ORDER BY id")
-        sources = cur.fetchall()
+    # Only RSS sources are fetched for now; --limit counts those, not skipped API/Scrape ones.
+    sources = active_sources(conn)
     if limit_sources:
         sources = sources[:limit_sources]
     added, failed = 0, []
-    for name, url in sources:
+    for sid, name, url in sources:
         try:
             entries = fetch_source(url)
         except FetchError as e:
             print(f"  ! {name}: FAILED - {e}")
             failed.append(name)
+            record_health(conn, sid, error=str(e))
             continue
         new = low = errors = kept = 0
         for e in entries:
@@ -382,6 +459,7 @@ def run(conn, limit_sources=None):
                         **clean_facets(c))
             kept += 1
         added += kept
+        record_health(conn, sid, entries=len(entries), new=new, queued=kept)
         print(f"  {name}: {len(entries)} in feed, {new} new, {kept} queued, {low} low relevance"
               + (f", {errors} not classified" if errors else ""))
     print(f"Added {added} pending items from {len(sources) - len(failed)} of {len(sources)} sources."
@@ -595,6 +673,8 @@ def main():
                     help="re-apply agency name normalization to stored items and posts (no model calls)")
     ap.add_argument("--schedule", action="store_true",
                     help="stay running and collect daily at COLLECT_AT, unless Auto-collect is off")
+    ap.add_argument("--list-sources", action="store_true",
+                    help="show what the next run will fetch (no fetching, no model calls)")
     a = ap.parse_args()
     import psycopg
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
@@ -606,9 +686,14 @@ def main():
             migrate(conn)
             print("Schema migrated (facet + featured columns ensured).")
         if a.seed:
-            added, updated, retired = seed_sources(conn)
-            print(f"Sources: {added} added, {updated} updated, {retired} retired "
-                  f"({len(ALL_SOURCES)} in the registry).")
+            added, updated, retired, kept = seed_sources(conn)
+            print(f"Sources: {added} added, {updated} updated, {retired} retired, {kept} left as edited in "
+                  f"the Sources tab ({len(ALL_SOURCES)} in the registry).")
+        if a.list_sources:
+            srcs = active_sources(conn)
+            print(f"The next run fetches {len(srcs)} sources:")
+            for sid, name, url in srcs:
+                print(f"  {sid:4} {name}")
         if a.run:
             # Manual runs always go ahead; the Auto-collect toggle only governs the daily schedule.
             run(conn, a.limit)
@@ -616,7 +701,7 @@ def main():
             backfill(conn, None if a.run else a.limit)
         if a.normalize:
             normalize_existing(conn)
-        if not (a.seed or a.run or a.migrate or a.backfill or a.normalize):
+        if not (a.seed or a.run or a.migrate or a.backfill or a.normalize or a.list_sources):
             print("Nothing to do. Use --migrate, --seed, --run, --backfill, --normalize and/or --schedule.")
 
 
