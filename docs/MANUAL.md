@@ -51,6 +51,7 @@ The guiding principle: **the public site is a thin reader of an engine that alre
   - **Controls:** add, edit, delete, switch sources on and off, and **Test** a feed, which fetches it once with no model call and nothing queued.
   - **Health:** each run records every source's last fetch, last success or error (with the failure streak), and its in-feed, new and queued counts, next to the items it has produced.
   - **When changes apply:** the collector reads the table fresh each run (enabled RSS sources that aren't deleted), so changes apply to the next run. `collect --list-sources` shows what that run will fetch.
+  - **Agency searches:** `agencies.py --searches` creates one daily Google News search per search-enabled agency (type `Agency`, query `"<agency>" transit when:2d`), shown as its own group in the tab. They are created **switched off** (`--activate` to switch on), so no run happens on searches nobody has reviewed. On as of 2026-09-22: MBTA, LA Metro, WMATA, CTA, MTA (New York), SEPTA, BART, Sound Transit — the next run fetches 20 sources, up from 12. Measured volume: all 17 candidate agencies returned 125 entries over a 2-day window (~60–70 new links/day, one classify call each); the 8 enabled are roughly 30/day.
   - **The registry in code:** `SOURCES` / `SEARCH_QUERIES` in `collection.py` still seed the table, but `--seed` leaves alone any source edited, added or deleted in the tab. A deleted registry source is kept as a marker so it isn't re-added.
   - **Renames:** renaming a source relabels its collected items, so its counts carry over.
 - Runs on demand (`--run`) or on a daily schedule (the `scheduler` service; the Command Center's **Auto-collect** switch turns the daily run off to save model tokens), and can `--seed` sources, `--migrate` schema, `--backfill` facets, and `--normalize` agency names.
@@ -59,6 +60,10 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - **`collected_items`** (Postgres) — the review queue. The Command Center's **Collection** tab shows pending items with freshness; you approve/skip.
 - **`content_posts`** (Postgres) — published posts (what the public site reads). The **Publish** tab turns approved items into posts (paraphrased summary + source link — copyright-safe).
 - **Metadata facets** — posts carry `agencies`, `mode`, `programs`, `tags`, `state` (Postgres arrays, GIN-indexed) so the site can filter by section and cross-cut.
+- **Article pages** — every published post has its own page at `/article/<slug>`, pre-rendered at build from `GET /api/posts` (`getStaticPaths`). It carries the pillar, headline, date, **Transit411's paraphrase only**, the metadata chips, a prominent link out to the source, and SEO tags (canonical, Open Graph, Twitter). Every headline on the site links here; the source link-out lives on the page (lists keep a small "source" link). `GET /api/posts/{slug}` returns one post.
+  - **Explore module** (built at build time; no model calls, no client-side fetching): related coverage (internal links scored by shared agency/program/pillar/state), the story's agency in the CIG pipeline (matched through `agencies.json` aliases), "go deeper" links to `/cig?agency=…` and to Ask NTD / Ask CIG with a prefilled `?q=`, and reference links from the agency table. Each layer appears only when it has content.
+  - **Ask pages** fill the box from `?q=` but never run it — the reader presses Ask, so no model call happens without them.
+- **Agency reference table** — `reference/agencies.json` (65 agencies: aliases, state, `ntd_id`, `cig_sponsor`, website/newsroom/procurement, `search_enabled`), synced to Postgres by `agencies.py --sync` and served read-only at `GET /api/agencies`. `match()` resolves a post tag or CIG sponsor to a row (e.g. LACMTA → LA Metro). Websites came from known domains and are **not** fetch-verified; blanks are simply omitted by the site.
 - **Featured / paid People** — `featured`, `featured_until`, `sponsor` columns + a feature endpoint, for paid highlight placements.
 
 ### 3.4 CIG pipeline + Ask CIG
@@ -263,7 +268,8 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 
 **Pending / next:**
 - Refresh the profile PDFs as projects enter Engineering, since their profiles then state a mode (fewer Unspecified).
-- Individual article pages; About; newsletter capture wired to an ESP (Beehiiv).
+- Newsletter capture wired to an ESP (Beehiiv). (Article pages and the static pages are done.)
+- Facet filtering on the section pages, so an article's agency/program chips can link to a filtered view (they're labels today).
 - Backfill more CIG monthly PDFs to enrich history/timelines (loaded so far: 2026-07-10, 2026-08-07, 2026-09-11). Dashboards from before mid-2026 use a different layout and need a second set of column positions in `cig.py`.
 
 ---
