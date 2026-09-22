@@ -127,37 +127,74 @@ def upsert(conn, email, name=None, source=None, tags=None, status="pending"):
     return cid, "added"
 
 
-def import_csv(conn, text, source="csv import", default_tags=None):
-    """Load a CSV. Any column named email/e-mail/email address is the address; name/full name and
-    tags (comma or semicolon separated) are used when present; a file with no header is read as
-    one address per line. Dedupes on email."""
-    create_tables(conn)
-    rows, result = [], {"added": 0, "updated": 0, "suppressed": 0, "invalid": 0, "duplicate_in_file": 0}
-    sample = text[:4096]
-    has_header = bool(re.search(r"(?im)^[^\n]*\b(e-?mail|email address)\b", sample))
+def parse_csv(text):
+    """CSV -> [(email, name, tags)]. Any column named email/e-mail/email address is the address;
+    name/full name and tags (comma or semicolon separated) are used when present. A file with no
+    recognisable header is read as one address per line (optionally "address,name")."""
+    rows = []
+    first = (text[:4096].splitlines() or [''])[0].lower()
+    has_header = "email" in first or "e-mail" in first
     if has_header:
         for r in csv.DictReader(io.StringIO(text)):
-            keys = {(k or "").strip().lower(): (v or "").strip() for k, v in r.items()}
+            keys = {(k or "").strip().lower(): (v or "").strip() for k, v in r.items() if k}
             email = next((keys[k] for k in ("email", "e-mail", "email address", "emailaddress") if keys.get(k)), "")
             name = next((keys[k] for k in ("name", "full name", "fullname", "contact") if keys.get(k)), "")
             tags = [t.strip() for t in re.split(r"[;,]", keys.get("tags", "")) if t.strip()]
             rows.append((email, name, tags))
     else:
-        for line in io.StringIO(text):
-            parts = [p.strip() for p in line.split(",")]
-            if parts and parts[0]:
-                rows.append((parts[0], parts[1] if len(parts) > 1 else "", []))
-    seen = set()
+        for parts in csv.reader(io.StringIO(text)):
+            if parts and parts[0].strip():
+                rows.append((parts[0].strip(), parts[1].strip() if len(parts) > 1 else "", []))
+    return rows
+
+
+IMPORT_CHUNK = 1000
+
+
+def import_csv(conn, text, source="csv import", default_tags=None):
+    """Load a CSV of any size. Existing addresses and the suppression list are read once and the
+    writes are batched, so a large file is one pass rather than a query per row. Dedupes on email;
+    suppressed addresses are never re-added."""
+    create_tables(conn)
+    rows = parse_csv(text)
+    result = {"added": 0, "updated": 0, "suppressed": 0, "invalid": 0, "duplicate_in_file": 0, "rows": len(rows)}
+    default_tags = list(default_tags or [])
+    with conn.cursor() as cur:
+        cur.execute("SELECT email, id, status FROM contacts")
+        existing = {e: (i, st) for e, i, st in cur.fetchall()}
+        cur.execute("SELECT email FROM email_suppressions")
+        suppressed = {r[0] for r in cur.fetchall()}
+    seen, inserts, updates = set(), [], []
     for email, name, tags in rows:
         e = normalize(email)
-        if e and e in seen:
+        if not e:
+            result["invalid"] += 1
+            continue
+        if e in seen:
             result["duplicate_in_file"] += 1
             continue
-        if e:
-            seen.add(e)
-        _, what = upsert(conn, email, name, source, (tags or []) + list(default_tags or []))
-        result[what] = result.get(what, 0) + 1
-    result["rows"] = len(rows)
+        seen.add(e)
+        all_tags = sorted({t for t in (tags or []) + default_tags if t})
+        row = existing.get(e)
+        if row and (e in suppressed or row[1] in SUPPRESSED):
+            result["suppressed"] += 1
+        elif row:
+            updates.append((name or None, source, all_tags, row[0]))
+            result["updated"] += 1
+        elif e in suppressed:
+            result["suppressed"] += 1      # known bad address, not on the list: never re-add it
+        else:
+            inserts.append((e, name or None, "pending", source, all_tags, token(), token()))
+            result["added"] += 1
+    with conn.cursor() as cur:
+        for i in range(0, len(inserts), IMPORT_CHUNK):
+            cur.executemany("INSERT INTO contacts (email, name, status, source, tags, confirm_token, unsub_token) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (email) DO NOTHING", inserts[i:i + IMPORT_CHUNK])
+        for i in range(0, len(updates), IMPORT_CHUNK):
+            cur.executemany("UPDATE contacts SET name=coalesce(nullif(%s,''), name), source=coalesce(source, %s), "
+                            "tags=(SELECT array(SELECT DISTINCT unnest(tags || %s::text[]))) WHERE id=%s",
+                            updates[i:i + IMPORT_CHUNK])
+    conn.commit()
     return result
 
 

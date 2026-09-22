@@ -804,18 +804,27 @@ def update_contact(contact_id: int, c_in: ContactIn):
         raise HTTPException(502, f"DB error: {e}")
 
 
+MAX_CONTACT_CSV = 64 * 1024 * 1024   # a 64 MB address list is ~1M rows; plenty of headroom
+
+
 @app.post("/api/contacts/import")
 async def import_contacts(request: Request, source: str = "csv import", tags: str = ""):
-    """Import a CSV (raw body). Dedupes on email; suppressed addresses are never re-added."""
+    """Import a CSV (raw body). Dedupes on email; suppressed addresses are never re-added. Large files
+    are read in one pass with batched writes, off the request thread so the page stays responsive."""
+    import asyncio
     import contacts as cmod
     body = await request.body()
-    if len(body) > 5 * 1024 * 1024:
-        raise HTTPException(413, "That file is over 5 MB.")
+    if len(body) > MAX_CONTACT_CSV:
+        raise HTTPException(413, f"That file is {len(body) / 1048576:.0f} MB; the limit is "
+                                 f"{MAX_CONTACT_CSV // 1048576} MB. Split it and import in parts.")
     text = body.decode("utf-8-sig", errors="replace")
     default_tags = [t.strip() for t in tags.split(",") if t.strip()]
-    try:
+
+    def work():
         with _db() as c:
             return cmod.import_csv(c, text, source, default_tags)
+    try:
+        return await asyncio.to_thread(work)
     except Exception as e:
         raise HTTPException(422, f"Couldn't read that CSV ({type(e).__name__}: {e}).")
 
