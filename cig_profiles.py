@@ -242,9 +242,33 @@ def ingest(conn, data, file_name, source, project=None, pdf_url=None, projects=N
             "version_id": vid, "lines_added": added, "lines_removed": removed}
 
 
+MAX_DIFF_LINES = 3000  # a full rewrite is summarized by its counts rather than stored line by line
+
+
 def make_diff(old, new):
-    """(unified diff, lines added, lines removed) between two normalized texts. Filled in by step 4."""
-    return None, None, None
+    """(unified diff, lines added, lines removed) between two normalized texts, one line of context."""
+    import difflib
+    lines = list(difflib.unified_diff((old or "").splitlines(), (new or "").splitlines(),
+                                      "previous", "this version", n=1, lineterm=""))
+    added = sum(1 for l in lines if l.startswith("+") and not l.startswith("+++"))
+    removed = sum(1 for l in lines if l.startswith("-") and not l.startswith("---"))
+    if len(lines) > MAX_DIFF_LINES:
+        lines = lines[:MAX_DIFF_LINES] + [f"... diff truncated ({added} lines added, {removed} removed in all)"]
+    return "\n".join(lines), added, removed
+
+
+def rediff(conn):
+    """Recompute every stored diff (e.g. after changing normalize()). Returns the number updated."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT v.id, p.text, v.text FROM cig_profile_versions v "
+                    "JOIN cig_profile_versions p ON p.id = v.prev_version_id")
+        rows = cur.fetchall()
+        for vid, old, new in rows:
+            d, a, r = make_diff(old, new)
+            cur.execute("UPDATE cig_profile_versions SET diff=%s, lines_added=%s, lines_removed=%s WHERE id=%s",
+                        (d, a, r, vid))
+    conn.commit()
+    return len(rows)
 
 
 def record_run(conn, trigger, listing_status, results, message=None):
@@ -379,6 +403,7 @@ def main():
     ap.add_argument("--seed", action="store_true", help="baseline versions from the PDFs kept by cig.py --profiles")
     ap.add_argument("--ingest", nargs="+", metavar="PDF", help="archive these profile PDFs")
     ap.add_argument("--weekly", action="store_true", help="inbox + one polite try of FTA's listing page")
+    ap.add_argument("--rediff", action="store_true", help="recompute every stored diff")
     a = ap.parse_args()
     import psycopg
     dsn = os.environ.get("DATABASE_URL", "postgresql://transit411:transit411@db:5432/transit411")
@@ -404,6 +429,8 @@ def main():
             out = weekly(conn, "command line")
             print("listing:", out["listing_status"])
             _print(out["results"])
+        if a.rediff:
+            print("diffs recomputed:", rediff(conn))
 
 
 if __name__ == "__main__":
