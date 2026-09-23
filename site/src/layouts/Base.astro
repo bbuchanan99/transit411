@@ -33,14 +33,14 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
   </div>
   <div class="dateline">
     <span>{today} &middot; Weekly Intelligence</span>
-    <span><a href="#newsletter">Subscribe free</a></span>
+    <span><a href="/#newsletter">Subscribe free</a></span>
   </div>
   <header class="mast">
     <a href="/" class="brand">TRANSIT<span>411</span></a>
     <nav class="mast-nav">
       {sections.map((s) => <a href={"/" + s.toLowerCase()}>{s}</a>)}
       <a href="/cig">CIG Pipeline</a>
-      <a class="subscribe-btn" href="#newsletter">Subscribe</a>
+      <a class="subscribe-btn" href="/#newsletter">Subscribe</a>
     </nav>
   </header>
   <main>

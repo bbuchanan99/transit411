@@ -95,6 +95,17 @@ const stats = [
   // pending contact; the confirmation email comes later, so nobody is subscribed by this alone.
   const form = document.getElementById("subscribe-form");
   if (form) {
+    // Someone who clicked "Subscribe" in the masthead arrives at #newsletter: put the cursor in the
+    // box and flash the panel, so the click clearly did something.
+    const focusSignup = () => {
+      if (location.hash !== "#newsletter") return;
+      const panel = document.getElementById("newsletter");
+      panel?.classList.add("flash");
+      setTimeout(() => panel?.classList.remove("flash"), 1400);
+      form.email?.focus({ preventScroll: true });
+    };
+    window.addEventListener("hashchange", focusSignup);
+    focusSignup();
     const status = document.querySelector(".nl-status");
     const btn = form.querySelector("button");
     form.addEventListener("submit", async (e) => {
