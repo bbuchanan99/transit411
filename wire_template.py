@@ -76,9 +76,13 @@ def lead(post):
     text_cell = kicker + headline + take + more
     if not post.get("image_url"):
         return _row(text_cell, pad="18px 34px", extra="border-bottom:1px solid " + LINE)
-    thumb = ('<a href="' + esc(post["url"]) + '"><img src="' + esc(post["image_url"]) + '" width="168" alt="'
+    # Alt text is styled too: plenty of clients block images by default, and an unstyled alt renders
+    # as blue underlined link text in an empty box. This way a blocked image still reads as a caption.
+    thumb = ('<a href="' + esc(post["url"]) + '" style="text-decoration:none;color:' + MUTED + '">'
+             '<img src="' + esc(post["image_url"]) + '" width="168" alt="'
              + esc(post.get("image_alt") or post["title"]) + '" style="width:168px;max-width:168px;height:auto;'
-             'display:block;border:1px solid #D2CBBB"></a>')
+             'display:block;border:1px solid #D2CBBB;background:' + OUTER + ';font-family:' + SANS + ';'
+             'font-size:11px;line-height:1.4;color:' + MUTED + ';text-decoration:none"></a>')
     return ('<tr><td style="padding:18px 34px;background:' + PAPER + ';border-bottom:1px solid ' + LINE + '">'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
             '<td valign="top" style="padding-right:16px">' + text_cell + "</td>"
