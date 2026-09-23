@@ -1939,10 +1939,10 @@ DASHBOARD = r"""<!doctype html>
 <link rel="stylesheet" href="/static/t411.css">
 <script src="/static/t411.js"></script>
 <style>
-:root{--bg:#F2EEE4;--panel:#F7F4ED;--card:#FFF;--ink:#17140F;--muted:#6A6458;--line:#D8D2C4;--soft:#E7E1D4;--accent:#C0341F;--ok:#1F6B4A;--bar:#C0341F;--track:#EDE7D8}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Spectral',Georgia,serif}
+:root{--bg:#100E0C;--panel:#1A1714;--card:#201C18;--card2:#221E1A;--ink:#F2EEE4;--muted:#9A9384;--line:#332E28;--soft:#241F1B;--accent:#EE6A54;--accent2:#C0341F;--ok:#5FBF8F;--bar:#EE6A54}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Spectral',Georgia,serif;display:flex;min-height:100vh}
 .disp{font-family:'Archivo',sans-serif}
-header{background:var(--ink);color:var(--panel);padding:16px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;border-bottom:1px solid var(--line);padding-bottom:16px}
 .brand{font-family:'Archivo',sans-serif;font-weight:900;font-size:22px;letter-spacing:-1px}.brand span{color:var(--accent)}
 .sub{font-family:'Archivo',sans-serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:#A69F90}
 .status{display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-family:'Archivo',sans-serif;font-size:12px}
@@ -1953,10 +1953,9 @@ header{background:var(--ink);color:var(--panel);padding:16px 24px;display:flex;a
 .switch:disabled{opacity:.5;cursor:default}.switch:focus-visible{outline:2px solid #EE6A54;outline-offset:2px}
 #acTxt{min-width:24px;color:#A69F90}
 .pill{display:flex;align-items:center;gap:7px}.dot{width:9px;height:9px;border-radius:50%;background:#8A8375}.dot.up{background:#5FBF8F}.dot.down{background:#E8604B}
-.tabs{display:flex;gap:2px;background:var(--panel);border-bottom:1px solid var(--line);padding:0 16px}
-.tab{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;padding:13px 18px;border:none;background:transparent;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
-.tab.on{color:var(--ink);border-bottom-color:var(--accent)}
-.wrap{max-width:980px;margin:0 auto;padding:24px 20px 60px}
+
+
+.wrap{max-width:1180px;margin:0;padding:18px 0 60px}
 .panel{display:none}.panel.on{display:block}
 h2.disp{font-size:22px;font-weight:800;letter-spacing:-.4px;margin:0 0 4px}
 p.lead{color:var(--muted);font-size:14px;margin:0 0 16px}
@@ -1998,6 +1997,13 @@ td{padding:8px 12px 8px 0;border-bottom:1px solid var(--soft);white-space:nowrap
 details{margin:4px 18px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 summary{cursor:pointer;padding:10px 13px;font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;color:var(--muted)}
 pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-size:12px;white-space:pre-wrap;color:var(--ink)}
+.imgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin-top:14px}
+.imgcard{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+.imgcard img{width:100%;height:120px;object-fit:cover;display:block;background:var(--soft)}
+.imgcard-house{height:120px;display:flex;align-items:center;justify-content:center;background:var(--soft);font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);text-align:center;padding:0 10px}
+.imgcard-b{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
+.imgcard-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.imgcard-t{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;line-height:1.3}
 .pimg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .pimg{display:flex;flex-direction:column;gap:3px;padding:0;border:1px solid var(--line);background:var(--card);cursor:pointer;text-align:left;overflow:hidden;border-radius:8px}
 .pimg:hover{border-color:var(--accent)}
@@ -2011,30 +2017,94 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .soon{padding:40px 24px;text-align:center;color:var(--muted);font-family:'Archivo',sans-serif;border:1px dashed var(--line);border-radius:12px}
 .err{padding:16px 18px;color:var(--accent);font-family:'Archivo',sans-serif;font-size:14px}
 .loading{padding:20px 18px;color:var(--muted);font-family:'Archivo',sans-serif}
+/* ---- console shell: sidebar, landing dashboard, workspace sub-nav ---- */
+aside{width:230px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:20px 0;position:sticky;top:0;height:100vh}
+aside .brand{padding:0 22px}
+.cc-label{font-family:'Archivo',sans-serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);padding:6px 22px 0}
+aside nav{margin-top:26px;display:flex;flex-direction:column;gap:2px;padding:0 12px}
+.nav-item{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:8px;font-family:'Archivo',sans-serif;font-size:14px;font-weight:700;color:var(--muted);cursor:pointer;background:none;border:none;text-align:left;width:100%}
+.nav-item svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:2;flex:none}
+.nav-item:hover{color:var(--ink);background:#241F1B}
+.nav-item.active{color:var(--ink);background:#2A241F;box-shadow:inset 3px 0 0 var(--accent)}
+.nav-spacer{flex-grow:1}
+aside .status{display:block;padding:14px 22px 0;border-top:1px solid var(--line);margin:14px 12px 0}
+aside .status .row{display:flex;align-items:center;gap:8px;font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:6px 0}
+main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
+.top{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;border-bottom:1px solid var(--line);padding-bottom:18px}
+.top h1{font-family:'Archivo',sans-serif;font-size:26px;font-weight:800;letter-spacing:-.5px;margin:0}
+.top .sub{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin-top:4px}
+.statstrip{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.statstrip b{color:var(--ink);font-weight:700}
+.attn{background:#2A1C16;border:1px solid #4A2E20;border-radius:10px;padding:12px 16px;margin:18px 0 4px;font-family:'Archivo',sans-serif;font-size:13px;color:#F0C9A8}
+.attn b{color:var(--accent)}
+.attn.quiet{background:var(--card);border-color:var(--line);color:var(--muted)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;cursor:pointer;transition:border-color .15s,transform .15s;text-align:left}
+.card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.card .head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.card .ic{width:38px;height:38px;border-radius:9px;background:#2A241F;display:flex;align-items:center;justify-content:center;flex:none}
+.card .ic svg{width:19px;height:19px;stroke:var(--accent);fill:none;stroke-width:2}
+.card h2{font-family:'Archivo',sans-serif;font-size:19px;font-weight:800;margin:0;color:var(--ink)}
+.card .desc{font-size:14px;color:var(--muted);line-height:1.5;margin:0 0 16px}
+.card .metric{font-family:'Archivo',sans-serif;font-weight:900;font-size:26px;letter-spacing:-.5px;color:var(--ink)}
+.card .metric small{font-family:'Archivo',sans-serif;font-weight:700;font-size:13px;color:var(--muted);letter-spacing:0}
+.card .subs{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.card .subs button{font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;color:var(--muted);background:#241F1B;border:1px solid var(--line);border-radius:999px;padding:5px 11px;cursor:pointer}
+.card .subs button:hover{color:var(--ink);border-color:var(--accent);background:#2A241F}
+.card .subs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.subnav{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 2px}
+.subnav button{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--muted);background:transparent;border:1px solid var(--line);border-radius:999px;padding:7px 14px;cursor:pointer}
+.subnav button:hover{color:var(--ink);border-color:var(--accent)}
+.subnav button.on{color:var(--ink);background:#2A241F;border-color:var(--accent)}
+.ws{display:none}.ws.on{display:block}
+@media (max-width:860px){aside{display:none}main{padding:18px}.grid{grid-template-columns:1fr}}
 </style></head><body>
-<header>
-  <div><div class="brand">TRANSIT<span>411</span></div><div class="sub">Command Center</div></div>
+<aside>
+  <div class="brand">TRANSIT<span>411</span></div>
+  <div class="cc-label">Command Center</div>
+  <nav id="navMain">
+    <button class="nav-item active" data-ws="dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Dashboard</button>
+    <button class="nav-item" data-ws="web-content"><svg viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>Web Content</button>
+    <button class="nav-item" data-ws="publications"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>Publications</button>
+    <button class="nav-item" data-ws="contacts"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>Contacts</button>
+    <button class="nav-item" data-ws="data"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>Data</button>
+  </nav>
+  <div class="nav-spacer"></div>
+  <nav>
+    <button class="nav-item" data-ws="system"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>System &amp; Settings</button>
+  </nav>
   <div class="status">
-    <label class="ac" id="acWrap" title="Loading auto-collect status...">
-      <span>Auto-collect</span>
-      <button type="button" class="switch" id="acSwitch" role="switch" aria-checked="false" aria-label="Auto-collect daily" disabled><span class="knob"></span></button>
-      <span id="acTxt">...</span>
-    </label>
-    <div class="pill"><span class="dot" id="apiDot"></span><span id="apiTxt">API...</span></div>
-    <div class="pill"><span class="dot" id="dbDot"></span><span id="dbTxt">DB...</span></div>
+    <div class="row"><span class="dot" id="apiDot"></span><span id="apiTxt">API...</span></div>
+    <div class="row"><span class="dot" id="dbDot"></span><span id="dbTxt">DB...</span></div>
   </div>
-</header>
-<div class="tabs">
-  <button class="tab on" data-t="ask">Ask NTD</button>
-  <button class="tab" data-t="collect">Collection</button>
-  <button class="tab" data-t="sources">Sources</button>
-  <button class="tab" data-t="contacts">Contacts</button>
-  <button class="tab" data-t="newsletter">Newsletter</button>
-  <button class="tab" data-t="publish">Publish</button>
-  <button class="tab" data-t="grants">Grants</button>
-  <button class="tab" data-t="askcig">Ask CIG</button>
-</div>
-<div class="wrap">
+</aside>
+
+<main>
+  <div class="top">
+    <div><h1 class="disp" id="wsTitle">Command Center</h1><div class="sub" id="wsSub">Welcome back, Brian</div></div>
+    <div class="statstrip">
+      <label class="ac" id="acWrap" title="Loading auto-collect status...">
+        <span>Auto-collect</span>
+        <button type="button" class="switch" id="acSwitch" role="switch" aria-checked="false" aria-label="Auto-collect daily" disabled><span class="knob"></span></button>
+        <span id="acTxt">...</span>
+      </label>
+      <span><b id="ssApi">API</b> <span id="ssApiTxt">...</span></span>
+      <span><b id="ssDb">DB</b> <span id="ssDbTxt">...</span></span>
+      <span id="ssDate"></span>
+    </div>
+  </div>
+
+  <!-- Landing dashboard -->
+  <div class="ws on" id="ws-dashboard">
+    <div class="attn quiet" id="dashAttn">Checking what needs attention...</div>
+    <div class="grid" id="dashGrid"></div>
+  </div>
+
+  <!-- Workspaces: the sub-nav switches which tool panel below is shown -->
+  <div class="ws" id="ws-tools">
+    <div class="subnav" id="subnav"></div>
+    <div class="wrap">
   <div class="panel on" id="p-ask">
     <div class="askhead"><div><h2 class="disp">Ask NTD</h2><p class="lead">Ask, then keep asking - follow-ups like "what about Texas?" build on your last question. Hit New question to start fresh.</p></div></div>
     <form id="askForm"><input type="text" id="q" placeholder="Ask a question, then follow up..." autocomplete="off"><button class="go" type="submit">Ask</button></form>
@@ -2139,15 +2209,179 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="cigAskOut"></div>
   </div>
 </div>
+  <div class="panel" id="p-images">
+    <div class="askhead"><div><h2 class="disp">Images</h2><p class="lead">Every published story and the picture it carries. A story with no chosen picture falls back to its pillar house graphic &mdash; safe, but generic. Sweep through and give the ones worth it a real image.</p></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="imgRefresh" type="button">Refresh</button></div></div>
+    <div class="examples" id="imgFilters"></div>
+    <div id="imgMsg"></div>
+    <div id="imgPicker"></div>
+    <div id="imgOut"></div>
+  </div>
+  <div class="panel" id="p-reports">
+    <div class="askhead"><div><h2 class="disp">Reports</h2><p class="lead">The Annual Snapshot and other data reports built from the NTD and CIG engines.</p></div></div>
+    <div class="soon">Not built yet. The plan: a scheduled PDF/web report drawing on the same data the Ask tools use &mdash; pipeline movement, ridership and cost trends, and the year's funding picture.</div>
+  </div>
+  <div class="panel" id="p-listhealth">
+    <div class="askhead"><div><h2 class="disp">List health</h2><p class="lead">How the audience is doing: confirmations, bounces, complaints and the do-not-email list.</p></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="lhRefresh" type="button">Refresh</button></div></div>
+    <div id="lhOut"></div>
+  </div>
+  <div class="panel" id="p-dataadmin">
+    <div class="askhead"><div><h2 class="disp">Data admin</h2><p class="lead">Where the data comes in: the CIG dashboard snapshots, the profile archive, and the NTD database.</p></div></div>
+    <div id="daOut"></div>
+  </div>
+  <div class="panel" id="p-system">
+    <div class="askhead"><div><h2 class="disp">System &amp; Settings</h2><p class="lead">Service health, the daily collector, and publishing the public site.</p></div>
+      <div style="display:flex;gap:8px"><button class="newq" id="sysRefresh" type="button">Refresh</button></div></div>
+    <div id="sysOut"></div>
+  </div>
+  </div>
+</main>
 <script>
 let thread=[];  // [{question, sql, columns, rows}]
 const EX=["ridership trend by mode","cheapest heavy rail systems per rider","highest ridership rail systems","most expensive bus systems per rider"];
 const exWrap=document.getElementById("ex");
 EX.forEach(t=>{const b=document.createElement("button");b.className="ex";b.textContent=t;b.onclick=()=>{document.getElementById("q").value=t;doAsk(t);};exWrap.appendChild(b);});
 
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));
-  document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on",p.id==="p-"+t.dataset.t));
+// ---- Console navigation: sidebar workspaces, a landing dashboard, and hash deep-links ----------
+// Tools are the existing panels; the router just decides which workspace and which panel is shown,
+// so every screen that worked before still works - it is reachable from a category instead of a tab.
+const WORKSPACES = {
+  "web-content": {title:"Web Content", sub:"Gather, review and publish the news feed behind the public site.",
+    desc:"Gather, review, and publish the news feed that populates the public site.",
+    icon:'<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+    tools:[["sources","Sources","p-sources"],["collection","Collection","p-collect"],["publish","Publish","p-publish"],["images","Images","p-images"]]},
+  "publications": {title:"Publications", sub:"Compose and send The Wire; reports and the annual snapshot.",
+    desc:"Compose and send The Wire; produce reports and the annual snapshot.",
+    icon:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    tools:[["wire","The Wire","p-newsletter"],["reports","Reports","p-reports"]]},
+  "contacts": {title:"Contacts", sub:"The subscriber list and CRM.",
+    desc:"The subscriber list and CRM — search, segment, and keep it clean.",
+    icon:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
+    tools:[["database","Database","p-contacts"],["health","List health","p-listhealth"]]},
+  "data": {title:"Data", sub:"The quick-answer tools and the pipeline engine.",
+    desc:"The quick-answer tools and the pipeline engine behind the brand.",
+    icon:'<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+    tools:[["ask-ntd","Ask NTD","p-ask"],["ask-cig","Ask CIG","p-askcig"],["pipeline","CIG Pipeline","p-grants"],["admin","Data admin","p-dataadmin"]]},
+  "system": {title:"System & Settings", sub:"Health, the daily collector, and publishing the site.",
+    desc:"Service health, the auto-collect switch and site rebuilds.",
+    icon:'<circle cx="12" cy="12" r="3"/>',
+    tools:[["settings","Health & settings","p-system"]]},
+};
+const DASH_ORDER = ["web-content","publications","contacts","data"];
+let curWs = "dashboard", curTool = null;
+
+function setNav(ws){
+  document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.ws===ws));
+}
+function showPanel(panelId){
+  document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on", p.id===panelId));
+}
+function go(ws, tool, push){
+  if(ws==="dashboard"||!WORKSPACES[ws]){
+    curWs="dashboard";curTool=null;setNav("dashboard");
+    document.getElementById("ws-dashboard").classList.add("on");
+    document.getElementById("ws-tools").classList.remove("on");
+    document.getElementById("wsTitle").textContent="Command Center";
+    document.getElementById("wsSub").textContent="Welcome back, Brian";
+    if(push!==false)location.hash="";
+    loadDashboard();
+    return;
+  }
+  const w=WORKSPACES[ws];
+  curWs=ws;
+  curTool=(w.tools.find(t=>t[0]===tool)||w.tools[0])[0];
+  setNav(ws);
+  document.getElementById("ws-dashboard").classList.remove("on");
+  document.getElementById("ws-tools").classList.add("on");
+  document.getElementById("wsTitle").textContent=w.title;
+  document.getElementById("wsSub").textContent=w.sub;
+  document.getElementById("subnav").innerHTML=w.tools.map(t=>
+    '<button data-tool="'+t[0]+'"'+(t[0]===curTool?' class="on"':'')+'>'+esc(t[1])+'</button>').join("");
+  const panel=(w.tools.find(t=>t[0]===curTool)||w.tools[0])[2];
+  showPanel(panel);
+  if(push!==false)location.hash=ws+"/"+curTool;
+  onToolOpen(curTool, panel);
+}
+// Each tool loads its own data when it is opened (the old tab-click behaviour).
+function onToolOpen(tool, panel){
+  try{
+    if(panel==="p-collect"){loadFacets();loadCollection();}
+    else if(panel==="p-sources")loadSources();
+    else if(panel==="p-publish")loadPublish();
+    else if(panel==="p-contacts")loadContacts();
+    else if(panel==="p-newsletter")loadIssues();
+    else if(panel==="p-grants")loadCIG();
+    else if(panel==="p-images")loadImagesScreen();
+    else if(panel==="p-system")loadSystem();
+    else if(panel==="p-listhealth")loadListHealth();
+    else if(panel==="p-dataadmin")loadDataAdmin();
+  }catch(e){}
+}
+document.querySelectorAll(".nav-item").forEach(b=>b.onclick=()=>go(b.dataset.ws));
+document.getElementById("subnav").addEventListener("click",e=>{
+  const b=e.target.closest("[data-tool]");
+  if(b)go(curWs,b.dataset.tool);
+});
+window.addEventListener("hashchange",()=>routeFromHash(false));
+function routeFromHash(push){
+  const h=(location.hash||"").replace(/^#/,"");
+  if(!h){go("dashboard",null,false);return;}
+  const [ws,tool]=h.split("/");
+  go(ws,tool,push===true);
+}
+
+// ---- Landing dashboard: four category cards with a live metric, plus what needs attention -------
+// Metrics come from the real endpoints; anything unavailable shows a dash rather than breaking.
+async function jget(url){try{const r=await fetch(url);return r.ok?await r.json():null;}catch(e){return null;}}
+function dashCard(key,metric,note){
+  const w=WORKSPACES[key];
+  return '<div class="card" data-card="'+key+'" role="button" tabindex="0">'
+    +'<div class="head"><div class="ic"><svg viewBox="0 0 24 24">'+w.icon+'</svg></div><h2 class="disp">'+esc(w.title)+'</h2></div>'
+    +'<p class="desc">'+esc(w.desc)+'</p>'
+    +'<div class="metric">'+metric+' <small>'+note+'</small></div>'
+    +'<div class="subs">'+w.tools.map(t=>'<button data-pill="'+key+'/'+t[0]+'">'+esc(t[1])+'</button>').join("")+'</div></div>';
+}
+async function loadDashboard(){
+  const grid=document.getElementById("dashGrid");
+  if(!grid.innerHTML)grid.innerHTML=DASH_ORDER.map(k=>dashCard(k,"&mdash;","loading...")).join("");
+  const [coll,issues,contacts,cig,profiles]=await Promise.all([
+    jget("/api/collection?status=pending&limit=1"),jget("/api/newsletter/issues"),
+    jget("/api/contacts?limit=1"),jget("/api/cig"),jget("/api/cig/profiles/status")]);
+  const pending=coll&&coll.counts&&coll.counts.pending!=null?coll.counts.pending:(coll&&coll.matched!=null?coll.matched:null);
+  const counts=contacts&&contacts.counts?contacts.counts:null;
+  const healthy=counts&&counts.total?Math.round((counts.by_status.subscribed||0)/counts.total*100):null;
+  const list=(issues&&issues.issues)||[];
+  const sent=list.find(i=>i.status==="sent"),draft=list.find(i=>i.status==="draft");
+  const snap=cig&&cig.summary?cig.summary.snapshot:null;
+  const m={
+    "web-content":[pending==null?"&mdash;":pending,"items pending review"],
+    "publications":[sent?esc((sent.sent_at||"").slice(0,10)):"None yet",
+      (sent?"last Wire sent":"no issue sent")+(draft?" &middot; draft ready":"")],
+    "contacts":[counts?counts.total:"&mdash;",counts?((counts.by_status.subscribed||0)+" subscribed"+(healthy!=null?" &middot; "+healthy+"% confirmed":"")):"no contacts yet"],
+    "data":[snap?"CIG "+esc(snap):"&mdash;",(cig&&cig.summary?cig.summary.projects+" projects":"pipeline not loaded")],
+  };
+  grid.innerHTML=DASH_ORDER.map(k=>dashCard(k,m[k][0],m[k][1])).join("");
+  // Needs attention: only the things actually waiting on a decision.
+  const bits=[];
+  if(pending)bits.push("<b>"+pending+"</b> item"+(pending===1?"":"s")+" awaiting review");
+  if(draft)bits.push("The Wire <b>draft ready</b> to send");
+  const todo=profiles&&profiles.to_download?profiles.to_download.length:0;
+  if(todo)bits.push("<b>"+todo+"</b> CIG profile"+(todo===1?"":"s")+" to download");
+  if(counts&&counts.by_status&&counts.by_status.pending)bits.push("<b>"+counts.by_status.pending+"</b> contact(s) not yet confirmed");
+  const attn=document.getElementById("dashAttn");
+  attn.className="attn"+(bits.length?"":" quiet");
+  attn.innerHTML=bits.length?"⚑ <b>Needs attention:</b> "+bits.join(" &middot; "):"Nothing waiting on you right now.";
+}
+document.getElementById("dashGrid").addEventListener("click",e=>{
+  const pill=e.target.closest("[data-pill]");
+  if(pill){e.stopPropagation();const [ws,tool]=pill.dataset.pill.split("/");go(ws,tool);return;}
+  const card=e.target.closest("[data-card]");
+  if(card)go(card.dataset.card);
+});
+document.getElementById("dashGrid").addEventListener("keydown",e=>{
+  const card=e.target.closest("[data-card]");
+  if(card&&(e.key==="Enter"||e.key===" ")){e.preventDefault();go(card.dataset.card);}
 });
 document.getElementById("newq").onclick=()=>{thread=[];document.getElementById("out").innerHTML="";document.getElementById("follow").classList.remove("on");document.getElementById("q").focus();};
 
@@ -2157,7 +2391,14 @@ async function refreshStatus(){
     setPill("db",s.db&&s.db.ok,s.db&&s.db.ok?("DB "+(s.db.tables!=null?s.db.tables+" tables":"ok")):"DB down");
   }catch(e){setPill("api",false,"API down");setPill("db",false,"DB down");}
 }
-function setPill(k,up,txt){document.getElementById(k+"Dot").className="dot "+(up?"up":"down");document.getElementById(k+"Txt").textContent=txt;}
+function setPill(k,up,txt){
+  document.getElementById(k+"Dot").className="dot "+(up?"up":"down");
+  document.getElementById(k+"Txt").textContent=txt;
+  const strip=document.getElementById("ss"+k.charAt(0).toUpperCase()+k.slice(1)+"Txt");
+  if(strip)strip.textContent=up?"online":"down";
+  const d=document.getElementById("ssDate");
+  if(d)d.textContent=new Date().toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+}
 
 // Everything from the API, the model or the database is untrusted text: escape it before it
 // goes into innerHTML (phase 2b will show headlines scraped from other sites).
@@ -2246,7 +2487,6 @@ const cChips=document.getElementById("cChips");
   b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadFacets();loadCollection();};
   if(k==="pending")b.style.borderColor="var(--accent)";cChips.appendChild(b);});
 document.getElementById("cRefresh").onclick=()=>{loadFacets();loadCollection();};
-document.querySelector('.tab[data-t="collect"]').addEventListener("click",()=>{loadFacets();loadCollection();});
 
 // Search + facet filters. Dropdowns hold pillar/mode/program/state; agency and tag filters are set by
 // clicking a chip on a card. Every value comes from the database, so it's escaped wherever it's shown.
@@ -2366,7 +2606,6 @@ document.getElementById("pRebuild").onclick=async()=>{
   if(!r.ok)alert(errText(await r.text()));
   loadSiteStatus();
 };
-document.querySelector('.tab[data-t="publish"]').addEventListener("click",loadPublish);
 // Publish all: exactly the items shown (ids captured at load), in one request, one site rebuild.
 var pReadyIds=[];
 document.getElementById("pPubAll").onclick=async()=>{
@@ -2421,7 +2660,7 @@ function pTile(c,chosenUrl){
     +'<span class="pimg-m">'+esc(pImgSize(c))+'</span></button>';
 }
 function pRenderPicker(){
-  const box=document.getElementById("pPicker");
+  const box=document.getElementById((pPick&&pPick.host)||"pPicker");
   if(!pPick){box.innerHTML="";return;}
   const d=pPick.data||{},chosen=pPick.chosen||{};
   const all=(d.candidates||[]);
@@ -2456,9 +2695,9 @@ function pRenderPicker(){
   document.getElementById("pPickNone").onclick=()=>{pPick.chosen={};pRenderPicker();};
   document.getElementById("pPickGo").onclick=pPickSave;
 }
-async function pOpenPicker(kind,id,pillar,label){
-  pPick={kind:kind,id:id,pillar:pillar,data:{},chosen:{},label:label};
-  document.getElementById("pPicker").innerHTML='<div class="rcard"><div class="loading">Reading the article for pictures...</div></div>';
+async function pOpenPicker(kind,id,pillar,label,host){
+  pPick={kind:kind,id:id,pillar:pillar,data:{},chosen:{},label:label,host:host||"pPicker"};
+  document.getElementById(pPick.host).innerHTML='<div class="rcard"><div class="loading">Reading the article for pictures...</div></div>';
   try{
     const q=(kind==="item"?"item_id=":"post_id=")+id;
     const r=await fetch("/api/images/candidates?"+q);
@@ -2468,7 +2707,7 @@ async function pOpenPicker(kind,id,pillar,label){
       if(s)pPick.chosen={url:s,source:"candidate"};}
   }catch(e){pPick.data={note:"Couldn't reach the Command Center.",candidates:[],house:[]};}
   pRenderPicker();
-  document.getElementById("pPicker").scrollIntoView({behavior:"smooth",block:"nearest"});
+  document.getElementById(pPick.host).scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 async function pPickSave(){
   const b=document.getElementById("pPickGo");b.disabled=true;
@@ -2478,7 +2717,8 @@ async function pPickSave(){
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const t=await r.text();
     if(!r.ok){alert((pPick.kind==="item"?"Couldn't publish: ":"Couldn't save the picture: ")+errText(t));b.disabled=false;return;}
-    pPick=null;pRenderPicker();loadPublish();
+    const was=pPick.host;pPick=null;document.getElementById(was).innerHTML="";
+    if(was==="imgPicker")loadImagesScreen(true); else loadPublish();
   }catch(e){alert("Couldn't reach the Command Center.");b.disabled=false;}
 }
 document.getElementById("p-publish").addEventListener("click",e=>{
@@ -2540,7 +2780,6 @@ document.getElementById("pReady").addEventListener("click",e=>{
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
 // ---- Newsletter tab: draft from published posts, edit, preview, test, send ----
 let nIssues=[],nCurrent=null;
-document.querySelector('.tab[data-t="newsletter"]').addEventListener("click",loadIssues);
 document.getElementById("nRefresh").onclick=loadIssues;
 function nMsg(kind,html){document.getElementById("nMsg").innerHTML=html?'<div class="rcard"><div class="'+kind+'">'+html+'</div></div>':"";}
 const NSTATUS={draft:["Draft","var(--muted)"],sending:["Sending","var(--ink)"],sent:["Sent","#1F6B4A"],failed:["Failed","var(--accent)"]};
@@ -2636,7 +2875,6 @@ document.getElementById("p-newsletter").addEventListener("click",async e=>{
 
 // ---- Contacts tab: the newsletter list (contacts + suppressions) ----
 let kData=null,kFilter={q:"",status:"",tag:""};
-document.querySelector('.tab[data-t="contacts"]').addEventListener("click",loadContacts);
 document.getElementById("kRefresh").onclick=loadContacts;
 document.getElementById("kSearchForm").addEventListener("submit",e=>{
   e.preventDefault();
@@ -2774,7 +3012,6 @@ document.getElementById("p-contacts").addEventListener("click",async e=>{
 
 // ---- Sources tab: the collector's registry (feeds + Google News keyword searches) ----
 let sData=null;
-document.querySelector('.tab[data-t="sources"]').addEventListener("click",loadSources);
 document.getElementById("sRefresh").onclick=loadSources;
 document.getElementById("sAddFeed").onclick=()=>sShowForm("feed",null);
 document.getElementById("sAddSearch").onclick=()=>sShowForm("search",null);
@@ -2939,7 +3176,6 @@ document.getElementById("gLinkForm").addEventListener("submit",async e=>{
   }catch(err){gNote("err","Couldn't reach the Command Center.");}
   btn.disabled=false;
 });
-document.querySelector('.tab[data-t="grants"]').addEventListener("click",loadCIG);
 const gChips=document.getElementById("gChips");
 [["","All phases"],["PD","Project Development"],["Eng","Engineering"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="ex";b.textContent=lbl;
@@ -3115,5 +3351,114 @@ async function cigDoAsk(q){
       +'<div class="twrap" style="padding:6px 18px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Archivo,sans-serif"><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sqlBlock+'</div>';
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not reach Ask CIG.</div></div>';}
 }
+// ---- Images screen: every published story and the picture it carries -----------------------------
+let imgFilter="all",imgPosts=[];
+document.getElementById("imgRefresh").onclick=()=>loadImagesScreen(true);
+[["all","All"],["house","Using a house graphic"],["chosen","With a chosen picture"]].forEach(([k,label])=>{
+  const b=document.createElement("button");b.className="ex";b.textContent=label;
+  b.onclick=()=>{imgFilter=k;document.querySelectorAll("#imgFilters .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));renderImages();};
+  if(k==="all")b.style.borderColor="var(--accent)";
+  document.getElementById("imgFilters").appendChild(b);
+});
+async function loadImagesScreen(force){
+  const out=document.getElementById("imgOut");
+  if(!imgPosts.length||force)out.innerHTML='<div class="rcard"><div class="loading">Loading published stories...</div></div>';
+  const d=await jget("/api/posts");
+  imgPosts=(d&&d.posts)||[];
+  renderImages();
+}
+function renderImages(){
+  const out=document.getElementById("imgOut");
+  const list=imgPosts.filter(p=>imgFilter==="all"||(imgFilter==="house"?!p.image_url:!!p.image_url));
+  const house=imgPosts.filter(p=>!p.image_url).length;
+  out.innerHTML='<div class="rcard" style="padding:12px 18px;font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">'
+    +imgPosts.length+' published · '+house+' using a house graphic · '+(imgPosts.length-house)+' with a chosen picture</div>'
+    +'<div class="imgrid">'+(list.length?list.map(imgCard).join(""):'<div class="loading">Nothing matches that filter.</div>')+'</div>';
+}
+function imgCard(p){
+  const img=safeUrl(p.image_url);
+  const pic=img?'<img src="'+esc(img)+'" alt="" loading="lazy">'
+    :'<div class="imgcard-house">'+esc(p.pillar||"News")+' house graphic</div>';
+  return '<div class="imgcard">'+pic
+    +'<div class="imgcard-b"><div class="imgcard-k">'+esc(p.pillar||"News")+(p.image_source?' · '+esc(p.image_source):' · fallback')+'</div>'
+    +'<div class="imgcard-t">'+esc(p.title)+'</div>'
+    +'<button class="t411-linkbtn" data-imgpick="'+p.id+'" data-pillar="'+esc(p.pillar||"")+'">Choose picture</button></div></div>';
+}
+document.getElementById("p-images").addEventListener("click",e=>{
+  const t=e.target.closest("[data-pick]");
+  if(t&&pPick){pPick.chosen={url:t.dataset.pick,source:t.dataset.kind==="house"?"house":(t.dataset.kind==="article"?"manual":"candidate")};pRenderPicker();return;}
+  const b=e.target.closest("[data-imgpick]");
+  if(b)pOpenPicker("post",+b.dataset.imgpick,b.dataset.pillar,"","imgPicker");
+});
+
+// ---- System & Settings: health, the daily collector, and rebuilding the site ---------------------
+async function loadSystem(){
+  const out=document.getElementById("sysOut");
+  const [st,site,ac,srcs]=await Promise.all([jget("/api/status"),jget("/api/site/rebuild"),jget("/api/auto-collect"),jget("/api/sources")]);
+  const row=(k,v)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-top:1px solid var(--line)"><span style="color:var(--muted)">'+k+'</span><span>'+v+'</span></div>';
+  const lr=ac&&ac.last_run?ac.last_run:null;
+  out.innerHTML='<div class="rcard" style="padding:16px 18px;font-family:Archivo,sans-serif;font-size:13px">'
+    +'<div style="font-weight:800;font-size:14px;margin-bottom:4px">Services</div>'
+    +row("NTD API",st&&st.api&&st.api.ok?"online"+(st.api.rows!=null?" · "+st.api.rows.toLocaleString()+" rows":""):'<span style="color:var(--accent)">down</span>')
+    +row("Database",st&&st.db&&st.db.ok?"connected"+(st.db.tables!=null?" · "+st.db.tables+" tables":""):'<span style="color:var(--accent)">down</span>')
+    +row("Collector sources",srcs&&srcs.sources?srcs.sources.filter(x=>x.enabled&&x.method==="RSS").length+" fetched each run":"&mdash;")
+    +row("Auto-collect",ac?(ac.enabled?"on":"off")+(ac.schedule&&ac.schedule.at?" · daily at "+esc(ac.schedule.at):""):"&mdash;")
+    +row("Last collection",lr&&lr.at?esc(new Date(lr.at).toLocaleString())+(lr.skipped?" (skipped)":(lr.added!=null?" · "+lr.added+" queued":"")):"none recorded")
+    +'</div>'
+    +'<div class="rcard" style="padding:16px 18px;font-family:Archivo,sans-serif;font-size:13px">'
+    +'<div style="font-weight:800;font-size:14px;margin-bottom:4px">Public site</div>'
+    +row("Rebuild hook",site&&site.configured?"configured":'<span style="color:var(--accent)">not set up</span>')
+    +row("Last rebuild",site&&site.last_at?esc(new Date(site.last_at).toLocaleString())+(site.last_ok?" · ok":" · failed"):"none yet")
+    +row("Pending",site&&site.pending_since?"a rebuild is queued":"none")
+    +'<div style="margin-top:12px"><button class="newq" id="sysRebuild" type="button"'+(site&&site.configured?"":" disabled")+'>Rebuild the site now</button></div></div>';
+  const b=document.getElementById("sysRebuild");
+  if(b)b.onclick=async()=>{b.disabled=true;const r=await fetch("/api/site/rebuild",{method:"POST"});if(!r.ok)alert(errText(await r.text()));loadSystem();};
+}
+document.getElementById("sysRefresh").onclick=loadSystem;
+
+// ---- List health + Data admin: read-only summaries drawn from what the other tools already expose -
+async function loadListHealth(){
+  const out=document.getElementById("lhOut");
+  const [c,em]=await Promise.all([jget("/api/contacts?limit=1"),jget("/api/email/status")]);
+  if(!c){out.innerHTML='<div class="rcard"><div class="err">Could not load the contact list.</div></div>';return;}
+  const b=c.counts.by_status||{},total=c.counts.total||0,supp=(b.unsubscribed||0)+(b.bounced||0)+(b.complained||0);
+  const pct=n=>total?Math.round(n/total*100)+"%":"0%";
+  const bar=(label,n,color)=>'<div style="margin:10px 0"><div style="display:flex;justify-content:space-between;font-family:Archivo,sans-serif;font-size:12px">'
+    +'<span>'+label+'</span><span style="color:var(--muted)">'+n+' · '+pct(n)+'</span></div>'
+    +'<div style="height:8px;background:var(--soft);border-radius:999px;overflow:hidden;margin-top:4px"><div style="height:100%;width:'+pct(n)+';background:'+color+'"></div></div></div>';
+  out.innerHTML='<div class="rcard" style="padding:16px 18px;display:flex;gap:26px;flex-wrap:wrap">'
+    +gStat(total,"contacts")+gStat(b.subscribed||0,"confirmed")+gStat(b.pending||0,"awaiting confirmation")+gStat(supp,"suppressed")+'</div>'
+    +'<div class="rcard" style="padding:16px 18px">'
+    +bar("Confirmed subscribers",b.subscribed||0,"#5FBF8F")+bar("Awaiting confirmation",b.pending||0,"var(--muted)")
+    +bar("Unsubscribed",b.unsubscribed||0,"var(--accent)")+bar("Bounced",b.bounced||0,"var(--accent)")+bar("Complained",b.complained||0,"var(--accent2)")
+    +'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin-top:10px">'
+    +(em&&em.configured?"Sending is configured ("+esc(em.from||"")+"). ":"Sending isn't configured yet. ")
+    +(c.counts.suppressed||0)+' address(es) on the do-not-email list &mdash; they can never be re-added by an import.</div></div>';
+}
+document.getElementById("lhRefresh").onclick=loadListHealth;
+async function loadDataAdmin(){
+  const out=document.getElementById("daOut");
+  const [cig,prof,st]=await Promise.all([jget("/api/cig"),jget("/api/cig/profiles/status"),jget("/api/status")]);
+  const s=cig&&cig.summary?cig.summary:null;
+  const row=(k,v)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-top:1px solid var(--line)"><span style="color:var(--muted)">'+k+'</span><span>'+v+'</span></div>';
+  out.innerHTML='<div class="rcard" style="padding:16px 18px;font-family:Archivo,sans-serif;font-size:13px">'
+    +'<div style="font-weight:800;font-size:14px;margin-bottom:4px">CIG pipeline</div>'
+    +row("Current snapshot",s&&s.snapshot?esc(s.snapshot)+" · "+s.projects+" projects":"nothing loaded")
+    +row("History",s&&s.snapshots?s.snapshots+" monthly snapshots":"&mdash;")
+    +row("Profile archive",prof?prof.archived+" of "+prof.projects+" projects · "+prof.versions+" versions":"&mdash;")
+    +row("To download",prof&&prof.to_download?prof.to_download.length+" profile(s)":"&mdash;")
+    +'<div style="margin-top:12px;color:var(--muted)">Loading a dashboard PDF and the profile tools live on the <button class="t411-linkbtn" data-goto="data/pipeline">CIG Pipeline</button> screen.</div></div>'
+    +'<div class="rcard" style="padding:16px 18px;font-family:Archivo,sans-serif;font-size:13px">'
+    +'<div style="font-weight:800;font-size:14px;margin-bottom:4px">NTD database</div>'
+    +row("API",st&&st.api&&st.api.ok?"online":'<span style="color:var(--accent)">down</span>')
+    +row("Rows",st&&st.api&&st.api.rows!=null?st.api.rows.toLocaleString():"&mdash;")
+    +'<div style="margin-top:12px;color:var(--muted)">Rebuild it on the NAS with <code>docker compose run --rm ingest</code>; the API picks the new file up on its next query.</div></div>';
+}
+document.getElementById("p-dataadmin").addEventListener("click",e=>{
+  const g=e.target.closest("[data-goto]");
+  if(g){const [ws,tool]=g.dataset.goto.split("/");go(ws,tool);}
+});
+
 refreshStatus();setInterval(refreshStatus,15000);
+routeFromHash(false);
 </script></body></html>"""
