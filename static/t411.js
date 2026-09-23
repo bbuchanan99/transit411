@@ -457,6 +457,17 @@
     const a = Object.entries(attrs || {}).map(([k, v]) => k + '="' + String(v).replace(/"/g, "&quot;") + '"').join(" ");
     return "<" + tag + (a ? " " + a : "") + (inner != null ? ">" + inner + "</" + tag + ">" : "/>");
   }
+  // The wordmark is one text run with the red half as a tspan, so the "411" flows from wherever
+  // "TRANSIT" actually ends. Positioning the two halves separately means hand-measuring the first
+  // one, and the measurement is wrong the moment the size, weight or font changes.
+  function svLockup(x, y, dark, red, o) {
+    o = o || {};
+    return sv("text", {
+      x: x, y: y, fill: CARD.ink, "font-family": CARD.sans,
+      "font-size": o.size || 14, "font-weight": o.weight || 900,
+      "letter-spacing": o.track != null ? o.track : 0,
+    }, esc(dark) + sv("tspan", { fill: CARD.red }, esc(red)));
+  }
   function svText(x, y, s, o) {
     o = o || {};
     return sv("text", {
@@ -532,8 +543,7 @@
     const parts = [
       sv("rect", { x: 0, y: 0, width: W, height: H, fill: CARD.paper }),
       sv("rect", { x: 0, y: headH - 3, width: W, height: 3, fill: CARD.ink }),
-      svText(pad, 40, "TRANSIT", { size: 21, weight: 900, track: -1 }),
-      svText(pad + 92, 40, "411", { size: 21, weight: 900, track: -1, fill: CARD.red }),
+      svLockup(pad, 40, "TRANSIT", "411", { size: 21, weight: 900, track: -1 }),
       svText(W - pad, 39, (spec.tool || "Ask NTD") + " · Data Card",
         { size: 10, weight: 800, track: 2, fill: CARD.muted, anchor: "end" }),
     ];
@@ -564,8 +574,7 @@
         parts.push(svText(pad, fy, l, { size: 12, font: CARD.serif, fill: CARD.muted })); fy += 17;
       });
     }
-    parts.push(svText(pad, H - 22, "transit411", { size: 13, weight: 800 }));
-    parts.push(svText(pad + 74, H - 22, ".net", { size: 13, weight: 800, fill: CARD.red }));
+    parts.push(svLockup(pad, H - 22, "transit411", ".net", { size: 13, weight: 800 }));
     parts.push(svText(W - pad, H - 22, "Generated with " + (spec.tool || "Ask NTD"),
       { size: 10, track: 1, fill: CARD.gen, anchor: "end" }));
     // Body, between the title and the footer
