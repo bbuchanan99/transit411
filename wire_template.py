@@ -86,7 +86,7 @@ def lead(post):
     return ('<tr><td style="padding:18px 34px;background:' + PAPER + ';border-bottom:1px solid ' + LINE + '">'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
             '<td valign="top" style="padding-right:16px">' + text_cell + "</td>"
-            '<td valign="middle" width="200" style="width:200px">' + thumb + "</td>"
+            '<td valign="top" width="200" style="width:200px;padding-top:4px">' + thumb + "</td>"
             "</tr></table></td></tr>")
 
 
