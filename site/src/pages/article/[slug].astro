@@ -90,19 +90,20 @@ const chips = [
       {pillarPath ? <a href={`/${pillarPath}`}>{post.pillar}</a> : post.pillar}
       {post.featured && <span class="post-flag">{post.sponsor ? `Featured · ${post.sponsor}` : "Featured"}</span>}
     </div>
-    <h1 class="art-title disp">{post.title}</h1>
-    {post.date && <div class="art-meta">{post.date}{post.source && <span> · Reported by {post.source}</span>}</div>}
-
-    {post.image && (
-      <figure class="art-hero">
-        {post.imageIsHouse || !post.url
-          ? <img src={post.image} alt={post.imageIsHouse ? `${post.pillar} — Transit411` : post.title} loading="lazy" />
-          : <a href={post.url} target="_blank" rel="noopener noreferrer"><img src={post.image} alt={post.title} loading="lazy" /></a>}
-        {!post.imageIsHouse && post.source && (
-          <figcaption>Image: {post.source}</figcaption>
-        )}
-      </figure>
-    )}
+    <div class="art-head">
+      <div class="art-head-text">
+        <h1 class="art-title disp">{post.title}</h1>
+        {post.date && <div class="art-meta">{post.date}{post.source && <span> · Reported by {post.source}</span>}</div>}
+      </div>
+      {post.image && (
+        <figure class="art-thumb">
+          {post.imageIsHouse || !post.url
+            ? <img src={post.image} alt={post.imageIsHouse ? `${post.pillar} — Transit411` : post.title} loading="lazy" />
+            : <a href={post.url} target="_blank" rel="noopener noreferrer"><img src={post.image} alt={post.title} loading="lazy" /></a>}
+          {!post.imageIsHouse && post.source && <figcaption>Image: {post.source}</figcaption>}
+        </figure>
+      )}
+    </div>
 
     <div class="art-body">
       {post.paragraphs.length

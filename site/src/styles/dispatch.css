@@ -160,16 +160,20 @@ a.data-card:hover{border-color:var(--accent);text-decoration:none}
 .post-thumb img{display:block;width:100%;height:96px;object-fit:cover}
 @media (max-width:620px){.post-full{grid-template-columns:1fr}.post-thumb{grid-row:auto;max-width:280px}
   .post-full .post-k,.post-full .post-title,.post-full .post-deck,.post-full .post-meta{grid-column:1}}
-.art-hero{margin:18px 0 2px;padding:0}
-.art-hero img{display:block;width:100%;height:auto;border:1px solid var(--line);background:var(--panel)}
-.art-hero figcaption{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-top:6px}
-
 /* article pages (/article/<slug>) */
 .article{max-width:760px;padding-top:30px;padding-bottom:40px}
 .art-k{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent)}
 .art-k a{color:var(--accent)}
 .art-title{font-size:36px;font-weight:800;line-height:1.12;letter-spacing:-1px;margin:10px 0 12px}
-.art-meta{font-family:'Archivo',sans-serif;font-size:13px;color:var(--muted);border-bottom:3px solid var(--ink);padding-bottom:14px}
+.art-meta{font-family:'Archivo',sans-serif;font-size:13px;color:var(--muted)}
+/* headline on the left, a thumbnail beside it - never a full-width banner */
+.art-head{display:flex;gap:22px;align-items:flex-start;border-bottom:3px solid var(--ink);padding-bottom:14px}
+.art-head-text{flex:1;min-width:0}
+.art-thumb{flex:0 0 200px;margin:6px 0 0;padding:0}
+.art-thumb img{display:block;width:200px;height:134px;object-fit:cover;border:1px solid var(--line);background:var(--panel)}
+.art-thumb figcaption{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-top:5px}
+@media (max-width:560px){.art-head{flex-direction:column-reverse;gap:12px}.art-thumb{flex:none}
+  .art-thumb img{width:100%;max-width:280px;height:auto}}
 .art-body{margin:20px 0 22px}
 .art-body p{font-size:19px;line-height:1.65;margin:0 0 18px}
 .art-out{display:inline-block;background:var(--ink);color:var(--panel) !important;font-family:'Archivo',sans-serif;font-weight:800;font-size:14px;padding:14px 22px;border-radius:2px}
