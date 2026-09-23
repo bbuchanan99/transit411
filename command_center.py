@@ -1103,6 +1103,79 @@ async def email_test(t: TestEmail):
         raise HTTPException(502, f"SES error: {type(e).__name__}: {e}")
 
 
+# ---- Images: what a story could use, and changing what it uses (images.py) -----------------------
+class ImageChoice(BaseModel):
+    image_url: Optional[str] = None
+    image_source: Optional[str] = None
+
+
+def _valid_image_url(url):
+    from urllib.parse import urlparse
+    u = urlparse(url or "")
+    return u.scheme in ("http", "https") and bool(u.netloc) and len(url) <= 600
+
+
+@app.get("/api/images/candidates")
+async def image_candidates(url: Optional[str] = None, item_id: Optional[int] = None,
+                           post_id: Optional[int] = None, probe: bool = True):
+    """Every picture the source article offers, plus our house graphics, for the picker. Reads the
+    page's markup only - nothing is copied or re-hosted, and the collector's own candidate is
+    included so you can see what it found."""
+    import asyncio
+    import images as imod
+    stored = None
+    if url is None:
+        col, ident = ("collected_items", item_id) if item_id else ("content_posts", post_id)
+        if not ident:
+            raise HTTPException(400, "Give a url, an item_id or a post_id.")
+        try:
+            with _db() as c, c.cursor() as cur:
+                cur.execute("SELECT source_url, image_url FROM " + col + " WHERE id=%s", (ident,))
+                row = cur.fetchone()
+        except Exception as e:
+            raise HTTPException(502, f"DB error: {e}")
+        if not row:
+            raise HTTPException(404, "No such item.")
+        url, stored = row[0], row[1]
+    if not _valid_image_url(url):
+        raise HTTPException(400, "That isn't a usable http(s) address.")
+    house = imod.house_images(PUBLIC_SITE)
+    try:
+        found = await asyncio.to_thread(imod.candidates, url, None, probe)
+        note = None
+    except Exception as e:
+        found, note = [], f"Couldn't read that page ({type(e).__name__}) - it may block us. Paste a URL or use a house graphic."
+    if stored and not any(c["url"] == stored for c in found):
+        found.insert(0, {"url": stored, "kind": "stored", "alt": "", "width": None, "height": None,
+                         "ok": True, "content_type": None, "bytes": None})
+    return {"source_url": url, "stored": stored, "candidates": found, "house": house, "note": note}
+
+
+@app.post("/api/posts/{post_id}/image")
+def set_post_image(post_id: int, choice: ImageChoice):
+    """Change (or clear) the picture on a published post, then rebuild the site."""
+    img = (choice.image_url or "").strip()
+    src = (choice.image_source or "").strip()
+    if img and not _valid_image_url(img):
+        raise HTTPException(400, "An image URL must be a full http(s) address.")
+    if img and src not in ("candidate", "manual", "house"):
+        src = "manual"
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("UPDATE content_posts SET image_url=%s, image_source=%s WHERE id=%s RETURNING slug",
+                        (img or None, src or None, post_id))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "No such post.")
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    _request_site_rebuild("post image changed")
+    return {"post_id": post_id, "slug": row[0], "image_url": img or None, "image_source": src or None}
+
+
 # ---- Newsletter: draft an issue from published posts, preview it, then send (newsletter.py) -------
 class IssueDraft(BaseModel):
     days: Optional[int] = 7
@@ -1925,6 +1998,15 @@ td{padding:8px 12px 8px 0;border-bottom:1px solid var(--soft);white-space:nowrap
 details{margin:4px 18px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
 summary{cursor:pointer;padding:10px 13px;font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;color:var(--muted)}
 pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-size:12px;white-space:pre-wrap;color:var(--ink)}
+.pimg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.pimg{display:flex;flex-direction:column;gap:3px;padding:0;border:1px solid var(--line);background:var(--card);cursor:pointer;text-align:left;overflow:hidden;border-radius:8px}
+.pimg:hover{border-color:var(--accent)}
+.pimg.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.pimg img{width:100%;height:92px;object-fit:cover;background:var(--panel);display:block}
+.pimg.bad img{display:none}
+.pimg.bad{opacity:.5}
+.pimg-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;padding:4px 8px 0}
+.pimg-m{font-family:'Archivo',sans-serif;font-size:10px;color:var(--muted);padding:0 8px 6px}
 .chip-sm{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-family:'Archivo',sans-serif;font-size:11px;font-weight:600;color:var(--muted)}
 .soon{padding:40px 24px;text-align:center;color:var(--muted);font-family:'Archivo',sans-serif;border:1px dashed var(--line);border-radius:12px}
 .err{padding:16px 18px;color:var(--accent);font-family:'Archivo',sans-serif;font-size:14px}
@@ -2015,6 +2097,7 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
     <div id="pSite" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 14px"></div>
     <div style="display:flex;align-items:center;gap:12px;margin:6px 0 10px"><div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">Ready to publish <span id="pReadyCount"></span></div>
       <button class="go" id="pPubAll" type="button" style="padding:7px 14px;margin-left:auto" hidden>Publish all</button></div>
+    <div id="pPicker"></div>
     <div id="pReady"></div>
     <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 0 10px">Published</div>
     <div id="pPosts"></div>
@@ -2315,6 +2398,97 @@ async function loadPublish(){
     posts.innerHTML=(d.posts&&d.posts.length)?d.posts.map(pPostRow).join(""):'<div class="rcard"><div class="loading">No published posts yet.</div></div>';
   }catch(e){posts.innerHTML='<div class="rcard"><div class="err">Could not load posts.</div></div>';}
 }
+// ---- Image picker: see every picture a story could use, before it goes live ----
+// Opens under the item (or post), shows what the article offers next to our house graphics, and
+// previews the choice. Nothing from a source is ever published without a click here.
+let pPick = null;   // {kind:"item"|"post", id, data, chosen:{url,source}}
+function pImgSize(c){
+  const bits=[];
+  if(c.width&&c.height)bits.push(c.width+"x"+c.height);
+  if(c.bytes)bits.push(Math.round(c.bytes/1024)+" KB");
+  if(c.content_type)bits.push(c.content_type.replace("image/",""));
+  if(c.ok===false)bits.push("unreachable");
+  return bits.join(" · ");
+}
+const PKIND={"og:image":["Publisher's social image","#1F6B4A"],"twitter:image":["Publisher's card image","#1F6B4A"],
+  article:["In the article","var(--muted)"],house:["Transit411 house graphic","var(--accent)"],stored:["Found at collection","#1F6B4A"]};
+function pTile(c,chosenUrl){
+  const k=PKIND[c.kind]||[c.kind,"var(--muted)"];
+  const on=c.url===chosenUrl;
+  return '<button type="button" class="pimg'+(on?" on":"")+'" data-pick="'+esc(c.url)+'" data-kind="'+esc(c.kind)+'" title="'+esc(c.alt||c.url)+'">'
+    +'<img src="'+esc(c.url)+'" alt="" loading="lazy" onerror="this.parentElement.classList.add(\'bad\')">'
+    +'<span class="pimg-k" style="color:'+k[1]+'">'+esc(k[0])+'</span>'
+    +'<span class="pimg-m">'+esc(pImgSize(c))+'</span></button>';
+}
+function pRenderPicker(){
+  const box=document.getElementById("pPicker");
+  if(!pPick){box.innerHTML="";return;}
+  const d=pPick.data||{},chosen=pPick.chosen||{};
+  const all=(d.candidates||[]);
+  box.innerHTML='<div class="rcard" style="padding:16px 18px">'
+    +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><div style="font-family:Archivo,sans-serif;font-weight:800;font-size:14px">Choose the picture</div>'
+    +'<span style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted)">'+(all.length?all.length+" found in the article":"nothing usable found in the article")+'</span>'
+    +'<button class="newq" id="pPickClose" type="button" style="margin-left:auto">Close</button></div>'
+    +(d.note?'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--accent);margin-bottom:8px">'+esc(d.note)+'</div>':"")
+    +'<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:10px 0 6px">From the article</div>'
+    +(all.length?'<div class="pimg-grid">'+all.map(c=>pTile(c,chosen.url)).join("")+'</div>'
+      :'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">The page offered no usable picture (it may block us, or only have icons).</div>')
+    +'<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:16px 0 6px">Our house graphics &mdash; always safe</div>'
+    +'<div class="pimg-grid">'+(d.house||[]).map(c=>pTile(c,chosen.url)).join("")+'</div>'
+    +'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center">'
+    +'<button class="newq" id="pPickPaste" type="button">Paste a URL...</button>'
+    +'<button class="newq" id="pPickNone" type="button">No picture (use the pillar fallback)</button>'
+    +'<button class="go" id="pPickGo" type="button" style="padding:9px 18px;margin-left:auto">'+(pPick.kind==="item"?"Publish with this picture":"Save picture")+'</button></div>'
+    +'<div id="pPickPreview" style="margin-top:12px"></div></div>';
+  const prev=document.getElementById("pPickPreview");
+  prev.innerHTML=chosen.url
+    ?'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-bottom:6px">This is what readers will see:</div>'
+      +'<img src="'+esc(chosen.url)+'" alt="" style="max-width:100%;max-height:260px;border:1px solid var(--line);background:var(--panel)">'
+      +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(chosen.url)+'</div>'
+    :'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">No picture chosen &mdash; the '+esc(pPick.pillar||"pillar")+' house graphic will be used everywhere.</div>';
+  document.getElementById("pPickClose").onclick=()=>{pPick=null;pRenderPicker();};
+  document.getElementById("pPickPaste").onclick=()=>{
+    const u=(prompt("Image URL:","")||"").trim();
+    if(!u)return;
+    if(!/^https?:\/\//i.test(u)){alert("That needs to be a full http(s) URL.");return;}
+    pPick.chosen={url:u,source:"manual"};pRenderPicker();
+  };
+  document.getElementById("pPickNone").onclick=()=>{pPick.chosen={};pRenderPicker();};
+  document.getElementById("pPickGo").onclick=pPickSave;
+}
+async function pOpenPicker(kind,id,pillar,label){
+  pPick={kind:kind,id:id,pillar:pillar,data:{},chosen:{},label:label};
+  document.getElementById("pPicker").innerHTML='<div class="rcard"><div class="loading">Reading the article for pictures...</div></div>';
+  try{
+    const q=(kind==="item"?"item_id=":"post_id=")+id;
+    const r=await fetch("/api/images/candidates?"+q);
+    if(!r.ok){pPick.data={note:errText(await r.text()),candidates:[],house:[]};}
+    else{pPick.data=await r.json();
+      const s=pPick.data.stored;
+      if(s)pPick.chosen={url:s,source:"candidate"};}
+  }catch(e){pPick.data={note:"Couldn't reach the Command Center.",candidates:[],house:[]};}
+  pRenderPicker();
+  document.getElementById("pPicker").scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+async function pPickSave(){
+  const b=document.getElementById("pPickGo");b.disabled=true;
+  const body=pPick.chosen.url?{image_url:pPick.chosen.url,image_source:pPick.chosen.source||"candidate"}:{};
+  try{
+    const url=pPick.kind==="item"?("/api/publish/"+pPick.id):("/api/posts/"+pPick.id+"/image");
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const t=await r.text();
+    if(!r.ok){alert((pPick.kind==="item"?"Couldn't publish: ":"Couldn't save the picture: ")+errText(t));b.disabled=false;return;}
+    pPick=null;pRenderPicker();loadPublish();
+  }catch(e){alert("Couldn't reach the Command Center.");b.disabled=false;}
+}
+document.getElementById("p-publish").addEventListener("click",e=>{
+  const t=e.target.closest("[data-pick]");
+  if(t&&pPick){pPick.chosen={url:t.dataset.pick,source:t.dataset.kind==="house"?"house":(t.dataset.kind==="article"?"manual":"candidate")};pRenderPicker();return;}
+  const open=e.target.closest("[data-pickitem]");
+  if(open){pOpenPicker("item",+open.dataset.pickitem,open.dataset.pillar,open.dataset.label);return;}
+  const openPost=e.target.closest("[data-pickpost]");
+  if(openPost){pOpenPicker("post",+openPost.dataset.pickpost,openPost.dataset.pillar,openPost.dataset.label);}
+});
 const PILLAR_HOUSE={Funding:"funding",Procurement:"procurement",People:"people",Policy:"policy",Data:"data"};
 function houseUrl(pillar){return (window.SITE_BASE||"https://transit411.pages.dev")+"/images/house/"+(PILLAR_HOUSE[pillar]||"news")+".png";}
 function pReadyCard(it){
@@ -2330,15 +2504,20 @@ function pReadyCard(it){
     +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
     + pic
     +'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
-    +(cand?'<button class="go" style="padding:9px 18px" data-pub="'+it.id+'" data-img="'+esc(cand)+'">Publish with this image</button>':'')
-    +'<button class="'+(cand?"newq":"go")+'" style="padding:9px 18px" data-pub="'+it.id+'">Publish with house graphic</button>'
-    +'<button class="newq" data-pubimg="'+it.id+'">Paste an image URL...</button>'
+    +'<button class="go" style="padding:9px 18px" data-pickitem="'+it.id+'" data-pillar="'+esc(it.pillar||"")+'" data-label="'+esc(it.headline)+'">Choose picture &amp; publish</button>'
+    +(cand?'<button class="newq" data-pub="'+it.id+'" data-img="'+esc(cand)+'">Publish with the one shown</button>':'')
+    +'<button class="newq" data-pub="'+it.id+'">Publish with house graphic</button>'
     +(safeUrl(it.source_url)?'<a href="'+esc(safeUrl(it.source_url))+'" target="_blank" rel="noopener noreferrer" style="font-family:Archivo,sans-serif;font-size:12px">source</a>':'')+'</div></div>';
 }
 function pPostRow(p){
+  const img=safeUrl(p.image_url);
+  const thumb=img?'<img src="'+esc(img)+'" alt="" style="width:92px;height:52px;object-fit:cover;border:1px solid var(--line);flex:none">'
+    :'<div style="width:92px;height:52px;border:1px dashed var(--line);flex:none;display:flex;align-items:center;justify-content:center;font-family:Archivo,sans-serif;font-size:9px;color:var(--muted);text-align:center">house<br>graphic</div>';
   return '<div class="rcard" style="padding:14px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px">'
-    +'<div><div style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">'+esc(p.pillar)+' - '+esc((p.publish_at||"").slice(0,10))+'</div>'
+    +thumb
+    +'<div style="flex:1"><div style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">'+esc(p.pillar)+' - '+esc((p.publish_at||"").slice(0,10))+(p.image_source?' · picture: '+esc(p.image_source):'')+'</div>'
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:16px;line-height:1.3">'+esc(p.title)+'</div></div>'
+    +'<button class="ex" data-pickpost="'+p.id+'" data-pillar="'+esc(p.pillar||"")+'" data-label="'+esc(p.title)+'">Picture</button>'
     +'<button class="ex" data-unpub="'+p.id+'">Unpublish</button></div>';
 }
 async function pPost(url,what,b,body){ // POST, and say so if it didn't work instead of silently reloading
