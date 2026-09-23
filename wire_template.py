@@ -79,14 +79,14 @@ def lead(post):
     # Alt text is styled too: plenty of clients block images by default, and an unstyled alt renders
     # as blue underlined link text in an empty box. This way a blocked image still reads as a caption.
     thumb = ('<a href="' + esc(post["url"]) + '" style="text-decoration:none;color:' + MUTED + '">'
-             '<img src="' + esc(post["image_url"]) + '" width="168" alt="'
-             + esc(post.get("image_alt") or post["title"]) + '" style="width:168px;max-width:168px;height:auto;'
+             '<img src="' + esc(post["image_url"]) + '" width="200" alt="'
+             + esc(post.get("image_alt") or post["title"]) + '" style="width:200px;max-width:200px;height:auto;'
              'display:block;border:1px solid #D2CBBB;background:' + OUTER + ';font-family:' + SANS + ';'
              'font-size:11px;line-height:1.4;color:' + MUTED + ';text-decoration:none"></a>')
     return ('<tr><td style="padding:18px 34px;background:' + PAPER + ';border-bottom:1px solid ' + LINE + '">'
             '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
             '<td valign="top" style="padding-right:16px">' + text_cell + "</td>"
-            '<td valign="top" width="168" style="width:168px">' + thumb + "</td>"
+            '<td valign="middle" width="200" style="width:200px">' + thumb + "</td>"
             "</tr></table></td></tr>")
 
 
