@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transit411 — Command Center (mock)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@600&display=swap">
+<style>
+  :root{--bg:#100E0C;--panel:#1A1714;--card:#201C18;--card2:#221E1A;--ink:#F2EEE4;--muted:#9A9384;--line:#332E28;--accent:#EE6A54;--accent2:#C0341F;--ok:#5FBF8F}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'Spectral',Georgia,serif;display:flex;min-height:100vh}
+  .disp{font-family:'Archivo',sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  aside{width:230px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:20px 0}
+  .brand{font-family:'Archivo',sans-serif;font-weight:900;font-size:22px;letter-spacing:-1px;color:var(--ink);padding:0 22px}
+  .brand span{color:var(--accent)}
+  .cc-label{font-family:'Archivo',sans-serif;font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted);padding:6px 22px 0}
+  nav{margin-top:26px;display:flex;flex-direction:column;gap:2px;padding:0 12px}
+  .nav-item{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:8px;font-family:'Archivo',sans-serif;font-size:14px;font-weight:700;color:var(--muted);cursor:pointer}
+  .nav-item.active{color:var(--ink);background:#2A241F;box-shadow:inset 3px 0 0 var(--accent)}
+  .status{padding:14px 22px 0;border-top:1px solid var(--line);margin:14px 12px 0}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+  main{flex-grow:1;padding:26px 34px 40px;overflow:auto}
+  .attn{background:#2A1C16;border:1px solid #4A2E20;border-radius:10px;padding:12px 16px;margin:18px 0 4px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;cursor:pointer}
+  .card .subs span{font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;color:var(--muted);background:#241F1B;border:1px solid var(--line);border-radius:999px;padding:5px 11px}
+</style></head>
+<body>
+  <!-- The full mock as supplied: dark console, 230px sidebar (Dashboard, Web Content, Publications,
+       Contacts, Data, then System & Settings at the bottom with live API/DB dots), a header status
+       strip, a "Needs attention" band, and four category cards - each with icon, description, one
+       live metric and a row of tool pills. See the artifact for the complete original. -->
+</body></html>
