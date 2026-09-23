@@ -2013,6 +2013,15 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .imgcard-b{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
 .imgcard-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
 .imgcard-t{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;line-height:1.3}
+.t411-dc{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.t411-dc-art{padding:16px;background:#2A241F;display:flex;justify-content:center}
+.t411-dc-art svg{max-width:100%;height:auto;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.t411-dc-ctl{padding:12px 16px 14px;display:flex;flex-direction:column;gap:10px}
+.t411-dc-toggles{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.t411-dc-tog{font-family:'Archivo',sans-serif;font-size:12px;color:var(--ink);display:flex;align-items:center;gap:6px;cursor:pointer}
+.t411-dc-fixed{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:3px 10px}
+.t411-dc-exports{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.t411-dc-kind{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-left:auto}
 .pimg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .pimg{display:flex;flex-direction:column;gap:3px;padding:0;border:1px solid var(--line);background:var(--card);cursor:pointer;text-align:left;overflow:hidden;border-radius:8px}
 .pimg:hover{border-color:var(--accent)}
@@ -2483,6 +2492,15 @@ function cardHtml(res,isFollow){
 // The API's {"detail": ...} arrives wrapped once more by this server's proxy; unwrap to the message.
 function errText(t){for(let i=0;i<2;i++){try{const d=JSON.parse(t).detail;t=typeof d==="string"?d:(d&&d.error)||JSON.stringify(d);}catch(_){break;}}return t;}
 function renderThread(){document.getElementById("out").innerHTML=thread.map((r,i)=>cardHtml(r,i>0)).join("");
+  // Every answer can become a branded data card: the type is chosen from the shape of the result.
+  document.querySelectorAll("#out .rcard").forEach((card,i)=>{
+    if(card.querySelector("[data-datacard]"))return;
+    const bar=document.createElement("div");
+    bar.style.cssText="padding:10px 18px 14px";
+    bar.innerHTML='<button type="button" class="newq" data-datacard="'+i+'">Make a data card</button>';
+    card.appendChild(bar);
+    const host=document.createElement("div");host.style.padding="0 18px 16px";card.appendChild(host);
+  });
   document.getElementById("follow").classList.toggle("on",thread.length>0);
   window.scrollTo(0,document.body.scrollHeight);}
 
@@ -2501,6 +2519,16 @@ async function doAsk(q){
   }catch(e){const pend=document.getElementById("pending");if(pend)pend.remove();document.getElementById("out").insertAdjacentHTML("beforeend",'<div class="rcard"><div class="err">Could not reach the API.</div></div>');}
 }
 document.getElementById("askForm").onsubmit=e=>{e.preventDefault();const v=document.getElementById("q").value.trim();if(v)doAsk(v);};
+document.getElementById("out").addEventListener("click",e=>{
+  const b=e.target.closest("[data-datacard]");
+  if(!b)return;
+  const res=thread[+b.dataset.datacard];
+  if(!res)return;
+  const host=b.parentElement.nextElementSibling;
+  if(host.innerHTML){host.innerHTML="";b.textContent="Make a data card";return;}
+  b.textContent="Hide the data card";
+  T411.renderDataCard(host,res,{tool:"Ask NTD",fontBase:"/static/fonts",id:"ask-card-"+b.dataset.datacard});
+});
 // ---- Collection tab ----
 let cFilter="pending";
 const cChips=document.getElementById("cChips");

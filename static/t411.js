@@ -379,7 +379,516 @@
     return '<div class="t411-card t411-ask">' + head + table + sql + '</div>';
   }
 
-  window.T411 = { esc, amt, RATING, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
+
+  // ---- Data cards: turn an Ask answer into a branded, exportable card -------------------------
+  // The card TYPE is decided from the shape of the result, never by a model: same answer, same
+  // card, every time, at no cost. pickCardType() is pure and testable.
+  const CARD_MONEY = /(cost|expense|fare|revenue|musd|budget|funding|request|\$)/i;
+  const CARD_YEAR = /^(report_)?year$|_year$|^snapshot_date$|_date$/i;
+  const CARD_NAME = /(agency|name|project|sponsor|city|state|mode|system|pillar)/i;
+  const CARD_NOT_MEASURE = /(^|_)id$|^ntd_id$|_code$/i;
+
+  function cardNumericCols(columns, rows) {
+    return columns.filter(c => {
+      const vals = rows.map(r => cellOf(r, c, columns)).filter(v => v != null && v !== "");
+      return vals.length > 0 && vals.every(v => typeof v === "number" && isFinite(v));
+    });
+  }
+  // Ask NTD returns rows as objects, Ask CIG as arrays; one accessor covers both.
+  function cellOf(row, col, columns) {
+    return Array.isArray(row) ? row[columns.indexOf(col)] : row[col];
+  }
+  function cardRowObjects(columns, rows) {
+    return rows.map(r => Object.fromEntries(columns.map(c => [c, cellOf(r, c, columns)])));
+  }
+
+  function pickCardType(columns, rows) {
+    columns = columns || []; rows = rows || [];
+    const years = columns.filter(c => CARD_YEAR.test(c));
+    // A year is an axis, never the measure - otherwise "2024" becomes the headline number.
+    const nums = cardNumericCols(columns, rows).filter(c => !years.includes(c) && !CARD_NOT_MEASURE.test(c));
+    const names = columns.filter(c => CARD_NAME.test(c) && !nums.includes(c));
+    const why = [];
+    let type = "table";
+    if (rows.length === 1 && nums.length >= 1) {
+      type = "stat"; why.push("one row with a number");
+    } else if (rows.length >= 3 && years.length >= 1 && nums.length >= 1) {
+      type = "trend"; why.push("a year/date column across " + rows.length + " rows");
+    } else if (rows.length >= 2 && rows.length <= 5 && names.length >= 1 && nums.length >= 1) {
+      type = "comparison"; why.push(rows.length + " named things on one measure");
+    } else if (rows.length >= 2 && names.length >= 1 && nums.length >= 1) {
+      type = "ranked"; why.push(rows.length + " rows ranked by a number");
+    } else {
+      why.push("no numeric/name shape to key off");
+    }
+    // Ask sorts by whatever the question asked for, so the ordered column is the measure -
+    // better than "first numeric", which picks ridership when the question was about cost.
+    const ordered = nums.find(c => {
+      const vals = rows.map(r => cellOf(r, c, columns));
+      if (vals.length < 3 || vals.some(v => typeof v !== "number")) return false;
+      let up = true, down = true;
+      for (let i = 1; i < vals.length; i++) { if (vals[i] > vals[i - 1]) down = false; if (vals[i] < vals[i - 1]) up = false; }
+      return (up || down) && vals[0] !== vals[vals.length - 1];
+    });
+    return {
+      type,
+      reason: why.join("; "),
+      valueCol: (type === "trend" ? (nums[0] || null) : (ordered || nums[0] || null)),
+      labelCol: names[0] || (columns.find(c => !nums.includes(c)) || null),
+      yearCol: years[0] || null,
+      numericCols: nums,
+      money: CARD_MONEY.test((type === "trend" ? nums[0] : (ordered || nums[0])) || ""),
+    };
+  }
+
+
+  // ---- Card renderer. Cards are SVG so the export is the same artwork as the screen, not a
+  // second layout that drifts. Portrait (social) and landscape (slide) share one frame.
+  const CARD = {
+    ink: "#17140F", paper: "#F7F4ED", red: "#C0341F", muted: "#6A6458", line: "#D8D2C4",
+    soft: "#E7E1D4", dim: "#8A8376", gen: "#9A9384", good: "#2E7D52",
+    sans: "Archivo, 'Helvetica Neue', Helvetica, Arial, sans-serif",
+    serif: "Spectral, Georgia, 'Times New Roman', serif",
+    mono: "'JetBrains Mono', ui-monospace, 'Courier New', monospace",
+  };
+  const CARD_SIZES = { portrait: { w: 680, h: 850 }, landscape: { w: 1000, h: 563 } };
+
+  function sv(tag, attrs, inner) {
+    const a = Object.entries(attrs || {}).map(([k, v]) => k + '="' + String(v).replace(/"/g, "&quot;") + '"').join(" ");
+    return "<" + tag + (a ? " " + a : "") + (inner != null ? ">" + inner + "</" + tag + ">" : "/>");
+  }
+  function svText(x, y, s, o) {
+    o = o || {};
+    return sv("text", {
+      x: x, y: y, fill: o.fill || CARD.ink, "font-family": o.font || CARD.sans,
+      "font-size": o.size || 14, "font-weight": o.weight || 400,
+      "letter-spacing": o.track != null ? o.track : 0,
+      "text-anchor": o.anchor || "start",
+    }, esc(s));
+  }
+  // Wrap on width, measured by an average glyph width for the size - close enough for a fixed card
+  // and it keeps the renderer dependency-free.
+  function svWrap(text, size, width, max) {
+    const per = size * 0.54, perLine = Math.max(8, Math.floor(width / per));
+    const words = String(text || "").split(/\s+/), lines = [];
+    let line = "";
+    for (const w of words) {
+      const next = line ? line + " " + w : w;
+      if (next.length > perLine && line) { lines.push(line); line = w; } else { line = next; }
+      if (max && lines.length >= max) break;
+    }
+    if (line && (!max || lines.length < max)) lines.push(line);
+    if (max && lines.length === max && words.join(" ").length > lines.join(" ").length) {
+      lines[max - 1] = lines[max - 1].replace(/[\s,.;:]+$/, "") + "…";
+    }
+    return lines;
+  }
+  function cardNum(v, money) {
+    if (v == null || v === "") return "—";
+    if (typeof v !== "number") return String(v);
+    const abs = Math.abs(v);
+    const unit = abs >= 1e9 ? [1e9, "B"] : abs >= 1e6 ? [1e6, "M"] : abs >= 1e3 && !money ? [1e3, "K"] : [1, ""];
+    const n = v / unit[0];
+    const s = n.toLocaleString(undefined, { maximumFractionDigits: abs >= 1e3 || Number.isInteger(n) ? 2 : 2 });
+    return (money ? "$" : "") + s + unit[1];
+  }
+
+  // The permanent frame: wordmark, badge, kicker, headline, and the source footer. The source line
+  // is NOT optional - it is the credibility of the card and it always renders.
+  function cardFrame(W, H, spec, opts, bodyFn) {
+    const pad = 30, headH = 62;
+    let y = headH;
+    const parts = [
+      sv("rect", { x: 0, y: 0, width: W, height: H, fill: CARD.paper }),
+      sv("rect", { x: 0, y: headH - 3, width: W, height: 3, fill: CARD.ink }),
+      svText(pad, 40, "TRANSIT", { size: 21, weight: 900, track: -1 }),
+      svText(pad + 92, 40, "411", { size: 21, weight: 900, track: -1, fill: CARD.red }),
+      svText(W - pad, 39, (spec.tool || "Ask NTD") + " · Data Card",
+        { size: 10, weight: 800, track: 2, fill: CARD.muted, anchor: "end" }),
+    ];
+    // Title block
+    y += 34;
+    if (spec.kicker) {
+      parts.push(svText(pad, y, spec.kicker.toUpperCase(), { size: 11, weight: 800, track: 1.5, fill: CARD.red }));
+      y += 22;
+    }
+    const titleSize = W > 800 ? 30 : 27;
+    svWrap(spec.title || "", titleSize, W - pad * 2, 3).forEach(l => {
+      parts.push(svText(pad, y + titleSize * 0.82, l, { size: titleSize, weight: 800, track: -0.5 }));
+      y += titleSize * 1.12;
+    });
+    if (spec.deck && opts.methodology !== "only") {
+      svWrap(spec.deck, 15, W - pad * 2, 2).forEach(l => {
+        y += 20; parts.push(svText(pad, y, l, { size: 15, font: CARD.serif, fill: CARD.muted }));
+      });
+    }
+    // Footer first (fixed to the bottom), so the body knows the space it has
+    const footTop = H - (spec.methodology && opts.methodology ? 96 : 78);
+    parts.push(sv("rect", { x: 0, y: footTop, width: W, height: 2, fill: CARD.ink }));
+    let fy = footTop + 26;
+    const srcLines = svWrap("Source: " + (spec.source || "National Transit Database"), 12, W - pad * 2, 2);
+    srcLines.forEach(l => { parts.push(svText(pad, fy, l, { size: 12, font: CARD.serif, fill: CARD.muted })); fy += 17; });
+    if (spec.methodology && opts.methodology) {
+      svWrap(spec.methodology, 12, W - pad * 2, 2).forEach(l => {
+        parts.push(svText(pad, fy, l, { size: 12, font: CARD.serif, fill: CARD.muted })); fy += 17;
+      });
+    }
+    parts.push(svText(pad, H - 22, "transit411", { size: 13, weight: 800 }));
+    parts.push(svText(pad + 74, H - 22, ".net", { size: 13, weight: 800, fill: CARD.red }));
+    parts.push(svText(W - pad, H - 22, "Generated with " + (spec.tool || "Ask NTD"),
+      { size: 10, track: 1, fill: CARD.gen, anchor: "end" }));
+    // Body, between the title and the footer
+    parts.push(bodyFn(y + 10, footTop - 16, pad, W));
+    return parts.join("");
+  }
+
+  // ---- the four bodies ---------------------------------------------------------------------
+  function bodyStat(spec, opts) {
+    return (top, bottom, pad, W) => {
+      const mid = (top + bottom) / 2, parts = [];
+      const big = W > 800 ? 96 : 88;
+      parts.push(svText(W / 2, mid - 10, spec.value, { size: big, weight: 900, track: -3, fill: CARD.red, anchor: "middle" }));
+      if (spec.unit) parts.push(svText(W / 2, mid + 24, spec.unit, { size: 16, weight: 700, fill: CARD.muted, anchor: "middle" }));
+      const ctx = opts.context ? (spec.context || []).slice(0, 3) : [];
+      if (ctx.length) {
+        const cw = (W - pad * 2) / ctx.length, cy = mid + 76;
+        ctx.forEach((c, i) => {
+          const cx = pad + cw * i + cw / 2;
+          if (i) parts.push(sv("rect", { x: pad + cw * i, y: cy - 24, width: 1, height: 44, fill: CARD.soft }));
+          parts.push(svText(cx, cy, String(c.label).toUpperCase(), { size: 10, weight: 800, track: 1, fill: CARD.dim, anchor: "middle" }));
+          parts.push(svText(cx, cy + 24, c.value, { size: 20, weight: 700, font: CARD.mono, anchor: "middle", fill: c.good ? CARD.good : CARD.ink }));
+        });
+      }
+      if (opts.takeaway && spec.takeaway) parts.push(svText(pad, bottom - 4, spec.takeaway, { size: 15, weight: 600, font: CARD.serif }));
+      return parts.join("");
+    };
+  }
+
+  function bodyBars(spec, opts, ranked) {
+    return (top, bottom, pad, W) => {
+      const rows = (spec.rows || []).slice(0, ranked ? 8 : 5);
+      if (!rows.length) return "";
+      const max = Math.max(...rows.map(r => Math.abs(r.value || 0)), 1);
+      const nameW = ranked ? 210 : 165, valW = 70;
+      const trackX = pad + nameW + 14, trackW = W - pad * 2 - nameW - valW - 28;
+      const gap = Math.min(52, (bottom - top) / rows.length);
+      const barH = Math.min(26, gap - 14);
+      const parts = [];
+      rows.forEach((r, i) => {
+        const y = top + gap * i + gap / 2;
+        parts.push(svText(pad, y + (r.sub ? -3 : 4), r.label, { size: 15, weight: 700 }));
+        if (r.sub) parts.push(svText(pad, y + 13, r.sub, { size: 11, font: CARD.serif, fill: CARD.dim }));
+        if (opts.chart) {
+          parts.push(sv("rect", { x: trackX, y: y - barH / 2, width: trackW, height: barH, rx: 5, fill: CARD.soft }));
+          parts.push(sv("rect", { x: trackX, y: y - barH / 2, width: Math.max(3, trackW * (Math.abs(r.value || 0) / max)),
+                                  height: barH, rx: 5, fill: i === 0 ? CARD.red : CARD.ink }));
+        }
+        parts.push(svText(W - pad, y + 6, r.display, { size: 16, weight: 700, font: CARD.mono, anchor: "end" }));
+      });
+      if (opts.takeaway && spec.takeaway) parts.push(svText(pad, bottom - 2, spec.takeaway, { size: 15, weight: 600, font: CARD.serif }));
+      return parts.join("");
+    };
+  }
+
+  function bodyTrend(spec, opts) {
+    return (top, bottom, pad, W) => {
+      const pts = spec.points || [];
+      if (pts.length < 2) return bodyBars(spec, opts, true)(top, bottom, pad, W);
+      const takeH = (opts.takeaway && spec.takeaway) ? 26 : 0;
+      const x0 = pad + 34, x1 = W - pad, y0 = top + 18, y1 = bottom - 34 - takeH;
+      const vals = pts.map(p => p.value);
+      const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+      const px = i => x0 + (x1 - x0) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
+      const py = v => y1 - (y1 - y0) * ((v - lo) / span);
+      const parts = [
+        sv("line", { x1: x0, y1: y1, x2: x1, y2: y1, stroke: CARD.line, "stroke-width": 1 }),
+        sv("line", { x1: x0, y1: y0, x2: x0, y2: y1, stroke: CARD.line, "stroke-width": 1 }),
+      ];
+      if (opts.chart) {
+        parts.push(sv("polyline", { points: pts.map((p, i) => px(i) + "," + py(p.value)).join(" "),
+                                    fill: "none", stroke: CARD.red, "stroke-width": 3 }));
+        pts.forEach((p, i) => parts.push(sv("circle", { cx: px(i), cy: py(p.value), r: 4.5, fill: CARD.ink })));
+      }
+      pts.forEach((p, i) => {
+        if (pts.length > 8 && i % 2) return;
+        parts.push(svText(px(i), y1 + 20, p.label, { size: 12, font: CARD.mono, fill: CARD.muted, anchor: "middle" }));
+      });
+      const first = pts[0], last = pts[pts.length - 1];
+      parts.push(svText(px(0), py(first.value) - 12, first.display, { size: 12, weight: 700, font: CARD.mono, anchor: "middle" }));
+      parts.push(svText(px(pts.length - 1), py(last.value) - 12, last.display, { size: 12, weight: 700, font: CARD.mono, fill: CARD.red, anchor: "middle" }));
+      if (takeH) parts.push(svText(pad, bottom - 2, spec.takeaway, { size: 15, weight: 600, font: CARD.serif }));
+      return parts.join("");
+    };
+  }
+
+  function bodyTable(spec, opts) {
+    return (top, bottom, pad, W) => {
+      const cols = (spec.columns || []).slice(0, 4), rows = (spec.tableRows || []).slice(0, 9);
+      const colW = (W - pad * 2) / Math.max(cols.length, 1);
+      const parts = [sv("rect", { x: pad, y: top + 14, width: W - pad * 2, height: 1, fill: CARD.ink })];
+      cols.forEach((c, i) => parts.push(svText(pad + colW * i, top + 6, String(c).toUpperCase(),
+        { size: 10, weight: 800, track: 1, fill: CARD.dim })));
+      rows.forEach((r, ri) => {
+        const y = top + 36 + ri * 24;
+        if (y > bottom - 8) return;
+        cols.forEach((c, ci) => {
+          const v = r[ci];
+          const isNum = typeof v === "number";
+          parts.push(svText(pad + colW * ci, y, isNum ? cardNum(v, spec.money) : String(v == null ? "—" : v).slice(0, 26),
+            { size: 13, font: isNum ? CARD.mono : CARD.serif, weight: isNum ? 700 : 400 }));
+        });
+      });
+      return parts.join("");
+    };
+  }
+
+  // ---- answer -> card spec. Everything here is computed from the returned rows: no model call,
+  // no second query. The benchmark (median of the answer's own population) drives the context
+  // toggle, and the toggle hides itself when there is nothing to compare against.
+  const CARD_DEFAULTS = { context: true, chart: true, takeaway: false, methodology: false };
+
+  function median(nums) {
+    const s = nums.filter(n => typeof n === "number" && isFinite(n)).sort((a, b) => a - b);
+    if (!s.length) return null;
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+  function prettyCol(c) { return String(c || "").replace(/_musd$/, " ($M)").replace(/_/g, " ").replace(/\b\w/g, m => m.toUpperCase()); }
+
+  function cardSpecFromAnswer(answer, opts) {
+    opts = opts || {};
+    const columns = answer.columns || [];
+    const rows = answer.rows || [];
+    const pick = pickCardType(columns, rows);
+    const objs = cardRowObjects(columns, rows);
+    const money = pick.money;
+    const val = r => (pick.valueCol ? r[pick.valueCol] : null);
+    const label = r => (pick.labelCol ? r[pick.labelCol] : "");
+    const tool = opts.tool || "Ask NTD";
+    const spec = {
+      type: pick.type, tool, columns,
+      title: opts.title || answer.question || "Transit411 data card",
+      kicker: opts.kicker || (tool === "Ask CIG" ? "FTA Capital Investment Grants" : "National Transit Database"),
+      deck: opts.deck || null,
+      source: opts.source || (tool === "Ask CIG"
+        ? "FTA Capital Investment Grants dashboard, latest monthly snapshot."
+        : "National Transit Database, latest reported year."),
+      methodology: opts.methodology || (answer.sql ? "Figures are the query's own output; the generated SQL is shown with the answer on transit411.net." : null),
+      money, rowCount: rows.length,
+      tableRows: rows.map(r => columns.map(c => cellOf(r, c, columns))),
+      reason: pick.reason,
+    };
+    const med = median(objs.map(val));
+    if (pick.type === "stat") {
+      const r = objs[0] || {};
+      spec.value = cardNum(val(r), money);
+      spec.unit = prettyCol(pick.valueCol);
+      spec.context = [];
+      // Other numbers on the same row make honest context (e.g. trips alongside cost per rider).
+      pick.numericCols.slice(1, 3).forEach(c => spec.context.push({ label: prettyCol(c), value: cardNum(r[c], CARD_MONEY.test(c)) }));
+      if (label(r)) spec.title = opts.title || (label(r) + " — " + prettyCol(pick.valueCol));
+    } else if (pick.type === "trend") {
+      const sorted = objs.slice().sort((a, b) => String(a[pick.yearCol]).localeCompare(String(b[pick.yearCol])));
+      spec.points = sorted.map(r => ({ label: String(r[pick.yearCol]).slice(0, 10), value: val(r), display: cardNum(val(r), money) }));
+      const a = spec.points[0], b = spec.points[spec.points.length - 1];
+      if (a && b && a.value) {
+        const change = Math.round(((b.value - a.value) / Math.abs(a.value)) * 100);
+        spec.takeaway = (change >= 0 ? "Up " : "Down ") + Math.abs(change) + "% since " + a.label + ".";
+      }
+    } else if (pick.type === "table") {
+      spec.tableRows = spec.tableRows.slice(0, 9);
+    } else {
+      const sorted = objs.slice().sort((a, b) => (val(b) || 0) - (val(a) || 0));
+      spec.rows = sorted.map(r => ({
+        label: String(label(r) || "—").slice(0, 34),
+        sub: [r.city, r.state].filter(Boolean).join(", ") || null,
+        value: val(r), display: cardNum(val(r), money),
+      }));
+      if (med != null && spec.rows.length > 2) {
+        const top = spec.rows[0];
+        if (top && typeof top.value === "number" && med) {
+          const ratio = top.value / Math.abs(med);
+          const diff = Math.round((ratio - 1) * 100);
+          spec.takeaway = ratio >= 3
+            ? top.label + " is " + (Math.round(ratio * 10) / 10) + "× the median of this set (" + cardNum(med, money) + ")."
+            : top.label + " is " + Math.abs(diff) + "% " + (diff >= 0 ? "above" : "below") + " the median of this set (" + cardNum(med, money) + ").";
+        }
+      }
+    }
+    // Context is only offered when there is a real benchmark to show.
+    if (pick.type !== "stat") {
+      spec.context = med != null && objs.length > 2
+        ? [{ label: "Rows", value: String(rows.length) }, { label: "Median", value: cardNum(med, money) }]
+        : [];
+    }
+    spec.hasContext = !!(spec.context && spec.context.length);
+    spec.hasChart = pick.type !== "table";
+    spec.hasTakeaway = !!spec.takeaway;
+    return spec;
+  }
+
+  function renderCardSvg(spec, opts) {
+    opts = Object.assign({}, CARD_DEFAULTS, opts || {});
+    const size = CARD_SIZES[opts.aspect === "landscape" ? "landscape" : "portrait"];
+    const body = spec.type === "stat" ? bodyStat(spec, opts)
+      : spec.type === "trend" ? bodyTrend(spec, opts)
+      : spec.type === "table" ? bodyTable(spec, opts)
+      : bodyBars(spec, opts, spec.type === "ranked");
+    const inner = cardFrame(size.w, size.h, spec, opts, body);
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + size.w + " " + size.h + '" width="' + size.w
+      + '" height="' + size.h + '" font-family="' + CARD.sans + '">' + inner + "</svg>";
+  }
+
+
+  // ---- exports. The PNG is rasterised from the very SVG on screen, so it cannot drift from what
+  // the user approved. The CSV is always the full result set, whatever the toggles say.
+  function cardDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+  function cardSlug(spec) {
+    return (spec.title || "transit411-data")
+      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "transit411-data";
+  }
+  function cardCsv(spec) {
+    const q = v => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [
+      "# " + (spec.title || "Transit411 data"),
+      "# Source: " + (spec.source || ""),
+      spec.methodology ? "# " + spec.methodology : "# Generated with " + (spec.tool || "Ask NTD") + " - transit411.net",
+      "",
+      (spec.columns || []).map(q).join(","),
+    ];
+    (spec.tableRows || []).forEach(r => lines.push(r.map(q).join(",")));
+    return lines.join("\n");
+  }
+  function exportCardCsv(spec) {
+    // BOM so Excel opens UTF-8 cleanly on Windows.
+    cardDownload(new Blob(["﻿" + cardCsv(spec)], { type: "text/csv;charset=utf-8" }), cardSlug(spec) + ".csv");
+  }
+  // Fonts have to travel inside the SVG or the raster falls back to system faces. The bundle's host
+  // page tells us where the woff2 files live; without them we still export, just in the fallbacks.
+  let cardFontCss = null;
+  async function cardFonts(base) {
+    if (cardFontCss !== null) return cardFontCss;
+    const want = [["Archivo", "archivo-800.woff2", 800], ["Archivo", "archivo-900.woff2", 900],
+                  ["JetBrains Mono", "jetbrains-mono-700.woff2", 700]];
+    try {
+      const parts = [];
+      for (const [family, file, weight] of want) {
+        const r = await fetch(base.replace(/\/$/, "") + "/" + file);
+        if (!r.ok) throw new Error("missing " + file);
+        const buf = await r.arrayBuffer();
+        let bin = ""; new Uint8Array(buf).forEach(b => bin += String.fromCharCode(b));
+        parts.push("@font-face{font-family:'" + family + "';font-weight:" + weight
+          + ";src:url(data:font/woff2;base64," + btoa(bin) + ") format('woff2');}");
+      }
+      cardFontCss = parts.join("");
+    } catch (e) {
+      cardFontCss = "";   // export still works, just with fallback faces
+    }
+    return cardFontCss;
+  }
+  async function exportCardPng(spec, opts, fontBase) {
+    const scale = (opts && opts.scale) || 2;
+    const size = CARD_SIZES[(opts && opts.aspect) === "landscape" ? "landscape" : "portrait"];
+    let svg = renderCardSvg(spec, opts);
+    const css = fontBase ? await cardFonts(fontBase) : "";
+    if (css) svg = svg.replace("><", "><style>" + css + "</style><");
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const blobUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+    try {
+      await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error("render failed")); img.src = blobUrl; });
+      const c = document.createElement("canvas");
+      c.width = size.w * scale; c.height = size.h * scale;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = CARD.paper; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      const blob = await new Promise(r => c.toBlob(r, "image/png"));
+      cardDownload(blob, cardSlug(spec) + ".png");
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+  // PDF: the same artwork, page-sized, handed to the browser's own print-to-PDF. No extra library,
+  // and it embeds the fonts the page already has.
+  function exportCardPdf(spec, opts) {
+    const size = CARD_SIZES[(opts && opts.aspect) === "landscape" ? "landscape" : "portrait"];
+    const w = window.open("", "_blank");
+    if (!w) return alert("Allow pop-ups to export a PDF.");
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(spec.title || "Transit411 data card")
+      + '</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@600;700&display=swap">'
+      + '<style>@page{size:' + (size.w > size.h ? "landscape" : "portrait") + ';margin:14mm}'
+      + 'body{margin:0;display:flex;align-items:center;justify-content:center}svg{width:100%;height:auto}</style></head><body>'
+      + renderCardSvg(spec, opts) + '<script>window.onload=()=>{setTimeout(()=>window.print(),350)}<\/script></body></html>');
+    w.document.close();
+  }
+
+  // ---- the panel: card + toggles + exports. Smart defaults mean most answers need no fiddling:
+  // source always on, one context stat on, chart on, "so what" and methodology off.
+  function renderDataCard(el, answer, opts) {
+    opts = opts || {};
+    const spec = cardSpecFromAnswer(answer, opts);
+    const state = Object.assign({}, CARD_DEFAULTS, opts.state || {}, { aspect: opts.aspect || "portrait" });
+    el._card = { spec, state, fontBase: opts.fontBase || null };
+    const toggles = [
+      ["takeaway", "“So what” line", spec.hasTakeaway],
+      ["context", "Context stats", spec.hasContext],
+      ["chart", "Chart", spec.hasChart],
+      ["methodology", "Methodology", !!spec.methodology],
+    ].filter(t => t[2]);
+    el.innerHTML = '<div class="t411-dc">'
+      + '<div class="t411-dc-art" id="' + (opts.id || "t411-card") + '-art"></div>'
+      + '<div class="t411-dc-ctl">'
+      + '<div class="t411-dc-toggles">'
+      + toggles.map(t => '<label class="t411-dc-tog"><input type="checkbox" data-tog="' + t[0] + '"'
+        + (state[t[0]] ? " checked" : "") + '> ' + esc(t[1]) + "</label>").join("")
+      + '<label class="t411-dc-tog"><input type="checkbox" data-tog="aspect"' + (state.aspect === "landscape" ? " checked" : "") + '> Landscape</label>'
+      + '<span class="t411-dc-fixed" title="The citation is never optional - it is what makes the card trustworthy">Source: always shown</span>'
+      + "</div>"
+      + '<div class="t411-dc-exports">'
+      + '<button type="button" class="t411-btn" data-exp="png">Download PNG</button>'
+      + '<button type="button" class="t411-btn" data-exp="pdf">PDF</button>'
+      + '<button type="button" class="t411-btn" data-exp="csv">Excel / CSV</button>'
+      + '<span class="t411-dc-kind">' + esc(spec.type) + " card · " + esc(spec.reason) + "</span>"
+      + "</div></div></div>";
+    const draw = () => {
+      el.querySelector(".t411-dc-art").innerHTML = renderCardSvg(el._card.spec, el._card.state);
+    };
+    draw();
+    el.addEventListener("change", e => {
+      const t = e.target.closest("[data-tog]");
+      if (!t) return;
+      const key = t.dataset.tog;
+      el._card.state[key] = key === "aspect" ? (t.checked ? "landscape" : "portrait") : t.checked;
+      draw();
+    });
+    el.addEventListener("click", async e => {
+      const b = e.target.closest("[data-exp]");
+      if (!b) return;
+      const { spec, state, fontBase } = el._card;
+      b.disabled = true;
+      try {
+        if (b.dataset.exp === "csv") exportCardCsv(spec);
+        else if (b.dataset.exp === "pdf") exportCardPdf(spec, state);
+        else await exportCardPng(spec, state, fontBase);
+      } catch (err) {
+        alert("Couldn't export that card: " + (err && err.message ? err.message : err));
+      } finally {
+        b.disabled = false;
+      }
+    });
+    return spec;
+  }
+
+  window.T411 = { esc, amt, RATING, pickCardType, cardSpecFromAnswer, renderCardSvg, renderDataCard, exportCardCsv, exportCardPng, exportCardPdf, CARD_DEFAULTS, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
                   renderCigProfileVersions, sortCigProjects: sortProjects,
                   colLabel, colKind, fmtCell, errorText, askCardHtml };
 })();
