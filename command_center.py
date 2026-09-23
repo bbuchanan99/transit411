@@ -404,8 +404,11 @@ def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
 @app.get("/api/posts")
 def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Optional[str] = None,
           program: Optional[str] = None, tag: Optional[str] = None, state: Optional[str] = None,
-          featured: Optional[bool] = None, slug: Optional[str] = None):
-    """Published posts. `slug` returns just that post (its page on the site is /article/<slug>)."""
+          featured: Optional[bool] = None, slug: Optional[str] = None,
+          limit: int = 200, offset: int = 0):
+    """Published posts, newest first (live featured placements first). Paged: the archive grows
+    without bound, so the site walks it with limit/offset rather than silently seeing only the
+    newest 200 - which would stop generating article pages for anything older."""
     where, params = ["status='published'"], []
     if slug:
         where.append("slug=%s"); params.append(slug)
@@ -428,13 +431,16 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
     sql = ("SELECT id, slug, pillar, title, status, publish_at, body, source_name, source_url, "
            f"agencies, mode, programs, tags, state, {live} AS featured, featured_until, sponsor, "
            "image_url, image_source FROM content_posts "
-           "WHERE " + " AND ".join(where) + f" ORDER BY {live} DESC, publish_at DESC NULLS LAST LIMIT 200")
+           "WHERE " + " AND ".join(where) + f" ORDER BY {live} DESC, publish_at DESC NULLS LAST "
+           "LIMIT %s OFFSET %s")
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
     out = []
     try:
         with _db() as c, c.cursor() as cur:
             _ensure_slugs(cur)
             c.commit()
-            cur.execute(sql, params)
+            cur.execute(sql, params + [limit, offset])
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 p = dict(zip(names, row))
@@ -443,9 +449,12 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
                 # body is the summary plus a trailing "Source: name - url" line (source fields are separate).
                 p["summary"] = (p.get("body") or "").split("\n\nSource:")[0].strip() or None
                 out.append(p)
+            cur.execute("SELECT count(*) FROM content_posts WHERE " + " AND ".join(where), params)
+            total = cur.fetchone()[0]
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
-    return {"posts": out}
+    return {"posts": out, "total": total, "limit": limit, "offset": offset,
+            "has_more": offset + len(out) < total}
 
 
 @app.get("/api/posts/{slug}")

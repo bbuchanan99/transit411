@@ -1,0 +1,51 @@
+---
+// A section's stories, 20 to a page: /news, /news/2, /news/3 ... Every page is pre-rendered, so the
+// archive stays browsable (and crawlable) however large it grows - nothing drops off the site, it
+// just moves back a page.
+import Base from "../../layouts/Base.astro";
+import PostItem from "../../components/PostItem.astro";
+import { SECTIONS, getPosts } from "../../lib/content.js";
+
+export const PER_PAGE = 20;
+
+export async function getStaticPaths({ paginate }) {
+  const sections = await Promise.all(
+    Object.entries(SECTIONS).map(async ([section, meta]) => ({
+      section, meta, posts: await getPosts(meta.pillar),
+    })));
+  return sections.flatMap(({ section, meta, posts }) =>
+    paginate(posts, { params: { section }, props: { meta, section }, pageSize: PER_PAGE }));
+}
+
+const { page, meta, section } = Astro.props;
+const { start, end, total } = { start: page.start + 1, end: page.end + 1, total: page.total };
+---
+<Base title={meta.label + (page.currentPage > 1 ? ` — page ${page.currentPage}` : "") + " — Transit411"}>
+  <Fragment slot="head">
+    {page.url.prev && <link rel="prev" href={page.url.prev} />}
+    {page.url.next && <link rel="next" href={page.url.next} />}
+  </Fragment>
+  <div class="wrap section-page">
+    <h1 class="section-title disp">{meta.label}</h1>
+    <p class="section-blurb">{meta.blurb}</p>
+    {total > 0 && (
+      <p class="page-count">Showing {start}–{end} of {total}{page.lastPage > 1 ? ` · page ${page.currentPage} of ${page.lastPage}` : ""}</p>
+    )}
+    <div class="post-list">
+      {page.data.map((p) => <PostItem post={p} />)}
+      {total === 0 && (
+        <div class="empty">
+          <strong>No {section === "news" ? "stories" : meta.label.toLowerCase() + " stories"} yet.</strong>
+          <span>New items appear here as they're published. <a href="/#newsletter">Subscribe</a> to get them each week.</span>
+        </div>
+      )}
+    </div>
+    {page.lastPage > 1 && (
+      <nav class="pager" aria-label={meta.label + " pages"}>
+        {page.url.prev ? <a class="pager-btn" href={page.url.prev} rel="prev">← Newer</a> : <span class="pager-btn off">← Newer</span>}
+        <span class="pager-mid">Page {page.currentPage} of {page.lastPage}</span>
+        {page.url.next ? <a class="pager-btn" href={page.url.next} rel="next">Older →</a> : <span class="pager-btn off">Older →</span>}
+      </nav>
+    )}
+  </div>
+</Base>

@@ -83,11 +83,23 @@ export function houseImage(pillar) {
   return `/images/house/${HOUSE[pillar] || "news"}.png`;
 }
 
-// One request per build, shared by every page that asks.
+// The whole archive, fetched once per build. It is paged: every published post must be built, or
+// its article page would silently stop existing once the archive outgrew a single page.
+const PAGE = 200;
+const MAX_PAGES = 50;          // 10,000 posts; a stop so a broken API can't spin the build forever
 let postsPromise;
+async function fetchAllPosts() {
+  const out = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const d = await getJson(`/api/posts?limit=${PAGE}&offset=${page * PAGE}`);
+    const batch = d && Array.isArray(d.posts) ? d.posts : [];
+    out.push(...batch);
+    if (!d || !d.has_more || batch.length === 0) break;
+  }
+  return out.filter((p) => p && p.title).map(toPost);
+}
 function allPosts() {
-  postsPromise ??= getJson("/api/posts").then((d) =>
-    (d && Array.isArray(d.posts) ? d.posts : []).filter((p) => p && p.title).map(toPost));
+  postsPromise ??= fetchAllPosts();
   return postsPromise;
 }
 
