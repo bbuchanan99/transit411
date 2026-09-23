@@ -93,6 +93,15 @@ def cig_stat(conn):
             "cta_url": SITE + "/ask-cig?q=" + quote("Which projects are closest to a funding grant agreement?")}
 
 
+HOUSE_PILLARS = {"Funding": "funding", "Procurement": "procurement", "People": "people",
+                 "Policy": "policy", "Data": "data"}
+
+
+def house_image(pillar):
+    """Our own pillar graphic, as an absolute URL - email clients need one."""
+    return SITE + "/images/house/" + HOUSE_PILLARS.get(pillar or "", "news") + ".png"
+
+
 def assemble(conn, posts, issue_no, dateline, intro=None, lead_id=None):
     """Sort the period's posts into the running order The Wire uses: a lead, the feed, people moves and
     procurements. People and Procurement items get their own sections rather than crowding the feed."""
@@ -102,7 +111,8 @@ def assemble(conn, posts, issue_no, dateline, intro=None, lead_id=None):
     def item(p):
         return {"id": p["id"], "title": p["title"], "summary": p["summary"], "pillar": p["pillar"],
                 "source": p.get("source"), "state": p.get("state"), "url": url(p),
-                "image_url": p.get("image_url"), "image_alt": p.get("image_alt")}
+                "image_url": p.get("image_url") or house_image(p["pillar"]),
+                "image_alt": p["title"]}
     people = [item(p) for p in posts if p["pillar"] == "People"]
     procure = [item(p) for p in posts if p["pillar"] == "Procurement"]
     rest = [p for p in posts if p["pillar"] not in ("People", "Procurement")] or posts

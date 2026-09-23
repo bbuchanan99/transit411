@@ -297,7 +297,7 @@ def publish_ready():
     items = []
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("SELECT id, pillar, headline, summary, source_name, source_url, published "
+            cur.execute("SELECT id, pillar, headline, summary, source_name, source_url, published, image_url "
                         "FROM collected_items WHERE status='approved' ORDER BY collected_at DESC LIMIT 200")
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
@@ -309,7 +309,7 @@ def publish_ready():
     return {"items": items}
 
 
-def _publish_one(cur, item_id):
+def _publish_one(cur, item_id, image_url=None, image_source=None):
     """Turn one approved collected item into a published post. Returns the post id, or None if the item
     isn't (or is no longer) approved. The caller commits."""
     import re
@@ -327,14 +327,15 @@ def _publish_one(cur, item_id):
         body += f"\n\nSource: {source_name or ''} - {source_url}"
     _ensure_posts_link(cur)
     cur.execute("INSERT INTO content_posts (slug, pillar, title, body, status, publish_at, item_id, "
-                "source_name, source_url, agencies, mode, programs, tags, state) "
-                "VALUES (%s,%s,%s,%s,'published', now(), %s, %s,%s,%s,%s,%s,%s,%s) "
+                "source_name, source_url, agencies, mode, programs, tags, state, image_url, image_source) "
+                "VALUES (%s,%s,%s,%s,'published', now(), %s, %s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (slug) DO UPDATE SET status='published', publish_at=now(), "
                 "item_id=EXCLUDED.item_id, source_name=EXCLUDED.source_name, source_url=EXCLUDED.source_url, "
                 "agencies=EXCLUDED.agencies, mode=EXCLUDED.mode, programs=EXCLUDED.programs, "
-                "tags=EXCLUDED.tags, state=EXCLUDED.state RETURNING id",
+                "tags=EXCLUDED.tags, state=EXCLUDED.state, image_url=EXCLUDED.image_url, "
+                "image_source=EXCLUDED.image_source RETURNING id",
                 (slug, pillar, headline, body, item_id, source_name, source_url,
-                 agencies or [], mode or [], programs or [], tags or [], state))
+                 agencies or [], mode or [], programs or [], tags or [], state, image_url, image_source))
     post_id = cur.fetchone()[0]
     cur.execute("UPDATE collected_items SET status='published' WHERE id=%s", (item_id,))
     return post_id
@@ -368,11 +369,27 @@ def publish_all(p: PublishAll):
     return {"published": len(published), "skipped": skipped, "posts": published, "rebuild": _rebuild_state()}
 
 
+class PublishChoice(BaseModel):
+    image_url: Optional[str] = None          # the candidate, or a URL you pasted
+    image_source: Optional[str] = None       # candidate | manual | house
+
+
 @app.post("/api/publish/{item_id}")
-def publish_item(item_id: int):
+def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
+    """Publish one approved item. The image is whatever was chosen in the review step; with none the
+    post carries no picture and the site falls back to that pillar's house graphic."""
+    from urllib.parse import urlparse
+    img = (choice.image_url or "").strip() if choice else ""
+    src = (choice.image_source or "").strip() if choice else ""
+    if img:
+        u = urlparse(img)
+        if u.scheme not in ("http", "https") or not u.netloc or len(img) > 500:
+            raise HTTPException(400, "An image URL must be a full http(s) address.")
+        if src not in ("candidate", "manual", "house"):
+            src = "manual"
     try:
         with _db() as c, c.cursor() as cur:
-            post_id = _publish_one(cur, item_id)
+            post_id = _publish_one(cur, item_id, img or None, src or None)
             if not post_id:
                 raise HTTPException(404, "no approved item with that id")
             c.commit()
@@ -409,7 +426,8 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
     if featured is not None:
         where.append(f"{live} = %s"); params.append(featured)
     sql = ("SELECT id, slug, pillar, title, status, publish_at, body, source_name, source_url, "
-           f"agencies, mode, programs, tags, state, {live} AS featured, featured_until, sponsor FROM content_posts "
+           f"agencies, mode, programs, tags, state, {live} AS featured, featured_until, sponsor, "
+           "image_url, image_source FROM content_posts "
            "WHERE " + " AND ".join(where) + f" ORDER BY {live} DESC, publish_at DESC NULLS LAST LIMIT 200")
     out = []
     try:
@@ -2297,12 +2315,24 @@ async function loadPublish(){
     posts.innerHTML=(d.posts&&d.posts.length)?d.posts.map(pPostRow).join(""):'<div class="rcard"><div class="loading">No published posts yet.</div></div>';
   }catch(e){posts.innerHTML='<div class="rcard"><div class="err">Could not load posts.</div></div>';}
 }
+const PILLAR_HOUSE={Funding:"funding",Procurement:"procurement",People:"people",Policy:"policy",Data:"data"};
+function houseUrl(pillar){return (window.SITE_BASE||"https://transit411.pages.dev")+"/images/house/"+(PILLAR_HOUSE[pillar]||"news")+".png";}
 function pReadyCard(it){
+  const cand=safeUrl(it.image_url);
+  const pic=cand
+    ?'<div style="display:flex;gap:12px;align-items:flex-start;margin:0 0 10px">'
+      +'<img src="'+esc(cand)+'" alt="" style="width:160px;height:90px;object-fit:cover;border:1px solid var(--line);background:var(--panel)">'
+      +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);max-width:320px">The source page offers this picture. Use it only if it belongs to the publisher and suits the story &mdash; otherwise publish with the house graphic.<br><a href="'+esc(cand)+'" target="_blank" rel="noopener noreferrer">open full size</a></div></div>'
+    :'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-bottom:10px">No picture offered by the source &mdash; the '+esc(it.pillar||"News")+' house graphic will be used.</div>';
   return '<div class="rcard" style="padding:16px 18px">'
     +'<div style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:6px">'+esc(it.pillar)+'</div>'
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:17px;line-height:1.3;margin-bottom:6px">'+esc(it.headline)+'</div>'
     +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
-    +'<div style="display:flex;gap:10px;align-items:center"><button class="go" style="padding:9px 18px" data-pub="'+it.id+'">Publish</button>'
+    + pic
+    +'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+    +(cand?'<button class="go" style="padding:9px 18px" data-pub="'+it.id+'" data-img="'+esc(cand)+'">Publish with this image</button>':'')
+    +'<button class="'+(cand?"newq":"go")+'" style="padding:9px 18px" data-pub="'+it.id+'">Publish with house graphic</button>'
+    +'<button class="newq" data-pubimg="'+it.id+'">Paste an image URL...</button>'
     +(safeUrl(it.source_url)?'<a href="'+esc(safeUrl(it.source_url))+'" target="_blank" rel="noopener noreferrer" style="font-family:Archivo,sans-serif;font-size:12px">source</a>':'')+'</div></div>';
 }
 function pPostRow(p){
@@ -2311,13 +2341,23 @@ function pPostRow(p){
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:16px;line-height:1.3">'+esc(p.title)+'</div></div>'
     +'<button class="ex" data-unpub="'+p.id+'">Unpublish</button></div>';
 }
-async function pPost(url,what,b){ // POST, and say so if it didn't work instead of silently reloading
+async function pPost(url,what,b,body){ // POST, and say so if it didn't work instead of silently reloading
   b.disabled=true;
-  try{const r=await fetch(url,{method:"POST"});if(!r.ok)alert("Couldn't "+what+": "+errText(await r.text()));}
+  try{const r=await fetch(url,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{method:"POST"});
+    if(!r.ok)alert("Couldn't "+what+": "+errText(await r.text()));}
   catch(e){alert("Couldn't reach the Command Center.");}
   loadPublish();
 }
-document.getElementById("pReady").addEventListener("click",e=>{const b=e.target.closest("[data-pub]");if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b);});
+document.getElementById("pReady").addEventListener("click",e=>{
+  const paste=e.target.closest("[data-pubimg]");
+  if(paste){const u=prompt("Image URL to publish with (leave blank to use the house graphic):","");
+    if(u===null)return;
+    const t=u.trim();
+    if(t&&!/^https?:\/\//i.test(t)){alert("That needs to be a full http(s) URL.");return;}
+    pPost("/api/publish/"+paste.dataset.pubimg,"publish",paste,t?{image_url:t,image_source:"manual"}:null);return;}
+  const b=e.target.closest("[data-pub]");
+  if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b,b.dataset.img?{image_url:b.dataset.img,image_source:"candidate"}:null);
+});
 document.getElementById("pPosts").addEventListener("click",e=>{const b=e.target.closest("[data-unpub]");if(b)pPost("/api/posts/"+b.dataset.unpub+"/unpublish","unpublish",b);});
 // ---- Newsletter tab: draft from published posts, edit, preview, test, send ----
 let nIssues=[],nCurrent=null;

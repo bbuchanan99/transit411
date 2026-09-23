@@ -389,6 +389,44 @@ def fetch_source(url, limit=15):
     return out
 
 
+
+# ---- Images: a candidate picture for each item, read from the source page's own metadata ----------
+# We store the URL only (never a copy of the picture), it is never published without a human choosing
+# it in the Publish tab, and a page that blocks us or has no image simply yields nothing.
+OG_MAX_BYTES = 400_000
+OG_PATTERNS = [
+    r'<meta[^>]+property=["\']og:image(?::url)?["\'][^>]+content=["\']([^"\']+)["\']',
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image(?::url)?["\']',
+    r'<meta[^>]+name=["\']twitter:image(?::src)?["\'][^>]+content=["\']([^"\']+)["\']',
+]
+
+
+def og_image(url, timeout=12):
+    """The article's own og:image (or twitter:image), as an absolute https URL, or None. Only the
+    first chunk of the page is read, and any failure - block, timeout, no tag - returns None."""
+    import requests
+    from urllib.parse import urljoin, urlparse
+    if not url:
+        return None
+    try:
+        with requests.get(url, timeout=timeout, stream=True, headers={
+                "User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"}) as r:
+            if r.status_code != 200 or "html" not in (r.headers.get("content-type") or ""):
+                return None
+            chunk = r.raw.read(OG_MAX_BYTES, decode_content=True) or b""
+    except Exception:
+        return None
+    head = chunk.decode("utf-8", errors="replace")
+    for pat in OG_PATTERNS:
+        m = re.search(pat, head, re.I)
+        if not m:
+            continue
+        found = urljoin(url, m.group(1).strip())
+        u = urlparse(found)
+        if u.scheme in ("http", "https") and u.netloc and len(found) <= 500:
+            return found
+    return None
+
 def item_exists(conn, url):
     with conn.cursor() as cur:
         cur.execute("SELECT 1 FROM collected_items WHERE source_url=%s LIMIT 1", (url,))
@@ -396,17 +434,18 @@ def item_exists(conn, url):
 
 
 def insert_item(conn, pillar, headline, summary, source_name, source_url, published, relevance,
-                status="pending", agencies=None, mode=None, programs=None, tags=None, state=None):
+                status="pending", agencies=None, mode=None, programs=None, tags=None, state=None,
+                image_url=None):
     """status 'filtered' records an item the model rated low relevance: kept out of the review
     queue, but its link is remembered so later runs never pay to triage it again."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO collected_items (pillar, headline, summary, source_name, source_url, published, relevance, status, "
-            "agencies, mode, programs, tags, state) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s)",
+            "agencies, mode, programs, tags, state, image_url) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s,%s,%s)",
             (pillar, headline, summary, source_name, source_url,
              published.date() if published else None, relevance, status,
-             agencies or [], mode or [], programs or [], tags or [], state))
+             agencies or [], mode or [], programs or [], tags or [], state, image_url))
     conn.commit()
 
 
@@ -440,6 +479,7 @@ def run(conn, limit_sources=None):
             if not e["link"] or item_exists(conn, e["link"]):
                 continue
             new += 1
+            candidate = og_image(e["link"])
             try:
                 c = classify(e)
             except Exception as ex:  # one bad model call shouldn't stop the whole run
@@ -456,7 +496,7 @@ def run(conn, limit_sources=None):
                 continue
             insert_item(conn, c.get("pillar"), c.get("headline") or e["title"],
                         c.get("summary"), name, e["link"], e["published"], c.get("relevance", "med"),
-                        **clean_facets(c))
+                        image_url=candidate, **clean_facets(c))
             kept += 1
         added += kept
         record_health(conn, sid, entries=len(entries), new=new, queued=kept)
@@ -556,6 +596,11 @@ def migrate(conn):
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS programs TEXT[]",
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS tags TEXT[]",
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS state TEXT",
+        # Images: a candidate scraped from the source page (never published without review),
+        # and on posts the chosen image plus where it came from (candidate|manual|house).
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS image_url TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_url TEXT",
+        "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_source TEXT",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS source_name TEXT",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS source_url TEXT",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS agencies TEXT[]",

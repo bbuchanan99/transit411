@@ -8,6 +8,11 @@ const meta = [post.date, post.source].filter(Boolean).join(" · ");
 const chips = [...(post.state ? [post.state] : []), ...post.agencies].slice(0, 5);
 ---
 <article class={`post post-${size}`}>
+  {size === "full" && post.image && post.href && (
+    <a class="post-thumb" href={post.href} aria-hidden="true" tabindex="-1">
+      <img src={post.image} alt="" loading="lazy" />
+    </a>
+  )}
   <div class="post-k">
     {post.pillar}
     {post.featured && <span class="post-flag">{post.sponsor ? `Featured · ${post.sponsor}` : "Featured"}</span>}

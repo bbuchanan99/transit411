@@ -69,7 +69,18 @@ function toPost(p) {
     state: p.state || null,
     featured: !!p.featured,
     sponsor: p.sponsor || null,
+    // A picture only ever appears here after someone chose it in the Publish tab; everything else
+    // falls back to our own pillar graphic, which is always safe to show.
+    image: safeUrl(p.image_url) || houseImage(p.pillar),
+    imageIsHouse: !safeUrl(p.image_url),
+    imageSource: p.image_source || null,
   };
+}
+
+// Branded fallback per pillar (site/public/images/house/*.png).
+const HOUSE = { Funding: "funding", Procurement: "procurement", People: "people", Policy: "policy", Data: "data" };
+export function houseImage(pillar) {
+  return `/images/house/${HOUSE[pillar] || "news"}.png`;
 }
 
 // One request per build, shared by every page that asks.

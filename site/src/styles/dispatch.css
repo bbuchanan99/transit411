@@ -153,6 +153,17 @@ a.data-card:hover{border-color:var(--accent);text-decoration:none}
 .data-card p{color:var(--muted);font-size:14px;line-height:1.55;margin:0 0 12px}
 .data-card .cta{font-family:'Archivo',sans-serif;font-size:13px;font-weight:800;color:var(--accent)}
 
+/* post thumbnails + article hero images */
+.post-full{display:grid;grid-template-columns:168px 1fr;gap:18px;align-items:start}
+.post-full .post-k,.post-full .post-title,.post-full .post-deck,.post-full .post-meta{grid-column:2}
+.post-thumb{grid-column:1;grid-row:1 / span 4;display:block;border:1px solid var(--line);background:var(--panel);overflow:hidden}
+.post-thumb img{display:block;width:100%;height:96px;object-fit:cover}
+@media (max-width:620px){.post-full{grid-template-columns:1fr}.post-thumb{grid-row:auto;max-width:280px}
+  .post-full .post-k,.post-full .post-title,.post-full .post-deck,.post-full .post-meta{grid-column:1}}
+.art-hero{margin:18px 0 2px;padding:0}
+.art-hero img{display:block;width:100%;height:auto;border:1px solid var(--line);background:var(--panel)}
+.art-hero figcaption{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-top:6px}
+
 /* article pages (/article/<slug>) */
 .article{max-width:760px;padding-top:30px;padding-bottom:40px}
 .art-k{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent)}
