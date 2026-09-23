@@ -57,25 +57,33 @@ def section_header(label, red=False):
 
 
 def lead(post):
-    """The top story: kicker, headline, optional image, the take, and a link to its article page."""
+    """The top story: kicker, headline and the take, with a thumbnail beside them rather than a
+    banner across the column. Built as a two-cell table so it survives every mail client; without a
+    picture it is simply one column."""
     if not post:
         return ""
-    img = ""
-    if post.get("image_url"):
-        img = ('<a href="' + esc(post["url"]) + '"><img src="' + esc(post["image_url"]) + '" width="552" alt="' 
-               + esc(post.get("image_alt") or post["title"]) + '" style="width:100%;max-width:552px;height:auto;'
-               'display:block;border:1px solid #D2CBBB;margin-bottom:14px"></a>')
-    return _row('<div style="font-family:' + SANS + ';font-size:11px;font-weight:800;letter-spacing:1px;'
-                'text-transform:uppercase;color:' + RED + '">Lead &mdash; ' + esc(post.get("pillar") or "News") + "</div>"
-                '<h1 style="font-family:' + SANS + ';font-size:26px;line-height:1.12;letter-spacing:-.5px;'
+    kicker = ('<div style="font-family:' + SANS + ';font-size:11px;font-weight:800;letter-spacing:1px;'
+              'text-transform:uppercase;color:' + RED + '">Lead &mdash; ' + esc(post.get("pillar") or "News") + "</div>")
+    headline = ('<h1 style="font-family:' + SANS + ';font-size:24px;line-height:1.14;letter-spacing:-.5px;'
                 'margin:8px 0 10px;font-weight:800;color:' + INK + '">'
                 '<a href="' + esc(post["url"]) + '" style="color:' + INK + ';text-decoration:none">'
-                + esc(post["title"]) + "</a></h1>" + img
-                + '<p style="font-family:' + SERIF + ';font-size:16px;line-height:1.5;color:' + BODY + ';margin:0">'
-                + esc(post.get("summary") or "") + "</p>"
-                '<div style="font-family:' + SANS + ';font-size:12px;font-weight:700;margin-top:12px">'
-                '<a href="' + esc(post["url"]) + '" style="color:' + RED + ';text-decoration:none">'
-                'Read the full story &rarr;</a></div>', pad="18px 34px", extra="border-bottom:1px solid " + LINE)
+                + esc(post["title"]) + "</a></h1>")
+    take = ('<p style="font-family:' + SERIF + ';font-size:16px;line-height:1.5;color:' + BODY + ';margin:0">'
+            + esc(post.get("summary") or "") + "</p>")
+    more = ('<div style="font-family:' + SANS + ';font-size:12px;font-weight:700;margin-top:12px">'
+            '<a href="' + esc(post["url"]) + '" style="color:' + RED + ';text-decoration:none">'
+            'Read the full story &rarr;</a></div>')
+    text_cell = kicker + headline + take + more
+    if not post.get("image_url"):
+        return _row(text_cell, pad="18px 34px", extra="border-bottom:1px solid " + LINE)
+    thumb = ('<a href="' + esc(post["url"]) + '"><img src="' + esc(post["image_url"]) + '" width="168" alt="'
+             + esc(post.get("image_alt") or post["title"]) + '" style="width:168px;max-width:168px;height:auto;'
+             'display:block;border:1px solid #D2CBBB"></a>')
+    return ('<tr><td style="padding:18px 34px;background:' + PAPER + ';border-bottom:1px solid ' + LINE + '">'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
+            '<td valign="top" style="padding-right:16px">' + text_cell + "</td>"
+            '<td valign="top" width="168" style="width:168px">' + thumb + "</td>"
+            "</tr></table></td></tr>")
 
 
 def feed(posts):
