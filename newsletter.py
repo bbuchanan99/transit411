@@ -12,6 +12,9 @@ presses send in the Command Center, and only `subscribed` contacts that aren't s
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
+
+import wire_template
 
 SITE = os.environ.get("PUBLIC_SITE_URL", "https://transit411.net").rstrip("/")
 PILLAR_ORDER = ["Funding", "Procurement", "People", "Policy", "Data"]
@@ -21,6 +24,7 @@ def create_tables(conn):
     with conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS issues (
             id BIGSERIAL PRIMARY KEY,
+            issue_no INTEGER,
             subject TEXT NOT NULL,
             preheader TEXT,
             status TEXT NOT NULL DEFAULT 'draft',
@@ -37,108 +41,111 @@ def create_tables(conn):
             issue_id BIGINT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
             email TEXT NOT NULL, status TEXT NOT NULL, message_id TEXT, detail TEXT,
             at TIMESTAMPTZ NOT NULL DEFAULT now())""")
+        cur.execute("ALTER TABLE issues ADD COLUMN IF NOT EXISTS issue_no INTEGER")
         cur.execute("CREATE INDEX IF NOT EXISTS issue_recipients_issue ON issue_recipients (issue_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS issue_recipients_msg ON issue_recipients (message_id)")
     conn.commit()
 
 
 def posts_for(conn, since, until):
-    """Published posts in the period, newest first."""
+    """Published posts in the period, newest first. image_url is read when the column exists (it is
+    added by the images work); until then every item simply has no image."""
     with conn.cursor() as cur:
-        cur.execute("SELECT id, slug, pillar, title, body, source_name, publish_at FROM content_posts "
+        cur.execute("SELECT 1 FROM information_schema.columns WHERE table_name='content_posts' AND column_name='image_url'")
+        has_image = bool(cur.fetchone())
+        cur.execute("SELECT id, slug, pillar, title, body, source_name, state, publish_at"
+                    + (", image_url" if has_image else "") + " FROM content_posts "
                     "WHERE status='published' AND publish_at >= %s AND publish_at < %s "
                     "ORDER BY publish_at DESC, id DESC", (since, until))
         out = []
-        for pid, slug, pillar, title, body, source, at in cur.fetchall():
+        for row in cur.fetchall():
+            pid, slug, pillar, title, body, source, state, at = row[:8]
             summary = (body or "").split("\n\nSource:")[0].strip()
             out.append({"id": pid, "slug": slug, "pillar": pillar or "News", "title": title,
-                        "summary": summary, "source": source, "publish_at": at})
+                        "summary": summary, "source": source, "state": state, "publish_at": at,
+                        "image_url": row[8] if has_image and len(row) > 8 else None})
     return out
 
 
-def esc(s):
-    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+def cig_stat(conn):
+    """The By the Numbers block, straight from our own pipeline data (no model call)."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('cig_projects') IS NOT NULL")
+            if not cur.fetchone()[0]:
+                return None
+            cur.execute("SELECT max(snapshot_date) FROM cig_projects")
+            snap = cur.fetchone()[0]
+            if not snap:
+                return None
+            cur.execute("SELECT count(*), coalesce(sum(cig_request_musd),0), "
+                        "count(*) FILTER (WHERE phase='Eng') FROM cig_projects WHERE snapshot_date=%s", (snap,))
+            n, total, eng = cur.fetchone()
+    except Exception:
+        return None
+    if not n:
+        return None
+    billions = float(total) / 1000.0
+    figure = ("$%.1fB" % billions) if billions >= 1 else ("$%.0fM" % float(total))
+    caption = ("total CIG funding sought across %d active pipeline projects this month" % n
+               + (" - %d of them now in Engineering." % eng if eng else "."))
+    return {"figure": figure, "caption": caption, "cta": "Ask the pipeline yourself",
+            "cta_url": SITE + "/ask-cig?q=" + quote("Which projects are closest to a funding grant agreement?")}
 
 
-def group_by_pillar(posts):
-    groups = {}
-    for p in posts:
-        groups.setdefault(p["pillar"], []).append(p)
-    ordered = [(k, groups[k]) for k in PILLAR_ORDER if k in groups]
-    return ordered + [(k, v) for k, v in sorted(groups.items()) if k not in PILLAR_ORDER]
+def assemble(conn, posts, issue_no, dateline, intro=None, lead_id=None):
+    """Sort the period's posts into the running order The Wire uses: a lead, the feed, people moves and
+    procurements. People and Procurement items get their own sections rather than crowding the feed."""
+    by_id = {p["id"]: p for p in posts}
+    def url(p):
+        return SITE + "/article/" + (p["slug"] or "")
+    def item(p):
+        return {"id": p["id"], "title": p["title"], "summary": p["summary"], "pillar": p["pillar"],
+                "source": p.get("source"), "state": p.get("state"), "url": url(p),
+                "image_url": p.get("image_url"), "image_alt": p.get("image_alt")}
+    people = [item(p) for p in posts if p["pillar"] == "People"]
+    procure = [item(p) for p in posts if p["pillar"] == "Procurement"]
+    rest = [p for p in posts if p["pillar"] not in ("People", "Procurement")] or posts
+    lead_post = by_id.get(lead_id) or (rest[0] if rest else None)
+    feed = [item(p) for p in rest if not lead_post or p["id"] != lead_post["id"]][:4]
+    return {"date_label": dateline, "issue_no": issue_no, "site": SITE, "preheader": intro or "",
+            "lead": item(lead_post) if lead_post else None, "feed": feed,
+            "stat": cig_stat(conn), "moves": people[:3], "procurements": procure[:3]}
 
 
-HEAD = """<!doctype html><html><body style="margin:0;background:#F2EEE4;padding:24px 12px;font-family:Georgia,serif;color:#17140F">
-<div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #D8D2C4">
-<div style="padding:26px 28px 18px;border-bottom:3px solid #17140F">
-<div style="font-family:Arial,sans-serif;font-weight:800;font-size:26px;letter-spacing:-1px">TRANSIT<span style="color:#C0341F">411</span></div>
-<div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#6A6458;margin-top:6px">{dateline}</div>
-</div>
-<div style="padding:22px 28px 8px">"""
-
-FOOT = """</div>
-<div style="padding:18px 28px 26px;border-top:1px solid #D8D2C4;font-family:Arial,sans-serif;font-size:12px;color:#6A6458">
-<p style="margin:0 0 8px">You're receiving this because you subscribed at transit411.net.</p>
-<p style="margin:0"><a href="{unsub}" style="color:#6A6458">Unsubscribe</a> &middot; <a href="{site}" style="color:#6A6458">Transit411</a></p>
-</div></div></body></html>"""
-
-
-def render(posts, dateline, intro=None):
-    """(html, text) for an issue. {unsub} is filled in per recipient at send time."""
-    html = [HEAD.replace("{dateline}", esc(dateline))]
-    text = ["TRANSIT411 - " + dateline, ""]
-    if intro:
-        html.append('<p style="font-size:17px;line-height:1.6;margin:0 0 20px">' + esc(intro) + "</p>")
-        text += [intro, ""]
-    for pillar, items in group_by_pillar(posts):
-        html.append('<div style="font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;'
-                    'text-transform:uppercase;color:#C0341F;border-bottom:2px solid #17140F;padding-bottom:6px;'
-                    'margin:22px 0 14px">' + esc(pillar) + "</div>")
-        text += [pillar.upper(), "-" * len(pillar)]
-        for p in items:
-            url = SITE + "/article/" + (p["slug"] or "")
-            html.append('<div style="margin:0 0 18px">'
-                        '<a href="' + esc(url) + '" style="font-family:Arial,sans-serif;font-weight:700;font-size:18px;'
-                        'line-height:1.3;color:#17140F;text-decoration:none">' + esc(p["title"]) + "</a>"
-                        + ('<div style="font-size:15px;line-height:1.55;color:#3B3730;margin-top:6px">'
-                           + esc(p["summary"]) + "</div>" if p["summary"] else "")
-                        + ('<div style="font-family:Arial,sans-serif;font-size:12px;color:#6A6458;margin-top:6px">'
-                           + esc(p["source"] or "") + "</div>" if p.get("source") else "")
-                        + "</div>")
-            text += [p["title"], (p["summary"] or "").strip(), url, ""]
-        text.append("")
-    html.append(FOOT.replace("{site}", SITE))
-    text += ["--", "You're receiving this because you subscribed at transit411.net.", "Unsubscribe: {unsub}"]
-    return "".join(html), "\n".join(text)
-
-
-def default_subject(posts, dateline):
-    lead = posts[0]["title"] if posts else "Transit411 Weekly Intelligence"
-    return ("Transit411: " + lead)[:120]
-
-
-def draft(conn, since=None, until=None, tag=None, days=7, intro=None):
-    """Create a draft issue from the posts published in a period (default: the last 7 days)."""
+def draft(conn, since=None, until=None, tag=None, days=7, intro=None, lead_id=None):
+    """Create a draft issue of The Wire from the posts published in a period (default: the last 7 days)."""
     create_tables(conn)
     until = until or datetime.now(timezone.utc).date() + timedelta(days=1)
     since = since or (until - timedelta(days=days + 1))
     posts = posts_for(conn, since, until)
-    dateline = datetime.now(timezone.utc).strftime("%B %-d, %Y") if os.name != "nt" else \
-        datetime.now(timezone.utc).strftime("%B %d, %Y")
-    html, text = render(posts, dateline, intro)
-    subject = default_subject(posts, dateline)
+    dateline = datetime.now(timezone.utc).strftime("%A, %b. %d, %Y").replace(" 0", " ")
     with conn.cursor() as cur:
-        cur.execute("INSERT INTO issues (subject, status, period_from, period_to, segment_tag, post_ids, html, text) "
-                    "VALUES (%s,'draft',%s,%s,%s,%s,%s,%s) RETURNING id",
-                    (subject, since, until, tag, [p["id"] for p in posts], html, text))
+        cur.execute("SELECT coalesce(max(issue_no), 0) + 1 FROM issues")
+        issue_no = cur.fetchone()[0]
+    data = assemble(conn, posts, issue_no, dateline, intro, lead_id)
+    html, text = wire_template.render_html(data), wire_template.render_text(data)
+    subject = default_subject(data)
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO issues (issue_no, subject, preheader, status, period_from, period_to, segment_tag, "
+                    "post_ids, html, text) VALUES (%s,%s,%s,'draft',%s,%s,%s,%s,%s,%s) RETURNING id",
+                    (issue_no, subject, intro, since, until, tag, [p["id"] for p in posts], html, text))
         iid = cur.fetchone()[0]
     conn.commit()
-    return {"id": iid, "posts": len(posts), "subject": subject, "period_from": str(since), "period_to": str(until)}
+    return {"id": iid, "issue_no": issue_no, "posts": len(posts), "subject": subject,
+            "period_from": str(since), "period_to": str(until),
+            "sections": {"lead": bool(data["lead"]), "feed": len(data["feed"]), "moves": len(data["moves"]),
+                         "procurements": len(data["procurements"]), "stat": bool(data["stat"])}}
+
+
+def default_subject(data):
+    lead = (data.get("lead") or {}).get("title")
+    return ("The Wire: " + lead)[:120] if lead else "The Wire - Transit411"
 
 
 def get(conn, issue_id):
     create_tables(conn)
-    cols = ["id", "subject", "preheader", "status", "period_from", "period_to", "segment_tag", "post_ids",
+    cols = ["id", "issue_no", "subject", "preheader", "status", "period_from", "period_to", "segment_tag", "post_ids",
             "html", "text", "created_at", "sent_at", "recipients", "sent_count", "failed_count", "note"]
     with conn.cursor() as cur:
         cur.execute("SELECT " + ", ".join(cols) + " FROM issues WHERE id=%s", (issue_id,))
@@ -154,10 +161,10 @@ def get(conn, issue_id):
 def listing(conn, limit=30):
     create_tables(conn)
     with conn.cursor() as cur:
-        cur.execute("SELECT id, subject, status, to_char(created_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), "
+        cur.execute("SELECT id, coalesce(issue_no, id), subject, status, to_char(created_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), "
                     "to_char(sent_at AT TIME ZONE 'America/New_York','YYYY-MM-DD HH24:MI'), recipients, sent_count, "
                     "failed_count, cardinality(post_ids), segment_tag FROM issues ORDER BY id DESC LIMIT %s", (limit,))
-        keys = ["id", "subject", "status", "created_at", "sent_at", "recipients", "sent_count", "failed_count",
+        keys = ["id", "issue_no", "subject", "status", "created_at", "sent_at", "recipients", "sent_count", "failed_count",
                 "posts", "segment_tag"]
         return [dict(zip(keys, r)) for r in cur.fetchall()]
 

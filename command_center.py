@@ -1088,6 +1088,7 @@ async def email_test(t: TestEmail):
 # ---- Newsletter: draft an issue from published posts, preview it, then send (newsletter.py) -------
 class IssueDraft(BaseModel):
     days: Optional[int] = 7
+    lead_id: Optional[int] = None
     since: Optional[str] = None
     until: Optional[str] = None
     tag: Optional[str] = None
@@ -1151,7 +1152,8 @@ def draft_issue(d: IssueDraft):
     import newsletter
     try:
         with _db() as c:
-            return newsletter.draft(c, d.since or None, d.until or None, d.tag, max(1, min(d.days or 7, 90)), d.intro)
+            return newsletter.draft(c, d.since or None, d.until or None, d.tag, max(1, min(d.days or 7, 90)),
+                                    d.intro, d.lead_id)
     except Exception as e:
         raise HTTPException(502, f"Couldn't draft that issue: {type(e).__name__}: {e}")
 
@@ -2332,7 +2334,7 @@ document.getElementById("nDraft").onclick=async()=>{
     if(!r.ok){nMsg("err","Couldn't draft: "+errText(t));}
     else{const d=JSON.parse(t);
       if(!d.posts)nMsg("err","Nothing published in that period, so the issue would be empty. Pick a longer period or publish some posts first.");
-      else{nMsg("loading","Drafted issue #"+d.id+" from "+d.posts+" post"+(d.posts===1?"":"s")+" ("+d.period_from+" to "+d.period_to+").");}
+      else{const sc=d.sections||{};nMsg("loading","Drafted The Wire No. "+d.issue_no+" from "+d.posts+" post"+(d.posts===1?"":"s")+": "+(sc.lead?"a lead, ":"no lead, ")+sc.feed+" in the feed, "+sc.moves+" people, "+sc.procurements+" procurements"+(sc.stat?", plus the live data block.":", no data block (no CIG snapshot loaded)."));}
       await loadIssues();openIssue(d.id);}
   }catch(e){nMsg("err","Couldn't reach the Command Center.");}
   b.disabled=false;
@@ -2343,9 +2345,9 @@ async function loadIssues(){
     const r=await fetch("/api/newsletter/issues");if(!r.ok){box.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
     nIssues=(await r.json()).issues||[];
     box.innerHTML='<div class="rcard"><div style="padding:12px 18px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px">Issues</div>'
-      +'<div class="t411-scroll"><table class="t411-table"><thead><tr><th>#</th><th>Subject</th><th>Status</th><th>Posts</th><th>Sent</th><th>Created</th><th></th></tr></thead><tbody>'
+      +'<div class="t411-scroll"><table class="t411-table"><thead><tr><th>Issue</th><th>Subject</th><th>Status</th><th>Posts</th><th>Sent</th><th>Created</th><th></th></tr></thead><tbody>'
       +(nIssues.length?nIssues.map(x=>{const st=NSTATUS[x.status]||[x.status,"var(--muted)"];
-        return '<tr><td>'+x.id+'</td><td style="font-weight:600;white-space:normal">'+esc(x.subject)+'</td>'
+        return '<tr><td>No. '+(x.issue_no||x.id)+'</td><td style="font-weight:600;white-space:normal">'+esc(x.subject)+'</td>'
           +'<td><span style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;color:'+st[1]+'">'+esc(st[0])+'</span></td>'
           +'<td class="num">'+x.posts+'</td><td class="num">'+(x.status==="sent"?x.sent_count+" of "+x.recipients+(x.failed_count?" ("+x.failed_count+" failed)":""):"-")+'</td>'
           +'<td>'+esc(x.sent_at||x.created_at)+'</td>'
