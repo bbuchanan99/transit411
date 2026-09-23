@@ -2013,6 +2013,17 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .pimg.bad{opacity:.5}
 .pimg-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;padding:4px 8px 0}
 .pimg-m{font-family:'Archivo',sans-serif;font-size:10px;color:var(--muted);padding:0 8px 6px}
+.ctbl{table-layout:fixed;width:100%}
+.ctbl th,.ctbl td{padding:8px 10px;vertical-align:middle}
+.ctbl .c-who{width:auto;min-width:0}
+.ctbl .c-em{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctbl .c-sub{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ctbl th:nth-child(2),.ctbl td:nth-child(2){width:104px}
+.ctbl .c-tags{width:150px;white-space:nowrap;overflow:hidden}
+.ctbl .c-when{width:78px;font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);white-space:nowrap}
+.ctbl .c-act{width:168px;white-space:nowrap;text-align:right}
+.ctbl .c-act button{margin-left:10px}
+@media (max-width:1100px){.ctbl .c-tags{display:none}.ctbl th:nth-child(3){display:none}}
 .chip-sm{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-family:'Archivo',sans-serif;font-size:11px;font-weight:600;color:var(--muted)}
 .soon{padding:40px 24px;text-align:center;color:var(--muted);font-family:'Archivo',sans-serif;border:1px dashed var(--line);border-radius:12px}
 .err{padding:16px 18px;color:var(--accent);font-family:'Archivo',sans-serif;font-size:14px}
@@ -2106,7 +2117,7 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <div class="subnav" id="subnav"></div>
     <div class="wrap">
   <div class="panel on" id="p-ask">
-    <div class="askhead"><div><h2 class="disp">Ask NTD</h2><p class="lead">Ask, then keep asking - follow-ups like "what about Texas?" build on your last question. Hit New question to start fresh.</p></div></div>
+    <div class="askhead"><div><h2 class="disp">Ask NTD</h2><p class="lead">Plain-English questions over the National Transit Database. Follow-ups like "what about Texas?" build on your last question; New question starts fresh. Each question costs one model call.</p></div></div>
     <form id="askForm"><input type="text" id="q" placeholder="Ask a question, then follow up..." autocomplete="off"><button class="go" type="submit">Ask</button></form>
     <div class="askhead"><div class="examples" id="ex"></div><div><span class="follow" id="follow">Following your thread</span> <button class="newq" id="newq" type="button">New question</button></div></div>
     <div id="out"></div>
@@ -2134,7 +2145,7 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <div id="sOut"></div>
   </div>
   <div class="panel" id="p-contacts">
-    <div class="askhead"><div><h2 class="disp">Contacts</h2><p class="lead">The newsletter list &mdash; ours, in Postgres. Signups from the site arrive as <b>pending</b>; only <b>subscribed</b> contacts will ever be emailed. Unsubscribed, bounced and complained addresses are suppressed and can't be re-added by an import.</p></div>
+    <div class="askhead"><div><h2 class="disp">Contacts</h2><p class="lead">The newsletter list &mdash; ours, in Postgres. Site signups and imports arrive as <b>pending</b>; only <b>subscribed</b> contacts are ever emailed, and that only happens after someone confirms. Unsubscribed, bounced and complained addresses are suppressed for good and can't be re-added by an import.</p></div>
       <div style="display:flex;gap:8px"><button class="newq" id="kAddBtn" type="button">Add contact</button><button class="newq" id="kImportBtn" type="button">Import CSV</button><a class="newq" id="kExport" href="/api/contacts/export.csv" style="text-decoration:none;display:inline-block">Export CSV</a><button class="newq" id="kTestBtn" type="button" title="Send a test message through SES">Send test</button><button class="newq" id="kRefresh" type="button">Refresh</button></div></div>
     <input type="file" id="kFile" accept=".csv,text/csv" hidden>
     <div id="kEmail" style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:-4px 0 12px"></div>
@@ -2169,11 +2180,13 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
       <button class="go" id="pPubAll" type="button" style="padding:7px 14px;margin-left:auto" hidden>Publish all</button></div>
     <div id="pPicker"></div>
     <div id="pReady"></div>
-    <div style="font-family:Archivo,sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 0 10px">Published</div>
-    <div id="pPosts"></div>
+    <details class="rcard" id="pPostsBox" style="padding:0 18px;margin-top:22px">
+      <summary style="padding:13px 0;font-family:Archivo,sans-serif;font-weight:800;font-size:14px;cursor:pointer">Published <span id="pPostsCount" style="font-weight:600;color:var(--muted)"></span></summary>
+      <div id="pPosts" style="padding-bottom:12px"></div>
+    </details>
   </div>
   <div class="panel" id="p-grants">
-    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">FTA Capital Investment Grants dashboard - every New/Small/Core project seeking funding, where it stands, and what it wants. Click a project for its milestone dates and month-by-month history. FTA updates it about monthly: open <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a>, then copy the dashboard PDF's link into the box below (or download it and upload it).</p></div>
+    <div class="askhead"><div><h2 class="disp">CIG Pipeline</h2><p class="lead">Every New/Small/Core project seeking CIG funding, where it stands and what it wants. Click a project for milestones, history and its FTA profile. FTA refreshes the dashboard monthly &mdash; paste the PDF's link from <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">transit.dot.gov/CIG</a> below, or upload the file.</p></div>
       <div style="display:flex;gap:8px"><button class="go" style="padding:9px 16px" id="gUploadBtn" type="button">Upload dashboard</button><button class="newq" id="gRefresh" type="button">Refresh</button></div></div>
     <input type="file" id="gFile" accept="application/pdf,.pdf" hidden>
     <form class="csearch" id="gLinkForm" style="margin:0 0 12px">
@@ -2634,7 +2647,8 @@ async function loadPublish(){
     ready.innerHTML=items.length?items.map(pReadyCard).join(""):'<div class="rcard"><div class="loading">Nothing approved yet - approve items in the Collection tab.</div></div>';
   }catch(e){ready.innerHTML='<div class="rcard"><div class="err">Could not load approved items.</div></div>';}
   try{const d=await (await fetch("/api/posts")).json();
-    posts.innerHTML=(d.posts&&d.posts.length)?d.posts.map(pPostRow).join(""):'<div class="rcard"><div class="loading">No published posts yet.</div></div>';
+    posts.innerHTML=(d.posts&&d.posts.length)?d.posts.map(pPostRow).join(""):'<div class="loading" style="padding:0 0 12px">No published posts yet.</div>';
+    const pc=document.getElementById("pPostsCount");if(pc)pc.textContent="("+((d.posts||[]).length)+")";
   }catch(e){posts.innerHTML='<div class="rcard"><div class="err">Could not load posts.</div></div>';}
 }
 // ---- Image picker: see every picture a story could use, before it goes live ----
@@ -2885,14 +2899,27 @@ document.getElementById("kSearchForm").addEventListener("submit",e=>{
 function kMsg(kind,html){document.getElementById("kMsg").innerHTML=html?'<div class="rcard"><div class="'+kind+'">'+html+'</div></div>':"";}
 const KSTATUS={pending:["Pending","var(--muted)"],subscribed:["Subscribed","#1F6B4A"],unsubscribed:["Unsubscribed","var(--accent)"],bounced:["Bounced","var(--accent)"],complained:["Complained","var(--accent)"]};
 function kBadge(s){const x=KSTATUS[s]||[s,"var(--muted)"];return '<span style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;color:'+x[1]+'">'+esc(x[0])+'</span>';}
-function kDate(iso){return iso?esc(new Date(iso).toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"})):"";}
+function kDate(iso){
+  if(!iso)return "";
+  const d=new Date(iso),now=new Date();
+  const opts=d.getFullYear()===now.getFullYear()?{month:"short",day:"numeric"}:{month:"short",year:"2-digit"};
+  return esc(d.toLocaleDateString(undefined,opts));
+}
 function kRow(x){
-  return '<tr><td style="font-weight:600">'+esc(x.email)+'</td><td>'+esc(x.name||"")+'</td><td>'+kBadge(x.status)+'</td>'
-    +'<td>'+esc(x.source||"")+'</td><td style="white-space:normal">'+(x.tags||[]).map(t=>'<span class="chip-sm">'+esc(t)+'</span>').join(" ")+'</td>'
-    +'<td>'+kDate(x.created_at)+'</td><td style="white-space:nowrap">'
-    +(["pending"].includes(x.status)?'<button class="t411-linkbtn" data-kconfirm="'+x.id+'" title="Send the double opt-in email">Send confirmation</button> ':"")
+  const acted=["unsubscribed","bounced","complained"].includes(x.status);
+  const tags=(x.tags||[]);
+  const shown=tags.slice(0,2).map(t=>'<span class="chip-sm">'+esc(t)+'</span>').join(" ")
+    +(tags.length>2?' <span class="chip-sm" title="'+esc(tags.join(", "))+'">+'+(tags.length-2)+'</span>':"");
+  return '<tr><td class="c-who"><div class="c-em" title="'+esc(x.email)+'">'+esc(x.email)+'</div>'
+    +'<div class="c-sub">'+esc(x.name||"")+(x.name&&x.source?" · ":"")+esc(x.source||"")+'</div></td>'
+    +'<td>'+kBadge(x.status)+'</td>'
+    +'<td class="c-tags">'+shown+'</td>'
+    +'<td class="c-when">'+kDate(x.created_at)+'</td>'
+    +'<td class="c-act">'
+    +(x.status==="pending"?'<button class="t411-linkbtn" data-kconfirm="'+x.id+'" title="Send the double opt-in email">Confirm</button>':"")
     +'<button class="t411-linkbtn" data-kedit="'+x.id+'">Edit</button>'
-    +(["unsubscribed","bounced","complained"].includes(x.status)?"":' <button class="t411-linkbtn" data-kunsub="'+x.id+'">Unsubscribe</button>')+'</td></tr>';
+    +(acted?"":'<button class="t411-linkbtn" data-kunsub="'+x.id+'" title="Unsubscribe and suppress">Unsub</button>')
+    +'</td></tr>';
 }
 async function loadContacts(){
   const out=document.getElementById("kOut");
@@ -2918,7 +2945,7 @@ async function loadContacts(){
     const L=kData.contacts||[];
     out.innerHTML='<div class="rcard"><div style="padding:12px 18px 0;font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">'
       +(kData.matching||0)+' matching'+(L.length<(kData.matching||0)?' (showing '+L.length+')':'')+'</div>'
-      +'<div class="t411-scroll"><table class="t411-table"><thead><tr><th>Email</th><th>Name</th><th>Status</th><th>Source</th><th>Tags</th><th>Added</th><th></th></tr></thead><tbody>'
+      +'<div class="t411-scroll"><table class="t411-table ctbl"><thead><tr><th>Contact</th><th>Status</th><th>Tags</th><th>Added</th><th></th></tr></thead><tbody>'
       +(L.length?L.map(kRow).join(""):'<tr><td colspan="7" style="color:var(--muted)">No contacts match.</td></tr>')+'</tbody></table></div></div>';
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not load contacts.</div></div>';}
 }
