@@ -489,8 +489,39 @@
     const abs = Math.abs(v);
     const unit = abs >= 1e9 ? [1e9, "B"] : abs >= 1e6 ? [1e6, "M"] : abs >= 1e3 && !money ? [1e3, "K"] : [1, ""];
     const n = v / unit[0];
-    const s = n.toLocaleString(undefined, { maximumFractionDigits: abs >= 1e3 || Number.isInteger(n) ? 2 : 2 });
+    // A small dollar figure keeps its cents - $15.80, never $15.8, which reads like a typo in a
+    // column of four-character prices. Everything else drops trailing zeros.
+    const cents = money && abs < 1e3;
+    const s = n.toLocaleString(undefined, {
+      minimumFractionDigits: cents ? 2 : 0,
+      maximumFractionDigits: cents || !Number.isInteger(n) ? 2 : 0,
+    });
     return (money ? "$" : "") + s + unit[1];
+  }
+
+  // One line clipped to a pixel width, with an ellipsis. Character widths are approximated (narrow
+  // letters really are narrower) rather than measured, so the same string fits the same way whether
+  // the card is drawn in a browser or in Node - and a long agency name stops at the label column
+  // instead of running under the bars.
+  const CARD_NARROW = "ijltfrI.,:;'\"!|()[]{} ";
+  const CARD_WIDE = "mwMW@%";
+  function textW(s, size) {
+    let u = 0;
+    for (const ch of String(s == null ? "" : s)) {
+      u += CARD_NARROW.indexOf(ch) >= 0 ? 0.34 : CARD_WIDE.indexOf(ch) >= 0 ? 0.92 : 0.58;
+    }
+    return u * size;
+  }
+  function svFit(s, maxPx, size) {
+    s = String(s == null ? "" : s);
+    if (textW(s, size) <= maxPx) return s;
+    let out = "";
+    for (const ch of s) {
+      if (textW(out + ch + "…", size) > maxPx) break;
+      out += ch;
+    }
+    while (out && " ,.;:-–—".indexOf(out[out.length - 1]) >= 0) out = out.slice(0, -1);
+    return out + "…";
   }
 
   // The permanent frame: wordmark, badge, kicker, headline, and the source footer. The source line
@@ -543,23 +574,46 @@
   }
 
   // ---- the four bodies ---------------------------------------------------------------------
+
+  // The benchmark strip - what the headline number should be read against. Every body can show it,
+  // so the "Context stats" toggle means the same thing on all four card types.
+  function cardCtx(spec, opts) {
+    return opts.context ? (spec.context || []).slice(0, 3) : [];
+  }
+  const CTX_H = 62;
+
+  // The "so what" line, wrapped to the card - a sentence naming an agency is easily wider than the
+  // card, and a single unwrapped line runs straight off the edge. Bodies size their space from
+  // takeLines() first, then draw it last.
+  function takeLines(spec, opts, W, pad) {
+    return (opts.takeaway && spec.takeaway) ? svWrap(spec.takeaway, 15, W - pad * 2, 2) : [];
+  }
+  function takeHeight(lines) { return lines.length ? lines.length * 20 + 8 : 0; }
+  function takeParts(lines, pad, W, bottom) {
+    return lines.map((l, i) => svText(pad, bottom - 2 - (lines.length - 1 - i) * 20, l,
+      { size: 15, weight: 600, font: CARD.serif })).join("");
+  }
+
+  function ctxStrip(ctx, pad, W, cy) {
+    if (!ctx.length) return "";
+    const cw = (W - pad * 2) / ctx.length, parts = [];
+    ctx.forEach((c, i) => {
+      const cx = pad + cw * i + cw / 2;
+      if (i) parts.push(sv("rect", { x: pad + cw * i, y: cy - 24, width: 1, height: 44, fill: CARD.soft }));
+      parts.push(svText(cx, cy, String(c.label).toUpperCase(), { size: 10, weight: 800, track: 1, fill: CARD.dim, anchor: "middle" }));
+      parts.push(svText(cx, cy + 24, c.value, { size: 20, weight: 700, font: CARD.mono, anchor: "middle", fill: c.good ? CARD.good : CARD.ink }));
+    });
+    return parts.join("");
+  }
+
   function bodyStat(spec, opts) {
     return (top, bottom, pad, W) => {
       const mid = (top + bottom) / 2, parts = [];
       const big = W > 800 ? 96 : 88;
       parts.push(svText(W / 2, mid - 10, spec.value, { size: big, weight: 900, track: -3, fill: CARD.red, anchor: "middle" }));
       if (spec.unit) parts.push(svText(W / 2, mid + 24, spec.unit, { size: 16, weight: 700, fill: CARD.muted, anchor: "middle" }));
-      const ctx = opts.context ? (spec.context || []).slice(0, 3) : [];
-      if (ctx.length) {
-        const cw = (W - pad * 2) / ctx.length, cy = mid + 76;
-        ctx.forEach((c, i) => {
-          const cx = pad + cw * i + cw / 2;
-          if (i) parts.push(sv("rect", { x: pad + cw * i, y: cy - 24, width: 1, height: 44, fill: CARD.soft }));
-          parts.push(svText(cx, cy, String(c.label).toUpperCase(), { size: 10, weight: 800, track: 1, fill: CARD.dim, anchor: "middle" }));
-          parts.push(svText(cx, cy + 24, c.value, { size: 20, weight: 700, font: CARD.mono, anchor: "middle", fill: c.good ? CARD.good : CARD.ink }));
-        });
-      }
-      if (opts.takeaway && spec.takeaway) parts.push(svText(pad, bottom - 4, spec.takeaway, { size: 15, weight: 600, font: CARD.serif }));
+      parts.push(ctxStrip(cardCtx(spec, opts), pad, W, mid + 76));
+      parts.push(takeParts(takeLines(spec, opts, W, pad), pad, W, bottom - 2));
       return parts.join("");
     };
   }
@@ -571,13 +625,22 @@
       const max = Math.max(...rows.map(r => Math.abs(r.value || 0)), 1);
       const nameW = ranked ? 210 : 165, valW = 70;
       const trackX = pad + nameW + 14, trackW = W - pad * 2 - nameW - valW - 28;
-      const gap = Math.min(52, (bottom - top) / rows.length);
-      const barH = Math.min(26, gap - 14);
+      const ctx = cardCtx(spec, opts);
+      const tl = takeLines(spec, opts, W, pad), takeH = takeHeight(tl);
+      const avail = bottom - top - (ctx.length ? CTX_H : 0) - takeH;
+      const gap = Math.min(52, avail / rows.length);
+      const barH = Math.max(9, Math.min(26, gap - 14));
+      // A landscape card is short: when the rows are tight the city/state line is the first thing
+      // to go, because two lines per row would collide before the bars did.
+      const showSub = gap >= 34;
+      // Few rows shouldn't leave a hole above the footer: centre what there is in the space it has.
+      const y0 = top + Math.max(0, (avail - gap * rows.length) / 2);
       const parts = [];
       rows.forEach((r, i) => {
-        const y = top + gap * i + gap / 2;
-        parts.push(svText(pad, y + (r.sub ? -3 : 4), r.label, { size: 15, weight: 700 }));
-        if (r.sub) parts.push(svText(pad, y + 13, r.sub, { size: 11, font: CARD.serif, fill: CARD.dim }));
+        const y = y0 + gap * i + gap / 2;
+        const sub = showSub ? r.sub : null;
+        parts.push(svText(pad, y + (sub ? -3 : 4), svFit(r.label, nameW, 15), { size: 15, weight: 700 }));
+        if (sub) parts.push(svText(pad, y + 13, svFit(sub, nameW, 11), { size: 11, font: CARD.serif, fill: CARD.dim }));
         if (opts.chart) {
           parts.push(sv("rect", { x: trackX, y: y - barH / 2, width: trackW, height: barH, rx: 5, fill: CARD.soft }));
           parts.push(sv("rect", { x: trackX, y: y - barH / 2, width: Math.max(3, trackW * (Math.abs(r.value || 0) / max)),
@@ -585,7 +648,8 @@
         }
         parts.push(svText(W - pad, y + 6, r.display, { size: 16, weight: 700, font: CARD.mono, anchor: "end" }));
       });
-      if (opts.takeaway && spec.takeaway) parts.push(svText(pad, bottom - 2, spec.takeaway, { size: 15, weight: 600, font: CARD.serif }));
+      parts.push(ctxStrip(ctx, pad, W, top + avail + 26));
+      parts.push(takeParts(tl, pad, W, bottom));
       return parts.join("");
     };
   }
@@ -594,8 +658,9 @@
     return (top, bottom, pad, W) => {
       const pts = spec.points || [];
       if (pts.length < 2) return bodyBars(spec, opts, true)(top, bottom, pad, W);
-      const takeH = (opts.takeaway && spec.takeaway) ? 26 : 0;
-      const x0 = pad + 34, x1 = W - pad, y0 = top + 18, y1 = bottom - 34 - takeH;
+      const tl = takeLines(spec, opts, W, pad), takeH = takeHeight(tl);
+      const ctx = cardCtx(spec, opts), ctxH = ctx.length ? CTX_H : 0;
+      const x0 = pad + 34, x1 = W - pad, y0 = top + 18, y1 = bottom - 34 - takeH - ctxH;
       const vals = pts.map(p => p.value);
       const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
       const px = i => x0 + (x1 - x0) * (pts.length === 1 ? 0.5 : i / (pts.length - 1));
@@ -616,7 +681,8 @@
       const first = pts[0], last = pts[pts.length - 1];
       parts.push(svText(px(0), py(first.value) - 12, first.display, { size: 12, weight: 700, font: CARD.mono, anchor: "middle" }));
       parts.push(svText(px(pts.length - 1), py(last.value) - 12, last.display, { size: 12, weight: 700, font: CARD.mono, fill: CARD.red, anchor: "middle" }));
-      if (takeH) parts.push(svText(pad, bottom - 2, spec.takeaway, { size: 15, weight: 600, font: CARD.serif }));
+      parts.push(ctxStrip(ctx, pad, W, y1 + 46));
+      parts.push(takeParts(tl, pad, W, bottom));
       return parts.join("");
     };
   }
@@ -625,19 +691,22 @@
     return (top, bottom, pad, W) => {
       const cols = (spec.columns || []).slice(0, 4), rows = (spec.tableRows || []).slice(0, 9);
       const colW = (W - pad * 2) / Math.max(cols.length, 1);
+      const ctx = cardCtx(spec, opts), rowsBottom = bottom - 8 - (ctx.length ? CTX_H : 0);
       const parts = [sv("rect", { x: pad, y: top + 14, width: W - pad * 2, height: 1, fill: CARD.ink })];
-      cols.forEach((c, i) => parts.push(svText(pad + colW * i, top + 6, String(c).toUpperCase(),
+      cols.forEach((c, i) => parts.push(svText(pad + colW * i, top + 6, svFit(String(c).toUpperCase(), colW - 10, 11),
         { size: 10, weight: 800, track: 1, fill: CARD.dim })));
       rows.forEach((r, ri) => {
         const y = top + 36 + ri * 24;
-        if (y > bottom - 8) return;
+        if (y > rowsBottom) return;
         cols.forEach((c, ci) => {
           const v = r[ci];
           const isNum = typeof v === "number";
-          parts.push(svText(pad + colW * ci, y, isNum ? cardNum(v, spec.money) : String(v == null ? "—" : v).slice(0, 26),
+          const s = isNum ? cardNum(v, spec.money) : String(v == null ? "—" : v);
+          parts.push(svText(pad + colW * ci, y, svFit(s, colW - 10, 13),
             { size: 13, font: isNum ? CARD.mono : CARD.serif, weight: isNum ? 700 : 400 }));
         });
       });
+      parts.push(ctxStrip(ctx, pad, W, bottom - CTX_H + 30));
       return parts.join("");
     };
   }
@@ -700,7 +769,7 @@
     } else {
       const sorted = objs.slice().sort((a, b) => (val(b) || 0) - (val(a) || 0));
       spec.rows = sorted.map(r => ({
-        label: String(label(r) || "—").slice(0, 34),
+        label: String(label(r) || "—").slice(0, 80),   // the draw step fits it to the label column
         sub: [r.city, r.state].filter(Boolean).join(", ") || null,
         value: val(r), display: cardNum(val(r), money),
       }));
