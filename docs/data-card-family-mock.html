@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transit411 — data card family (mock)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@600;700&display=swap">
+<style>
+  body{margin:0;background:#3A352C;font-family:'Spectral',Georgia,serif;display:flex;flex-direction:column;align-items:center;gap:30px;padding:34px 16px}
+  .label{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:#C9C2B4;align-self:center;margin-top:8px}
+  .card{width:680px;background:#F7F4ED;color:#17140F;border:1px solid #D8D2C4;box-shadow:0 16px 44px rgba(0,0,0,.3)}
+  .disp{font-family:'Archivo',sans-serif}
+  .head{display:flex;justify-content:space-between;align-items:center;padding:18px 30px;border-bottom:3px solid #17140F}
+  .brand{font-family:'Archivo',sans-serif;font-weight:900;font-size:21px;letter-spacing:-1px}
+  .brand span{color:#C0341F}
+  .badge{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:#6A6458}
+  .title{padding:22px 30px 6px}
+  .kicker{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:#C0341F}
+  h1{font-family:'Archivo',sans-serif;font-size:27px;line-height:1.1;letter-spacing:-.5px;font-weight:800;margin:8px 0 6px}
+  .deck{font-size:15px;color:#6A6458;margin:0;line-height:1.4}
+  .foot{padding:14px 30px 20px;border-top:2px solid #17140F;margin-top:10px}
+  .src{font-size:12px;color:#6A6458;line-height:1.5;margin:0}
+  .src b{color:#17140F}
+  .metaline{display:flex;justify-content:space-between;align-items:center;margin-top:10px}
+  .url{font-family:'Archivo',sans-serif;font-weight:800;font-size:13px}
+  .url span{color:#C0341F}
+  .gen{font-family:'Archivo',sans-serif;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#9A9384}
+  .statbig{text-align:center;padding:20px 30px 6px}
+  .statbig .num{font-family:'Archivo',sans-serif;font-weight:900;font-size:88px;letter-spacing:-3px;line-height:1;color:#C0341F}
+  .statbig .unit{font-family:'Archivo',sans-serif;font-weight:700;font-size:16px;color:#6A6458;margin-top:4px}
+  .statctx{display:flex;justify-content:center;gap:0;padding:16px 30px 4px}
+  .statctx .box{flex:1;text-align:center;padding:0 12px;border-right:1px solid #E7E1D4}
+  .statctx .box:last-child{border-right:none}
+  .statctx .l{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#8A8376}
+  .statctx .v{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:20px;margin-top:4px}
+  .chart{padding:14px 24px 0}
+  .take{padding:6px 30px 0;font-size:15px;color:#17140F;font-weight:600}
+  .take b{color:#C0341F}
+  .cmp{padding:16px 30px 6px}
+  .crow{display:flex;align-items:center;gap:14px;padding:10px 0}
+  .cname{font-family:'Archivo',sans-serif;font-weight:700;font-size:15px;width:150px}
+  .cname small{display:block;font-family:'Spectral',serif;font-weight:400;font-size:11px;color:#8A8376}
+  .ctrack{flex:1;height:26px;background:#E7E1D4;border-radius:5px;overflow:hidden;position:relative}
+  .cfill{height:100%;background:#17140F;border-radius:5px}
+  .crow:first-child .cfill{background:#C0341F}
+  .cval{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:16px;width:62px;text-align:right}
+</style></head>
+<body>
+  <div class="label">Single-stat card — one-number answers</div>
+  <div class="card">
+    <div class="head"><div class="brand disp">TRANSIT<span>411</span></div><div class="badge">Ask NTD &middot; Data Card</div></div>
+    <div class="title" style="text-align:center;padding-bottom:0">
+      <div class="kicker">National Transit Database &middot; 2024</div>
+      <h1 class="disp" style="margin-bottom:0">NYCT Subway — cost per rider</h1>
+    </div>
+    <div class="statbig"><div class="num">$2.95</div><div class="unit">per unlinked passenger trip</div></div>
+    <div class="statctx">
+      <div class="box"><div class="l">Annual trips</div><div class="v">2.21B</div></div>
+      <div class="box"><div class="l">Heavy-rail median</div><div class="v">$6.40</div></div>
+      <div class="box"><div class="l">Vs. median</div><div class="v" style="color:#2E7D52">&minus;54%</div></div>
+    </div>
+    <div class="foot">
+      <p class="src"><b>Source:</b> National Transit Database, 2024. <b>Cost per rider</b> = operating expense &divide; unlinked passenger trips, heavy rail.</p>
+      <div class="metaline"><div class="url disp">transit411<span>.net</span></div><div class="gen">Generated with Ask NTD</div></div>
+    </div>
+  </div>
+  <div class="label">Trend card — change over time</div>
+  <div class="card">
+    <div class="head"><div class="brand disp">TRANSIT<span>411</span></div><div class="badge">Ask NTD &middot; Data Card</div></div>
+    <div class="title"><div class="kicker">National Transit Database</div><h1 class="disp">Texas bus ridership since 2019</h1><p class="deck">Statewide fixed-route bus, unlinked passenger trips, indexed to 2019 = 100.</p></div>
+    <div class="chart">
+      <svg viewBox="0 0 620 210" width="100%">
+        <line x1="60" y1="190" x2="600" y2="190" stroke="#D8D2C4" stroke-width="1"/>
+        <line x1="60" y1="30" x2="60" y2="190" stroke="#D8D2C4" stroke-width="1"/>
+        <polyline points="60,30 168,102 276,81 384,65 492,54 600,49" fill="none" stroke="#C0341F" stroke-width="3"/>
+        <g fill="#17140F">
+          <circle cx="60" cy="30" r="4.5"/><circle cx="168" cy="102" r="4.5"/><circle cx="276" cy="81" r="4.5"/>
+          <circle cx="384" cy="65" r="4.5"/><circle cx="492" cy="54" r="4.5"/><circle cx="600" cy="49" r="4.5"/>
+        </g>
+        <g font-family="'JetBrains Mono',monospace" font-size="12" fill="#6A6458" text-anchor="middle">
+          <text x="60" y="207">2019</text><text x="168" y="207">2020</text><text x="276" y="207">2021</text>
+          <text x="384" y="207">2022</text><text x="492" y="207">2023</text><text x="600" y="207">2024</text>
+        </g>
+        <text x="60" y="22" font-family="'JetBrains Mono',monospace" font-size="12" fill="#17140F" text-anchor="middle" font-weight="700">100</text>
+        <text x="600" y="41" font-family="'JetBrains Mono',monospace" font-size="12" fill="#C0341F" text-anchor="middle" font-weight="700">88</text>
+      </svg>
+    </div>
+    <div class="take">Down <b>22%</b> from 2019 — but recovering, up three years running.</div>
+    <div class="foot">
+      <p class="src"><b>Source:</b> National Transit Database, 2019–2024. Bus mode, Texas agencies, indexed to 2019.</p>
+      <div class="metaline"><div class="url disp">transit411<span>.net</span></div><div class="gen">Generated with Ask NTD</div></div>
+    </div>
+  </div>
+  <div class="label">Comparison card — a few named things, head to head</div>
+  <div class="card">
+    <div class="head"><div class="brand disp">TRANSIT<span>411</span></div><div class="badge">Ask NTD &middot; Data Card</div></div>
+    <div class="title"><div class="kicker">National Transit Database &middot; 2024</div><h1 class="disp">Cost per rider — three peer systems</h1><p class="deck">Heavy-rail operating cost per unlinked passenger trip.</p></div>
+    <div class="cmp">
+      <div class="crow"><div class="cname">WMATA Metrorail<small>Washington, DC</small></div><div class="ctrack"><div class="cfill" style="width:77%"></div></div><div class="cval">$6.15</div></div>
+      <div class="crow"><div class="cname">MARTA<small>Atlanta, GA</small></div><div class="ctrack"><div class="cfill" style="width:84%"></div></div><div class="cval">$6.70</div></div>
+      <div class="crow"><div class="cname">BART<small>SF Bay Area, CA</small></div><div class="ctrack"><div class="cfill" style="width:91%"></div></div><div class="cval">$7.30</div></div>
+    </div>
+    <div class="foot">
+      <p class="src"><b>Source:</b> National Transit Database, 2024. <b>Cost per rider</b> = operating expense &divide; unlinked passenger trips, heavy rail.</p>
+      <div class="metaline"><div class="url disp">transit411<span>.net</span></div><div class="gen">Generated with Ask NTD</div></div>
+    </div>
+  </div>
+  <div class="label" style="opacity:.7">Illustrative mocks — figures for design only; the live tool uses real NTD data</div>
+</body></html>
