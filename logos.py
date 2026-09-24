@@ -32,7 +32,7 @@ import image_library as L
 UA = os.environ.get("COLLECT_USER_AGENT", "Transit411/1.0 (+https://transit411.net)")
 WP_API = "https://en.wikipedia.org/w/api.php"
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
-PAUSE = 0.35            # polite gap between calls; Wikimedia's guidance is "don't hammer it"
+PAUSE = 1.0             # seconds between calls. 0.35 across 65 agencies earned an HTTP 429.
 MATCH_AT = 0.6          # below this the article is probably a different organisation
 
 # Licence strings that mean we may actually use the file. Anything else needs a human to look.
@@ -40,13 +40,40 @@ FREE_HINTS = ("public domain", "pd-", "cc0", "cc by", "cc-by", "attribution", "g
 NONFREE_HINTS = ("non-free", "nonfree", "fair use", "fairuse", "copyright", "trademark")
 
 
-def _get(api, params):
-    """requests, not urllib: it carries its own CA bundle, and the rest of the codebase uses it."""
+class RateLimited(RuntimeError):
+    """Wikimedia asked us to slow down. NOT the same as an agency having no article."""
+
+
+_last_call = [0.0]
+
+
+def _get(api, params, tries=4):
+    """One Wikimedia call, paced and backed off.
+
+    Wikimedia rate-limits anonymous clients, and a burst across 65 agencies earns a 429 within
+    seconds. Requests are spaced, 429/503 is honoured with its Retry-After, and a rate limit is
+    raised as RateLimited rather than folded in with "no article found" - reporting throttling as
+    a coverage miss would make the coverage numbers a fiction.
+    """
     import requests
-    r = requests.get(api, params=dict(params, format="json", formatversion="2"),
-                     headers={"User-Agent": UA, "Accept": "application/json"}, timeout=25)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(tries):
+        wait = PAUSE - (time.time() - _last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_call[0] = time.time()
+        r = requests.get(api, params=dict(params, format="json", formatversion="2"),
+                         headers={"User-Agent": UA, "Accept": "application/json"}, timeout=25)
+        if r.status_code in (429, 503):
+            retry_after = r.headers.get("Retry-After")
+            back = float(retry_after) if (retry_after or "").isdigit() else (2.0 * (2 ** attempt))
+            if attempt == tries - 1:
+                raise RateLimited("HTTP %s after %d tries" % (r.status_code, tries))
+            print("     (%s - waiting %.0fs)" % (r.status_code, back), flush=True)
+            time.sleep(min(back, 60))
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise RateLimited("gave up after %d tries" % tries)
 
 
 def find_article(names):
@@ -62,9 +89,10 @@ def find_article(names):
     for name in ordered[:3]:
         try:
             d = _get(WP_API, {"action": "query", "list": "search", "srsearch": name, "srlimit": 5})
+        except RateLimited:
+            raise
         except Exception:
             continue
-        time.sleep(PAUSE)
         scored = []
         for hit in (d.get("query", {}).get("search") or []):
             title = hit.get("title") or ""
@@ -135,7 +163,6 @@ def infobox_logo(title):
         d = _get(WP_API, {"action": "parse", "page": title, "prop": "wikitext"})
     except Exception:
         return None
-    time.sleep(PAUSE)
     text = ((d.get("parse") or {}).get("wikitext") or "")
     if not isinstance(text, str):
         text = text.get("*", "") if isinstance(text, dict) else ""
@@ -169,7 +196,6 @@ def article_logo_file(title):
         d = _get(WP_API, {"action": "query", "titles": title, "prop": "images", "imlimit": "80"})
     except Exception:
         return None
-    time.sleep(PAUSE)
     pages = d.get("query", {}).get("pages") or []
     if not pages:
         return None
@@ -190,7 +216,6 @@ def file_details(file_title):
                            "iiprop": "url|size|extmetadata"})
         except Exception:
             continue
-        time.sleep(PAUSE)
         pages = d.get("query", {}).get("pages") or []
         if not pages or pages[0].get("missing"):
             continue
@@ -312,6 +337,12 @@ def fetch(conn, limit=None, only=None):
         report["checked"] += 1
         try:
             asset = asset_for(name, targets[name])
+        except RateLimited as e:
+            # Stop rather than mark the rest of the list as "no logo found".
+            report["stopped_early"] = "rate limited at %s (%s)" % (name, e)
+            print("  !! rate limited at %s - stopping so the rest are not recorded as misses" % name,
+                  flush=True)
+            break
         except Exception as e:
             report["misses"].append({"agency": name, "why": "%s: %s" % (type(e).__name__, e)})
             continue
