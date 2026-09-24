@@ -96,18 +96,23 @@ def _collection_where(status, q=None, pillar=None, agency=None, mode=None, progr
 @app.get("/api/collection")
 def collection(status: str = "pending", q: Optional[str] = None, pillar: Optional[str] = None,
                agency: Optional[str] = None, mode: Optional[str] = None, program: Optional[str] = None,
-               state: Optional[str] = None, tag: Optional[str] = None):
+               state: Optional[str] = None, tag: Optional[str] = None, order: str = "fresh"):
     from collection import freshness
     items = []
     where, params = _collection_where(status, q, pillar, agency, mode, program, state, tag)
     try:
         with _db() as c, c.cursor() as cur:
             _ensure_reco(cur)
+            # The 200-row cap is applied AFTER this ordering, so "sort by AI score" has to be a
+            # SQL order: sorting the newest 200 in the client would silently drop a high-scoring
+            # older item - including one the recommendation is telling Brian to publish.
+            order_sql = ("reco_score DESC NULLS LAST, collected_at DESC" if order == "score"
+                         else "collected_at DESC")
             cur.execute(
                 "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, relevance, status, "
                 "agencies, mode, programs, tags, state, "
                 "reco_score, reco_action, reco_reason, reco_flags, reco_group, recommended_at "
-                f"FROM collected_items WHERE {where} ORDER BY collected_at DESC LIMIT 200", params)
+                f"FROM collected_items WHERE {where} ORDER BY {order_sql} LIMIT 200", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 it = dict(zip(names, row))
@@ -127,7 +132,10 @@ def collection(status: str = "pending", q: Optional[str] = None, pillar: Optiona
         raise
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
-    items.sort(key=lambda x: x["fresh_score"], reverse=True)
+    if order == "score":
+        items.sort(key=lambda x: (x.get("reco_score") is None, -(x.get("reco_score") or 0)))
+    else:
+        items.sort(key=lambda x: x["fresh_score"], reverse=True)
     return {"items": items, "counts": counts, "matched": matched}
 
 
@@ -2178,6 +2186,29 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .imgcard-b{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
 .imgcard-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
 .imgcard-t{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;line-height:1.3}
+/* AI recommendation: always visually distinct from Brian's own decision. The score, the pill and
+   the reason all sit inside a dashed "AI" frame so nothing here reads as a status the system set. */
+.reco-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
+.reco-run{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+.reco-set{background:var(--card);border:1px solid var(--accent);border-radius:12px;padding:14px 16px;margin:0 0 16px}
+.reco-set h3{font-family:'Archivo',sans-serif;font-size:13px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
+.reco-set p.why{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:0 0 10px}
+.reco-pick{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line);cursor:pointer}
+.reco-pick:hover .rp-h{color:var(--accent)}
+.rp-score{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;min-width:30px;text-align:right;color:var(--ink)}
+.rp-h{font-family:'Archivo',sans-serif;font-size:14px;font-weight:700;line-height:1.3}
+.rp-m{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-top:2px}
+.rp-lead{font-family:'Archivo',sans-serif;font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--panel);background:var(--accent);border-radius:999px;padding:2px 7px;margin-left:6px;vertical-align:middle}
+.reco-line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border:1px dashed var(--line);border-radius:8px;padding:6px 10px;margin:0 0 10px}
+.reco-ai{font-family:'Archivo',sans-serif;font-size:9px;font-weight:800;letter-spacing:1px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:1px 5px}
+.reco-score{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700}
+.reco-why{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);flex:1;min-width:180px}
+.reco-act{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-radius:999px;padding:2px 9px;border:1px solid}
+.reco-publish{color:#4FA96B;border-color:#4FA96B}
+.reco-hold{color:#C99A3A;border-color:#C99A3A}
+.reco-skip{color:var(--muted);border-color:var(--line)}
+.reco-flag{font-family:'Archivo',sans-serif;font-size:10px;font-weight:700;letter-spacing:.5px;color:#C99A3A;border:1px solid #C99A3A;border-radius:999px;padding:2px 8px}
+.reco-flag.lead{color:var(--accent);border-color:var(--accent)}
 .pimg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .pimg{display:flex;flex-direction:column;gap:3px;padding:0;border:1px solid var(--line);background:var(--card);cursor:pointer;text-align:left;overflow:hidden;border-radius:8px}
 .pimg:hover{border-color:var(--accent)}
@@ -2297,7 +2328,9 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <div id="out"></div>
   </div>
   <div class="panel" id="p-collect">
-    <div class="askhead"><div><h2 class="disp">Collection queue</h2><p class="lead">Items the engine gathered, freshest first - approve what runs, skip the rest. Populate with the collector job.</p></div><button class="newq" id="cRefresh" type="button">Refresh</button></div>
+    <div class="askhead"><div><h2 class="disp">Collection queue</h2><p class="lead">Items the engine gathered, freshest first - approve what runs, skip the rest. Populate with the collector job.</p></div><div style="display:flex;gap:8px"><button class="newq" id="cReco" type="button" style="white-space:nowrap;min-width:116px">Recommend</button><button class="newq" id="cRefresh" type="button">Refresh</button></div></div>
+    <div class="reco-bar" id="cRecoBar"></div>
+    <div id="cRecoSet"></div>
     <div class="examples" id="cChips"></div>
     <div class="csearch">
       <input type="search" id="cQ" placeholder="Search headlines, summaries, agencies, tags..." autocomplete="off" aria-label="Search the collection">
@@ -2493,7 +2526,7 @@ function go(ws, tool, push){
 // Each tool loads its own data when it is opened (the old tab-click behaviour).
 function onToolOpen(tool, panel){
   try{
-    if(panel==="p-collect"){loadFacets();loadCollection();}
+    if(panel==="p-collect"){loadFacets();loadCollection();loadReco();}
     else if(panel==="p-sources")loadSources();
     else if(panel==="p-publish")loadPublish();
     else if(panel==="p-contacts")loadContacts();
@@ -2690,7 +2723,7 @@ let cFilter="pending";
 const cChips=document.getElementById("cChips");
 [["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"],["filtered","Auto-filtered"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="ex";b.textContent=lbl;
-  b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadFacets();loadCollection();};
+  b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadFacets();loadCollection();loadReco();};
   if(k==="pending")b.style.borderColor="var(--accent)";cChips.appendChild(b);});
 document.getElementById("cRefresh").onclick=()=>{loadFacets();loadCollection();};
 
@@ -2735,7 +2768,7 @@ async function loadCollection(){
   const out=document.getElementById("cOut");
   out.innerHTML='<div class="rcard"><div class="loading">Loading the queue...</div></div>';
   try{
-    const qs=new URLSearchParams({status:cFilter});Object.keys(cF).forEach(k=>{if(cF[k])qs.set(k,cF[k]);});
+    const qs=new URLSearchParams({status:cFilter,order:cSort});Object.keys(cF).forEach(k=>{if(cF[k])qs.set(k,cF[k]);});
     const r=await fetch("/api/collection?"+qs.toString());
     if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
     const d=await r.json();
@@ -2747,7 +2780,8 @@ async function loadCollection(){
 }
 function cCard(it){
   const fc=FCOLOR[it.fresh_status]||"#6A6458";const acted=cFilter!=="pending";
-  return '<div class="rcard" style="padding:16px 18px">'
+  return '<div class="rcard" data-item="'+it.id+'" style="padding:16px 18px">'
+    +recoLine(it)
     +'<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase">'
     +'<span style="color:var(--accent)">'+esc(it.pillar)+'</span>'
     +'<span style="color:'+fc+';border:1px solid '+fc+';border-radius:999px;padding:2px 8px">'+esc(it.fresh_status)+'</span>'
@@ -2763,6 +2797,90 @@ function cCard(it){
            :'<button class="go" style="padding:9px 18px" data-id="'+it.id+'" data-act="approve">Approve</button><button class="ex" data-id="'+it.id+'" data-act="skip">Skip</button>')
     +'</div></div>';
 }
+// ---- AI recommendation (advisory; it sorts and explains, it never acts) ----
+// The queue's own rows already carry the cached reco_* fields, so sorting and the per-item line
+// cost nothing. Only the Recommend button spends anything, and only when pressed.
+let cSort="fresh", cReco=null;
+const RECO_LABEL={publish:"Publish",hold:"Hold",skip:"Skip"};
+
+function recoLine(it){
+  if(it.reco_score==null)return "";
+  const flags=it.reco_flags||[];
+  const act=it.reco_action||"hold";
+  return '<div class="reco-line">'
+    +'<span class="reco-ai" title="An AI suggestion. Your approve/skip decision is the one that counts.">AI</span>'
+    +'<span class="reco-score">'+esc(String(it.reco_score))+'</span>'
+    +'<span class="reco-act reco-'+esc(act)+'">'+esc(RECO_LABEL[act]||act)+'</span>'
+    +(flags.includes("lead_candidate")?'<span class="reco-flag lead">Lead candidate</span>':'')
+    +(flags.includes("likely_duplicate")?'<span class="reco-flag">Possible duplicate</span>':'')
+    +'<span class="reco-why">'+esc(it.reco_reason||"")+'</span></div>';
+}
+
+function renderRecoBar(){
+  const bar=document.getElementById("cRecoBar");
+  if(!cReco||!cReco.recommended_at){
+    bar.innerHTML='<span class="reco-run">No recommendation yet. <b>Recommend</b> reads the whole queue in one pass (about two minutes) and ranks it - it never approves, skips or publishes anything.</span>';
+    return;
+  }
+  const s=cReco.summary||{};
+  bar.innerHTML='<button class="ex" id="cSortBtn" type="button" style="border-color:'+(cSort==="score"?"var(--accent)":"")+'">'
+      +(cSort==="score"?"Sorted by AI score":"Sort by AI score")+'</button>'
+    +'<span class="reco-run">'+esc(String(cReco.considered))+' items ranked '+esc(when(cReco.recommended_at))
+    +' &middot; '+esc(String(s.publish||0))+' publish, '+esc(String(s.hold||0))+' hold, '+esc(String(s.skip||0))+' skip'
+    +' &middot; '+esc(String(s.duplicates||0))+' possible duplicates</span>';
+  document.getElementById("cSortBtn").onclick=()=>{cSort=(cSort==="score"?"fresh":"score");renderRecoBar();loadCollection();};
+}
+
+function renderRecoSet(){
+  const box=document.getElementById("cRecoSet");
+  const picks=(cReco&&cReco.balanced_set)||[];
+  if(!picks.length){box.innerHTML="";return;}
+  const leadId=cReco.lead?cReco.lead.id:null;
+  box.innerHTML='<div class="reco-set"><h3>Publish these '+picks.length+' for a strong, varied homepage</h3>'
+    +'<p class="why">One per pillar first, then by score, at most two from any pillar. A suggestion - nothing here is approved.</p>'
+    +picks.map(p=>'<div class="reco-pick" data-goto="'+p.id+'">'
+      +'<span class="rp-score">'+esc(String(p.score))+'</span><div>'
+      +'<div class="rp-h">'+esc(p.headline)+(p.id===leadId?'<span class="rp-lead">Lead</span>':'')+'</div>'
+      +'<div class="rp-m">'+esc(p.pillar||"")+(p.source_name?' &middot; '+esc(p.source_name):'')+' &middot; '+esc(p.reason||"")+'</div>'
+      +'</div></div>').join("")+'</div>';
+}
+
+async function loadReco(){
+  // Cached read: no model call, so this is free on every load of the tab.
+  try{
+    const r=await fetch("/api/collection/recommendation?status="+encodeURIComponent(cFilter));
+    cReco=r.ok?await r.json():null;
+  }catch(e){cReco=null;}
+  renderRecoBar();renderRecoSet();
+}
+
+document.getElementById("cReco").onclick=async()=>{
+  const btn=document.getElementById("cReco"),bar=document.getElementById("cRecoBar");
+  btn.disabled=true;const was=btn.textContent;btn.textContent="Ranking...";
+  bar.innerHTML='<span class="reco-run">Scoring every item against the editorial rubric. This takes about two minutes and costs roughly $0.12 - it runs only when you press this.</span>';
+  try{
+    const r=await fetch("/api/collection/recommend?status="+encodeURIComponent(cFilter),{method:"POST"});
+    if(!r.ok){bar.innerHTML='<span class="err">'+esc(errText(await r.text()))+'</span>';return;}
+    cReco=await r.json();
+    cSort="score";
+    renderRecoBar();renderRecoSet();loadCollection();
+  }catch(e){bar.innerHTML='<span class="err">Could not reach the recommender.</span>';}
+  finally{btn.disabled=false;btn.textContent=was;}
+};
+
+document.getElementById("cRecoSet").addEventListener("click",e=>{
+  const p=e.target.closest("[data-goto]");if(!p)return;
+  const card=document.querySelector('#cOut [data-item="'+p.dataset.goto+'"]');
+  if(!card){
+    document.getElementById("cRecoBar").insertAdjacentHTML("beforeend",
+      '<span class="reco-run" style="color:var(--accent)">That item is outside the current filter - clear the filters to see it.</span>');
+    return;
+  }
+  card.scrollIntoView({block:"center",behavior:"smooth"});
+  card.style.transition="box-shadow .3s";card.style.boxShadow="0 0 0 2px var(--accent)";
+  setTimeout(()=>{card.style.boxShadow="";},1600);
+});
+
 async function cAct(id,action){try{await fetch("/api/collection/"+id+"/"+action,{method:"POST"});loadCollection();}catch(e){}}
 document.getElementById("cOut").addEventListener("click",e=>{
   const f=e.target.closest("[data-fk]");if(f){setFilter(f.dataset.fk,f.dataset.fv);window.scrollTo({top:0,behavior:"smooth"});return;}
