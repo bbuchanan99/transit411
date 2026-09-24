@@ -2369,8 +2369,18 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .reco-set{background:var(--card);border:1px solid var(--accent);border-radius:12px;padding:14px 16px;margin:0 0 16px}
 .reco-set h3{font-family:'Archivo',sans-serif;font-size:13px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
 .reco-set p.why{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:0 0 10px}
-.reco-pick{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line);cursor:pointer}
+.reco-pick{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--line)}
+.reco-pick .rp-body{flex:1;cursor:pointer}
 .reco-pick:hover .rp-h{color:var(--accent)}
+.reco-pick.is-done{opacity:.5}
+.reco-pick.is-done:hover .rp-h{color:var(--ink)}
+.rp-ck{margin-top:3px;accent-color:var(--accent)}
+.rp-act{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.rp-done{font-family:'Archivo',sans-serif;font-size:9px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;margin-left:6px;vertical-align:middle}
+.reco-bulk{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:8px 0 10px}
+.reco-selall{font-family:'Archivo',sans-serif;font-size:12px;color:var(--ink);display:flex;align-items:center;gap:6px;cursor:pointer}
+.reco-selall input{accent-color:var(--accent)}
+.reco-note{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted)}
 .rp-score{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;min-width:30px;text-align:right;color:var(--ink)}
 .rp-h{font-family:'Archivo',sans-serif;font-size:14px;font-weight:700;line-height:1.3}
 .rp-m{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-top:2px}
@@ -3026,18 +3036,73 @@ function renderRecoBar(){
   document.getElementById("cSortBtn").onclick=()=>{cSort=(cSort==="score"?"fresh":"score");renderRecoBar();loadCollection();};
 }
 
+// Items in the set that have been acted on this session: id -> "approved"|"skipped". The row
+// stays visible with its outcome rather than vanishing, so it is clear what you just did.
+let recoDone={};
+
 function renderRecoSet(){
   const box=document.getElementById("cRecoSet");
   const picks=(cReco&&cReco.balanced_set)||[];
   if(!picks.length){box.innerHTML="";return;}
   const leadId=cReco.lead?cReco.lead.id:null;
+  const open=picks.filter(p=>!recoDone[p.id]);
   box.innerHTML='<div class="reco-set"><h3>Publish these '+picks.length+' for a strong, varied homepage</h3>'
-    +'<p class="why">One per pillar first, then by score, at most two from any pillar. A suggestion - nothing here is approved.</p>'
-    +picks.map(p=>'<div class="reco-pick" data-goto="'+p.id+'">'
-      +'<span class="rp-score">'+esc(String(p.score))+'</span><div>'
-      +'<div class="rp-h">'+esc(p.headline)+(p.id===leadId?'<span class="rp-lead">Lead</span>':'')+'</div>'
-      +'<div class="rp-m">'+esc(p.pillar||"")+(p.source_name?' &middot; '+esc(p.source_name):'')+' &middot; '+esc(p.reason||"")+'</div>'
-      +'</div></div>').join("")+'</div>';
+    +'<p class="why">One per pillar first, then by score, at most two from any pillar. A suggestion &mdash; approving is yours.</p>'
+    +'<div class="reco-bulk">'
+      +'<label class="reco-selall"><input type="checkbox" id="recoAll"'+(open.length?' checked':' disabled')+'> Select all</label>'
+      +'<button class="go" style="padding:7px 14px" id="recoApprove" type="button">Approve selected</button>'
+      +'<button class="ex" id="recoSkip" type="button">Skip selected</button>'
+      +'<span class="reco-note" id="recoMsg"></span></div>'
+    +picks.map(p=>{
+      const done=recoDone[p.id];
+      return '<div class="reco-pick'+(done?' is-done':'')+'" data-pick="'+p.id+'">'
+      +'<input type="checkbox" class="rp-ck" data-ck="'+p.id+'"'+(done?' disabled':' checked')+'>'
+      +'<span class="rp-score">'+esc(String(p.score))+'</span>'
+      +'<div class="rp-body" data-goto="'+p.id+'">'
+        +'<div class="rp-h">'+esc(p.headline)+(p.id===leadId?'<span class="rp-lead">Lead</span>':'')
+          +(done?'<span class="rp-done">'+esc(done)+'</span>':'')+'</div>'
+        +'<div class="rp-m">'+esc(p.pillar||"")+(p.source_name?' &middot; '+esc(p.source_name):'')+' &middot; '+esc(p.reason||"")+'</div>'
+      +'</div>'
+      +'<div class="rp-act">'+(done
+          ? '<button class="ex" data-pickact="reset" data-id="'+p.id+'">Undo</button>'
+          : '<button class="go" style="padding:6px 12px" data-pickact="approve" data-id="'+p.id+'">Approve</button>'
+            +'<button class="ex" data-pickact="skip" data-id="'+p.id+'">Skip</button>')
+      +'</div></div>';}).join("")+'</div>';
+  recoCount();
+}
+
+function recoChecked(){
+  return [...document.querySelectorAll("#cRecoSet [data-ck]")].filter(c=>c.checked&&!c.disabled)
+    .map(c=>+c.dataset.ck);
+}
+function recoCount(){
+  const n=recoChecked().length;
+  const a=document.getElementById("recoApprove"),k=document.getElementById("recoSkip");
+  if(!a)return;
+  a.textContent="Approve selected ("+n+")";
+  a.disabled=k.disabled=(n===0);
+  k.textContent="Skip selected";
+}
+function recoMsg(t){const m=document.getElementById("recoMsg");if(m)m.textContent=t||"";}
+
+// Approve/skip from here is the SAME endpoint the queue cards use - the recommendation sorts and
+// explains, it never acts on its own.
+async function recoAct(ids,action){
+  if(!ids.length)return;
+  const verb=action==="approve"?"Approving":action==="skip"?"Skipping":"Restoring";
+  recoMsg(verb+" "+ids.length+"...");
+  let done=0;
+  for(const id of ids){
+    try{
+      const r=await fetch("/api/collection/"+id+"/"+action,{method:"POST"});
+      if(r.ok){done++;recoDone[id]=(action==="approve"?"approved":action==="skip"?"skipped":null);
+               if(!recoDone[id])delete recoDone[id];}
+    }catch(e){}
+  }
+  renderRecoSet();
+  recoMsg(done+" "+(action==="reset"?"returned to pending":action==="approve"?"approved":"skipped")
+          +(done<ids.length?" ("+(ids.length-done)+" failed)":""));
+  loadCollection();
 }
 
 async function loadReco(){
@@ -3063,7 +3128,18 @@ document.getElementById("cReco").onclick=async()=>{
   finally{btn.disabled=false;btn.textContent=was;}
 };
 
+document.getElementById("cRecoSet").addEventListener("change",e=>{
+  if(e.target.id==="recoAll"){
+    document.querySelectorAll("#cRecoSet [data-ck]").forEach(c=>{if(!c.disabled)c.checked=e.target.checked;});
+  }
+  recoCount();
+});
 document.getElementById("cRecoSet").addEventListener("click",e=>{
+  const act=e.target.closest("[data-pickact]");
+  if(act){recoAct([+act.dataset.id],act.dataset.pickact);return;}
+  if(e.target.id==="recoApprove"){recoAct(recoChecked(),"approve");return;}
+  if(e.target.id==="recoSkip"){recoAct(recoChecked(),"skip");return;}
+  if(e.target.closest("[data-ck]")||e.target.closest(".reco-selall"))return;  // selecting is not navigating
   const p=e.target.closest("[data-goto]");if(!p)return;
   const card=document.querySelector('#cOut [data-item="'+p.dataset.goto+'"]');
   if(!card){
