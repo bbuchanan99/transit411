@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transit411 — data tools band (mock)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+  :root{--bg:#F2EEE4;--panel:#F7F4ED;--card:#FFFFFF;--ink:#17140F;--muted:#6A6458;--line:#D8D2C4;--accent:#C0341F;--accent2:#EE6A54}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'Spectral',Georgia,serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  .disp{font-family:'Archivo',sans-serif}
+  /* the band */
+  .band{background:var(--ink);color:#F7F4ED;margin:0;padding:34px 0 38px;border-top:3px solid var(--accent)}
+  .band .wrap{padding-top:0;padding-bottom:0}
+  .band-h{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:var(--accent2)}
+  .band h2{font-family:'Archivo',sans-serif;font-size:30px;font-weight:800;letter-spacing:-.5px;margin:10px 0 22px;line-height:1.1}
+  .tools{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .tool{background:#211E19;border:1px solid #3A352C;border-radius:14px;padding:22px 22px 20px;display:flex;flex-direction:column}
+  .tool .tag{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent2)}
+  .tool h3{font-family:'Archivo',sans-serif;font-size:21px;font-weight:800;margin:6px 0 4px}
+  .tool p{font-size:14px;color:#B9B2A4;margin:0 0 16px;line-height:1.5}
+  /* the fake search cell with typing */
+  .cell{background:#F7F4ED;border:2px solid transparent;border-radius:9px;padding:13px 15px;display:flex;align-items:center;gap:10px;min-height:48px;cursor:pointer;text-decoration:none;transition:border-color .15s, transform .15s, box-shadow .15s}
+  .cell:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.28)}
+  .cell:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(238,106,84,.4)}
+  .cell .q{font-family:'JetBrains Mono',monospace;font-size:13.5px;color:#17140F;line-height:1.35}
+  .caret{display:inline-block;width:2px;height:16px;background:var(--accent);margin-left:1px;vertical-align:middle;animation:blink 1s step-end infinite}
+  @keyframes blink{50%{opacity:0}}
+  .go{margin-left:auto;flex-shrink:0;background:var(--accent);color:#fff;font-family:'Archivo',sans-serif;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-radius:7px;padding:9px 15px;transition:background .15s}
+  .cell:hover .go{background:#8F2415}
+  .cta{margin-top:14px;font-family:'Archivo',sans-serif;font-size:13px;font-weight:800;color:var(--accent2)}
+  @media(max-width:720px){.tools{grid-template-columns:1fr}.band h2{font-size:24px}}
+</style></head>
+<body>
+  <!-- (context: this sits directly under the lead story, replacing the old CIG stat band) -->
+  <div class="band">
+    <div class="wrap">
+      <div class="band-h">Transit411 Data Tools</div>
+      <h2 class="disp">Ask American transit's data in plain English</h2>
+      <div class="tools">
+        <div class="tool">
+          <div class="tag">Ask NTD</div>
+          <h3 class="disp">Ridership, cost &amp; finances</h3>
+          <p>Compare any U.S. agency &mdash; ridership, cost per rider, operating expense &mdash; just by asking.</p>
+          <a class="cell" id="cell1" href="#" aria-label="Ask NTD"><span class="q" id="q1"></span><span class="caret" id="c1"></span><span class="go">Ask</span></a>
+
+        </div>
+        <div class="tool">
+          <div class="tag">Ask CIG</div>
+          <h3 class="disp">The FTA funding pipeline</h3>
+          <p>Track every Capital Investment Grants project &mdash; phase, rating, and funding sought &mdash; in plain English.</p>
+          <a class="cell" id="cell2" href="#" aria-label="Ask CIG"><span class="q" id="q2"></span><span class="caret" id="c2"></span><span class="go">Ask</span></a>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const examples1 = [
+    "Which heavy-rail system is cheapest per rider?",
+    "Compare BART and WMATA on ridership.",
+    "Top 10 agencies by bus ridership in Texas."
+  ];
+  const examples2 = [
+    "Which projects are seeking the most CIG funding?",
+    "Show light-rail projects in the Engineering phase.",
+    "Which projects advanced a phase this year?"
+  ];
+  function typeLoop(elId, caretId, phrases){
+    const el = document.getElementById(elId);
+    let p = 0;
+    function typePhrase(){
+      const text = phrases[p];
+      let i = 0;
+      const typer = setInterval(()=>{
+        el.textContent = text.slice(0, i++);
+        if(i > text.length){
+          clearInterval(typer);
+          setTimeout(()=>{                      // hold, then erase
+            const eraser = setInterval(()=>{
+              el.textContent = text.slice(0, i--);
+              if(i < 0){
+                clearInterval(eraser);
+                p = (p+1) % phrases.length;
+                setTimeout(typePhrase, 600);
+              }
+            }, 38);
+          }, 2200);
+        }
+      }, 85);
+    }
+    typePhrase();
+  }
+  typeLoop("q1","c1",examples1);
+  setTimeout(()=>typeLoop("q2","c2",examples2), 900); // stagger the two so they don't type in lockstep
+
+  // whole cell is the link: pass whatever question is showing right now (mock uses alert)
+  function wire(cellId, qId, base){
+    const cell = document.getElementById(cellId);
+    cell.addEventListener("click", e=>{
+      e.preventDefault();
+      const q = document.getElementById(qId).textContent.trim();
+      // real site: location.href = base + "?q=" + encodeURIComponent(q)
+      alert("Would open " + base + "?q=" + encodeURIComponent(q || "(start typing…)"));
+    });
+  }
+  wire("cell1","q1","/ask-ntd");
+  wire("cell2","q2","/ask-cig");
+</script>
+</body></html>
