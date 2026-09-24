@@ -168,7 +168,11 @@ async def proxy(path: str, request: Request):
                 request.method, UPSTREAM + full,
                 params=dict(request.query_params), content=body,
                 headers={"content-type": "application/json" if full in ASK_PATHS or full == SUBSCRIBE_PATH
-                         else request.headers.get("content-type", "application/json")},
+                         else request.headers.get("content-type", "application/json"),
+                         # Tells the Command Center this came from the public site rather than the
+                         # LAN, so usage can be counted separately. Internal only - it is set here,
+                         # never read from the caller, so a visitor cannot claim to be either one.
+                         "x-t411-surface": "public"},
             )
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Upstream unreachable")

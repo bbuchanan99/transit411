@@ -965,6 +965,9 @@
         if (b.dataset.exp === "csv") exportCardCsv(spec);
         else if (b.dataset.exp === "pdf") exportCardPdf(spec, state);
         else await exportCardPng(spec, state, fontBase);
+        // Optional: the host page may want to record that an export happened. Fire-and-forget,
+        // and only where the page provides a hook - the public site does not.
+        try { opts.onExport && opts.onExport(b.dataset.exp, spec); } catch (_) {}
       } catch (err) {
         alert("Couldn't export that card: " + (err && err.message ? err.message : err));
       } finally {

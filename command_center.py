@@ -54,8 +54,34 @@ class Ask(BaseModel):
     history: Optional[List[Turn]] = None
 
 
+class UsageEvent(BaseModel):
+    """An event only the browser can see (a card export). Private endpoint; not on the public
+    allowlist, so nothing on the open internet can write usage rows."""
+    event_type: str
+    session_id: Optional[str] = None
+    query_text: Optional[str] = None
+    result_shape: Optional[str] = None
+    meta: Optional[dict] = None
+
+
+def _surface(request):
+    """"public" for anything that came through the read-only proxy, "internal" for the LAN."""
+    try:
+        return "public" if request.headers.get("x-t411-surface") == "public" else "internal"
+    except Exception:
+        return "internal"
+
+
 @app.post("/api/ask")
-def ask(a: Ask):
+def ask(a: Ask, request: Request):
+    # Entitlement check, wired and inert: can_use allows everything until ENFORCE is switched on.
+    # It is here now so that turning limits on later is a config change, not an edit to this file.
+    import entitlements as ent
+    import usage
+    allowed, limit = ent.can_use("ask_ntd", ent.FREE)
+    if not allowed:
+        raise HTTPException(429, f"You have used your {limit} Ask NTD questions for this period.")
+
     payload = {"question": a.question, "history": [t.model_dump() for t in (a.history or [])]}
     try:
         r = httpx.post(f"{API_URL}/ask", json=payload, timeout=60)
@@ -63,7 +89,13 @@ def ask(a: Ask):
         raise HTTPException(502, f"API unreachable: {e}")
     if r.status_code != 200:
         raise HTTPException(r.status_code, r.text)
-    return r.json()
+    out = r.json()
+    # Fire-and-forget: queued on a background thread, dropped rather than delaying the answer.
+    usage.log("ask_ntd", query_text=a.question,
+              result_shape=usage.result_shape(out.get("columns"), out.get("rows")),
+              surface=_surface(request), follow_up=bool(a.history),
+              rows=len(out.get("rows") or []))
+    return out
 
 
 def _db():
@@ -1094,7 +1126,7 @@ class Subscribe(BaseModel):
 
 
 @app.post("/api/subscribe")
-def subscribe(s: Subscribe):
+def subscribe(s: Subscribe, request: Request):
     """Public newsletter signup (the only public write, proxied by readonly-api). Creates a PENDING
     contact - nothing is sent yet and nobody is subscribed until they confirm (phase 2). The reply is
     deliberately the same whether or not the address is already on the list or suppressed, so this
@@ -1118,6 +1150,9 @@ def subscribe(s: Subscribe):
         raise HTTPException(502, f"DB error: {e}")
     if what == "invalid":
         raise HTTPException(400, "Please enter a valid email address.")
+    import usage
+    usage.log("subscribe", contact_id=cid, surface=_surface(request),
+              source=(s.source or "site")[:60], outcome=what)
     return {"ok": True, "status": "pending",
             "message": "Thanks — check your inbox for a confirmation link."}
 
@@ -2106,7 +2141,12 @@ class CigAsk(BaseModel):
 
 
 @app.post("/api/cig/ask")
-def cig_ask(a: CigAsk):
+def cig_ask(a: CigAsk, request: Request):
+    import entitlements as ent
+    import usage
+    allowed, limit = ent.can_use("ask_cig", ent.FREE)     # inert today; see entitlements.py
+    if not allowed:
+        raise HTTPException(429, f"You have used your {limit} Ask CIG questions for this period.")
     import re
     import datetime as _dt
     from decimal import Decimal
@@ -2149,8 +2189,100 @@ def cig_ask(a: CigAsk):
         if isinstance(v, (_dt.date, _dt.datetime)):
             return v.isoformat()
         return v
-    return {"question": a.question, "sql": sql, "columns": cols,
-            "rows": [[safe(v) for v in r] for r in rows]}
+    out = {"question": a.question, "sql": sql, "columns": cols,
+           "rows": [[safe(v) for v in r] for r in rows]}
+    usage.log("ask_cig", query_text=a.question,
+              result_shape=usage.result_shape(cols, out["rows"]),
+              surface=_surface(request), follow_up=bool(a.history), rows=len(rows))
+    return out
+
+
+# ---- Usage (private): what people actually use, so pricing can be set from evidence -------------
+# Read-only and LAN-only - none of these paths are on the read-only API's allowlist, so the tunnel
+# returns 404 for them. Nothing here is visible on the public site.
+
+@app.post("/api/usage/event")
+def usage_event(e: UsageEvent, request: Request):
+    """Record an event the server cannot see for itself - today, a data card being exported from
+    the Command Center. Private: the public site has no write endpoint for this, by design."""
+    import usage
+    usage.log(e.event_type, session_id=e.session_id, query_text=e.query_text,
+              result_shape=e.result_shape, surface=_surface(request), **(e.meta or {}))
+    return {"ok": True}
+
+
+@app.get("/api/usage/summary")
+def usage_summary(days: int = 30):
+    """Counts, shapes and themes for the Usage view. Never touches the public site."""
+    import entitlements as ent
+    import usage as u
+    days = max(1, min(days, 365))
+    out = {"days": days, "entitlements": ent.describe(), "logger": u.stats()}
+    try:
+        with _db() as c, c.cursor() as cur:
+            u.schema(cur)
+            c.commit()
+            since = f"created_at > now() - interval '{days} days'"
+
+            cur.execute(f"SELECT event_type, count(*) FROM usage_events WHERE {since} "
+                        "GROUP BY 1 ORDER BY 2 DESC")
+            out["by_type"] = [{"event_type": t, "count": n} for t, n in cur.fetchall()]
+
+            cur.execute(f"SELECT date_trunc('day', created_at)::date AS d, event_type, count(*) "
+                        f"FROM usage_events WHERE {since} GROUP BY 1, 2 ORDER BY 1")
+            out["by_day"] = [{"day": d.isoformat(), "event_type": t, "count": n}
+                             for d, t, n in cur.fetchall()]
+
+            cur.execute(f"SELECT result_shape, count(*) FROM usage_events "
+                        f"WHERE {since} AND result_shape IS NOT NULL GROUP BY 1 ORDER BY 2 DESC")
+            out["shapes"] = [{"shape": sh, "count": n} for sh, n in cur.fetchall()]
+
+            cur.execute(f"SELECT coalesce(meta->>'surface','unknown'), count(*) FROM usage_events "
+                        f"WHERE {since} GROUP BY 1 ORDER BY 2 DESC")
+            out["surfaces"] = [{"surface": v, "count": n} for v, n in cur.fetchall()]
+
+            cur.execute(f"SELECT event_type, query_text, result_shape, created_at FROM usage_events "
+                        f"WHERE {since} AND query_text IS NOT NULL ORDER BY created_at DESC LIMIT 40")
+            out["recent_queries"] = [{"event_type": t, "query": q, "shape": sh,
+                                      "at": ts.isoformat()} for t, q, sh, ts in cur.fetchall()]
+
+            # Crude but useful theme count: which subjects people ask about, from the question text.
+            cur.execute(f"SELECT lower(query_text) FROM usage_events WHERE {since} AND query_text IS NOT NULL")
+            themes = {}
+            for (q,) in cur.fetchall():
+                for term, words in USAGE_THEMES:
+                    if any(w in q for w in words):
+                        themes[term] = themes.get(term, 0) + 1
+            out["themes"] = sorted(({"theme": k, "count": v} for k, v in themes.items()),
+                                   key=lambda x: -x["count"])
+
+            cur.execute("SELECT plan, count(*) FROM contacts GROUP BY 1 ORDER BY 2 DESC")
+            out["plans"] = [{"plan": p, "count": n} for p, n in cur.fetchall()]
+
+            cur.execute("SELECT count(*), min(created_at), max(created_at) FROM usage_events")
+            total, first, last = cur.fetchone()
+            out["total_events"] = total
+            out["first_event"] = first.isoformat() if first else None
+            out["last_event"] = last.isoformat() if last else None
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return out
+
+
+# Themes are matched on the question text. Deliberately simple and readable: the point is to see
+# which subjects come up, not to classify perfectly.
+USAGE_THEMES = [
+    ("Ridership", ("ridership", "upt", "passenger", "riders")),
+    ("Cost & efficiency", ("cost per", "cost_per", "operating expense", "efficiency", "subsidy")),
+    ("Fares & recovery", ("fare", "recovery", "farebox")),
+    ("CIG pipeline", ("cig", "new starts", "small starts", "core capacity", "capital investment")),
+    ("Funding & grants", ("grant", "funding", "federal", "appropriation", "nofo")),
+    ("Bus", ("bus", "brt")),
+    ("Rail", ("rail", "subway", "streetcar", "metro", "light rail")),
+    ("Agency comparison", ("compare", "versus", " vs ", "highest", "lowest", "top ", "rank")),
+    ("Trends over time", ("since", "trend", "over time", "each year", "by year", "growth")),
+    ("Service & fleet", ("vehicle", "fleet", "voms", "service hours", "revenue miles")),
+]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2411,6 +2543,14 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <div id="kMsg"></div>
     <div id="kOut"></div>
   </div>
+  <div class="panel" id="p-usage">
+    <div class="askhead"><div><h2 class="disp">Usage</h2><p class="lead">What the tools are actually used for. Private and read-only &mdash; none of this is exposed on the public site, and nothing here changes what anyone sees. It exists so any future decision about what to charge for can be made from evidence rather than a guess.</p></div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="uDays" style="font-family:Archivo,sans-serif;font-size:12px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)">
+          <option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="365">last year</option></select>
+        <button class="newq" id="uRefresh" type="button">Refresh</button></div></div>
+    <div id="uOut"></div>
+  </div>
   <div class="panel" id="p-newsletter">
     <div class="askhead"><div><h2 class="disp">Newsletter</h2><p class="lead">Draft an issue from what you've published, edit it, preview it, send yourself a test &mdash; then send it to confirmed subscribers. Every headline links to its article page on the site, and each recipient gets their own unsubscribe link.</p></div>
       <div style="display:flex;gap:8px"><button class="newq" id="nDraft" type="button">Draft issue</button><button class="newq" id="nRefresh" type="button">Refresh</button></div></div>
@@ -2530,7 +2670,7 @@ const WORKSPACES = {
   "system": {title:"System & Settings", sub:"Health, the daily collector, and publishing the site.",
     desc:"Service health, the auto-collect switch and site rebuilds.",
     icon:'<circle cx="12" cy="12" r="3"/>',
-    tools:[["settings","Health & settings","p-system"]]},
+    tools:[["settings","Health & settings","p-system"],["usage","Usage","p-usage"]]},
 };
 const DASH_ORDER = ["web-content","publications","contacts","data"];
 let curWs = "dashboard", curTool = null;
@@ -2571,6 +2711,7 @@ function go(ws, tool, push){
 function onToolOpen(tool, panel){
   try{
     if(panel==="p-collect"){loadFacets();loadCollection();loadReco();}
+  if(panel==="p-usage")loadUsage();
     else if(panel==="p-sources")loadSources();
     else if(panel==="p-publish")loadPublish();
     else if(panel==="p-contacts")loadContacts();
@@ -2722,6 +2863,14 @@ function cardHtml(res,isFollow){
   const sql=res.sql?'<details><summary>View the query it ran</summary><pre>'+esc(res.sql)+'</pre></details>':"";
   return '<div class="rcard"><div class="rh">'+tag+' &middot; '+rows.length+' rows'+(chart?' &middot; charting '+esc(metric):'')+'</div>'+chart+'<div class="twrap"><table><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sql+'</div>';
 }
+// Record something only the browser can see (a card export). Private endpoint, best effort:
+// a failure here must never interrupt what the user was doing.
+function logUsage(event_type,fields){
+  try{
+    fetch("/api/usage/event",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(Object.assign({event_type},fields||{}))}).catch(()=>{});
+  }catch(e){}
+}
 // The API's {"detail": ...} arrives wrapped once more by this server's proxy; unwrap to the message.
 function errText(t){for(let i=0;i<2;i++){try{const d=JSON.parse(t).detail;t=typeof d==="string"?d:(d&&d.error)||JSON.stringify(d);}catch(_){break;}}return t;}
 function renderThread(){document.getElementById("out").innerHTML=thread.map((r,i)=>cardHtml(r,i>0)).join("");
@@ -2760,7 +2909,8 @@ document.getElementById("out").addEventListener("click",e=>{
   const host=b.parentElement.nextElementSibling;
   if(host.innerHTML){host.innerHTML="";b.textContent="Make a data card";return;}
   b.textContent="Hide the data card";
-  T411.renderDataCard(host,res,{tool:"Ask NTD",fontBase:"/static/fonts",id:"ask-card-"+b.dataset.datacard});
+  T411.renderDataCard(host,res,{tool:"Ask NTD",fontBase:"/static/fonts",id:"ask-card-"+b.dataset.datacard,
+    onExport:(fmt,spec)=>logUsage("card_export",{query_text:res.question,result_shape:spec.type,meta:{format:fmt,tool:"Ask NTD"}})});
 });
 // ---- Collection tab ----
 let cFilter="pending";
@@ -2930,6 +3080,67 @@ async function cAct(id,action){try{await fetch("/api/collection/"+id+"/"+action,
 document.getElementById("cOut").addEventListener("click",e=>{
   const f=e.target.closest("[data-fk]");if(f){setFilter(f.dataset.fk,f.dataset.fv);window.scrollTo({top:0,behavior:"smooth"});return;}
   const b=e.target.closest("[data-act]");if(b)cAct(b.dataset.id,b.dataset.act);});
+// ---- Usage view (private, read-only) ----
+// Reads /api/usage/summary. Nothing here writes, gates, or reaches the public site.
+function uBar(rows, key, label){
+  if(!rows||!rows.length)return '<div class="loading">Nothing recorded yet.</div>';
+  const max=Math.max(...rows.map(r=>r.count))||1;
+  return '<div class="chart">'+rows.map(r=>{
+    const pct=Math.max(3,(r.count/max)*100);
+    return '<div class="brow"><div class="blabel" title="'+esc(String(r[key]))+'">'+esc(String(r[key]))+'</div>'
+      +'<div class="btrack"><div class="bfill" style="width:'+pct+'%"></div></div>'
+      +'<div class="bval">'+esc(String(r.count))+'</div></div>';}).join("")+'</div>';
+}
+function uPanel(title,body,note){
+  return '<div class="rcard" style="padding:14px 18px;margin-bottom:12px">'
+    +'<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:10px">'+esc(title)+'</div>'
+    +body+(note?'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-top:8px">'+note+'</div>':'')+'</div>';
+}
+async function loadUsage(){
+  const out=document.getElementById("uOut");
+  out.innerHTML='<div class="rcard"><div class="loading">Reading the usage log...</div></div>';
+  try{
+    const days=document.getElementById("uDays").value;
+    const r=await fetch("/api/usage/summary?days="+encodeURIComponent(days));
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
+    const d=await r.json();
+    const ent=d.entitlements||{};
+    const total=(d.by_type||[]).reduce((a,b)=>a+b.count,0);
+    let html='<div class="rcard" style="padding:14px 18px;margin-bottom:12px">'
+      +'<div style="font-family:Archivo,sans-serif;font-size:13px">'
+      +'<b>'+esc(String(total))+'</b> events in the last '+esc(String(d.days))+' days'
+      +' &middot; <b>'+esc(String(d.total_events||0))+'</b> all time'
+      +(d.first_event?' &middot; since '+esc(when(d.first_event)):'')
+      +'</div><div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-top:6px">'
+      +'Entitlements: <b>'+(ent.enforcing?'ENFORCING':'off')+'</b> &mdash; every plan is unlimited until the limits in entitlements.py are switched on. '
+      +'Everyone is on the <b>free</b> plan.</div></div>';
+    html+=uPanel("Events by type",uBar(d.by_type||[],"event_type"));
+    html+=uPanel("Answer shapes",uBar(d.shapes||[],"shape"),
+      "What shape of answer the questions produce - the clearest signal of what a paid tier would need to deliver.");
+    html+=uPanel("Themes asked about",uBar((d.themes||[]).slice(0,10),"theme"),
+      "Matched on the question text; a question can count toward more than one theme.");
+    html+=uPanel("Where from",uBar(d.surfaces||[],"surface"),
+      "<b>public</b> is the live site through the read-only API; <b>internal</b> is the Command Center.");
+    html+=uPanel("Plans",uBar(d.plans||[],"plan"),"Scaffolding only - the plan field exists and everyone is free.");
+    const q=d.recent_queries||[];
+    html+=uPanel("Recent questions", q.length
+      ? '<div class="twrap"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Archivo,sans-serif">'
+        +'<thead><tr><th>When</th><th>Tool</th><th>Shape</th><th>Question</th></tr></thead><tbody>'
+        +q.map(x=>'<tr><td style="white-space:nowrap;color:var(--muted)">'+esc(when(x.at))+'</td>'
+          +'<td>'+esc(x.event_type)+'</td><td>'+esc(x.shape||"-")+'</td><td>'+esc(x.query)+'</td></tr>').join("")
+        +'</tbody></table></div>'
+      : '<div class="loading">No questions recorded yet.</div>');
+    const lg=d.logger||{};
+    html+='<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted)">Logger: '
+      +esc(String(lg.written||0))+' written, '+esc(String(lg.pending||0))+' pending, '
+      +esc(String(lg.dropped||0))+' dropped, '+esc(String(lg.failed||0))+' failed. '
+      +'Logging runs on a background thread and drops events rather than delaying a request.</div>';
+    out.innerHTML=html;
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not read the usage log.</div></div>';}
+}
+document.getElementById("uRefresh").onclick=loadUsage;
+document.getElementById("uDays").onchange=loadUsage;
+
 // ---- Auto-collect switch (header) ----
 const acSwitch=document.getElementById("acSwitch");
 function when(iso){if(!iso)return "";const d=new Date(iso);return d.toLocaleString(undefined,{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});}
@@ -3744,7 +3955,8 @@ document.getElementById("cigAskOut").addEventListener("click",e=>{
   const host=document.getElementById("cigCardHost");
   if(host.innerHTML){host.innerHTML="";b.textContent="Make a data card";return;}
   b.textContent="Hide the data card";
-  T411.renderDataCard(host,cigAnswer,{tool:"Ask CIG",fontBase:"/static/fonts",id:"cig-card"});
+  T411.renderDataCard(host,cigAnswer,{tool:"Ask CIG",fontBase:"/static/fonts",id:"cig-card",
+    onExport:(fmt,spec)=>logUsage("card_export",{query_text:cigAnswer.question,result_shape:spec.type,meta:{format:fmt,tool:"Ask CIG"}})});
 });
 // ---- Images screen: every published story and the picture it carries -----------------------------
 let imgFilter="all",imgPosts=[];

@@ -132,6 +132,33 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - **Exports:** **PNG** (2× — 1360×1700 portrait, 2000×1126 landscape), **PDF** (print-to-PDF; needs pop-ups allowed), **Excel/CSV** (all columns, unrounded, UTF-8 BOM, with the source as comment lines).
 - **`static/fonts/*.woff2`** (Archivo 800/900, JetBrains Mono 700, OFL) are inlined into the PNG at export time — a rasterised SVG can't see the page's web fonts. Served at `/static/fonts` by the Command Center and copied to `/vendor/fonts` for the site by `site/scripts/copy-bundle.mjs`. Missing fonts degrade to Helvetica; they don't break the export.
 
+### 3.6b Monetization plumbing (present, inert, invisible)
+Nothing here changes what anyone sees. The site is free and open; this is the wiring so that
+introducing tiers later is a config change, and the usage data to decide those tiers is being
+captured from now.
+- **`entitlements.py`** — one module, one dict. `can_use(feature, plan) -> (allowed, limit)` is
+  called by Ask NTD and Ask CIG before they do any work. **`ENFORCE` is `False`**, so it allows
+  everything; `limit` is still returned so usage can be shown as "12 of 25" without blocking. The
+  numbers in `LIMITS` are **placeholders, not a pricing decision** — they exist to be replaced from
+  the usage data. Turning limits on = set `ENFORCE_ENTITLEMENTS=true` and edit `LIMITS`; no endpoint
+  changes. An unknown plan is treated as `free`; an unknown usage count never blocks.
+- **`usage.py` + `usage_events`** — every Ask NTD / Ask CIG question and every signup writes a row:
+  `event_type`, `contact_id`, `session_id`, `query_text`, `result_shape`, `meta` JSONB, `created_at`.
+  **Logging can never affect a request**: it goes to a background thread behind a 500-item bounded
+  queue, drops rather than blocks when the queue is full, retries a write once, and `log()` cannot
+  raise. `result_shape` mirrors `pickCardType()` in the bundle (stat/trend/ranked/comparison/table)
+  so we can see *what shape of answer* people ask for.
+- **`meta.surface`** distinguishes `public` (the live site, via the read-only API) from `internal`
+  (the Command Center). The header is set by `readonly_api.py` when it proxies and is never read
+  from the caller, so a visitor cannot claim to be either.
+- **`contacts.plan` / `plan_since`** — everyone defaults to `free`.
+- **Usage view**: System & Settings → **Usage** (`GET /api/usage/summary`). Events by type, answer
+  shapes, themes, surface split, plans, recent questions, and the logger's own counters.
+- **Private.** `/api/usage/*` is **not** on the read-only allowlist — the tunnel returns 404 for it.
+  `POST /api/usage/event` exists only so the Command Center can log a card export (the browser knows
+  the format; the server doesn't). Public-site card exports are **not** logged, because that would
+  mean opening a public write endpoint.
+
 ### 3.7 Public site (Astro)
 - **`/site`** — an **Astro** static site deploying to **Cloudflare Pages**. Design is **"Dispatch"** (bold editorial newspaper: near-black + red, Archivo + Spectral).
 - Pages: homepage (`index.astro`), section pages (`[section].astro` → News/Funding/Procurement/People/Policy), a **Data hub** (`data.astro`).
@@ -257,6 +284,7 @@ curl https://api.transit411.net/api/cig                   # must return 200
 | `EMBED_MODEL` / `EMBED_DIM` | Local embedding model and its width (default `sentence-transformers/all-MiniLM-L6-v2`, 384). Changing the model resets and re-fills both embedding columns |
 | `EMBED_INTERVAL` | Seconds between embedding sweeps when the `embed` service is up (default 600) |
 | `EMBED_DUPE_DISTANCE` | Cosine distance under which two items are called the same story (default 0.15) |
+| `ENFORCE_ENTITLEMENTS` | Turns plan limits on (default off / unset). Inert scaffolding until set; see `entitlements.py` |
 | `RECOMMEND_MODEL` | Model for the Collection tab's **Recommend** button (default `claude-haiku-4-5`; ~$0.12 per run over a 262-item queue, ~$0.36 on `claude-sonnet-5`) |
 | `DB_PASSWORD` | Postgres password (`openssl rand -hex 16`) |
 | `DATA_DIR` | NAS path for data volumes (DuckDB, Postgres, kept CIG PDFs) |
