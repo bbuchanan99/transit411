@@ -291,7 +291,11 @@ def name_score(a, b):
     ta, tb = set(name_key(a).split()), set(name_key(b).split())
     if not ta or not tb:
         return 0.0
-    return len(ta & tb) / min(len(ta), len(tb))
+    # Symmetric, not containment. Containment scored "Massachusetts Bay Transportation Authority"
+    # against "Massachusetts Department of Transportation" at 1.00, because the distinctive words
+    # left after stripping boilerplate were {massachusetts, bay} and {massachusetts} - one side
+    # fully contained in the other, and a different agency entirely.
+    return len(ta & tb) / len(ta | tb)
 
 
 def best_score(names, candidate):
