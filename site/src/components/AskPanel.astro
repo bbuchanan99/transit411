@@ -4,9 +4,9 @@
 // question until "New question". Answers are drawn by the shared bundle (T411.askCardHtml), so the page
 // that uses this must load /vendor/t411.js + /vendor/t411.css.
 import { API_BASE } from "../lib/content.js";
-const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask NTD" } = Astro.props;
+const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask NTD", source = "" } = Astro.props;
 ---
-<div class="ask" data-api={API_BASE} data-endpoint={endpoint} data-tool={tool}>
+<div class="ask" data-api={API_BASE} data-endpoint={endpoint} data-tool={tool} data-source={source}>
   <form class="ask-form">
     <label class="ask-label" for="ask-q">Your question</label>
     <div class="ask-row">
@@ -27,14 +27,16 @@ const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask 
   <div class="ask-status" role="status" aria-live="polite"></div>
   <div class="ask-out"></div>
   <p class="ask-fine">
-    Each question is turned into a read-only database query by AI and run against the data; check the query
-    shown with each answer before relying on it. Questions are limited per visitor per hour.
+    Free to use, no account needed. Each question is turned into a read-only database query by AI and run
+    against the data &mdash; every answer carries a &ldquo;How was this calculated?&rdquo; toggle showing
+    exactly the query that produced it. Questions are limited per visitor per hour.
   </p>
 </div>
 
 <script>
   const root = document.querySelector(".ask");
   const api = root.dataset.api, endpoint = root.dataset.endpoint, tool = root.dataset.tool;
+  const source = root.dataset.source || "";
   const input = root.querySelector("#ask-q"), out = root.querySelector(".ask-out");
   const status = root.querySelector(".ask-status"), ctl = root.querySelector(".ask-thread-ctl");
   const go = root.querySelector(".ask-go");
@@ -81,7 +83,7 @@ const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask 
       const text = await r.text();
       if (!r.ok) { setStatus(T411.errorText(text, r.status), true); return; }
       const res = JSON.parse(text);
-      out.insertAdjacentHTML("afterbegin", T411.askCardHtml(res, { followUp: thread.length > 0 }));
+      out.insertAdjacentHTML("afterbegin", T411.askCardHtml(res, { followUp: thread.length > 0, source }));
       addCardButton(res);
       thread.push({ question: res.question || q, sql: res.sql || "" });
       ctl.hidden = false;

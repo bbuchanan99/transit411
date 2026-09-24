@@ -375,8 +375,20 @@
         + '</tr></thead><tbody>' + rows.map(r => '<tr>' + cols.map(c => '<td class="' + (kinds[c] === "text" ? "" : "num") + '">' + esc(fmtCell(r[c], kinds[c])) + '</td>').join("") + '</tr>').join("")
         + '</tbody></table></div>'
       : '<div class="t411-empty">No matching rows. Try different years, modes, agencies or wording.</div>';
-    const sql = res.sql ? '<details class="t411-sql"><summary>Show the query used to answer this</summary><pre>' + esc(res.sql) + '</pre></details>' : "";
-    return '<div class="t411-card t411-ask">' + head + table + sql + '</div>';
+    // Lead with where the numbers came from, in words. The generated SQL is the better trust
+    // signal only for the few readers who read SQL; for everyone else it is noise that makes the
+    // answer look like a machine's guess. So it goes behind a quiet toggle, shut. (The Command
+    // Center has its own renderer and keeps the query visible, for debugging.)
+    const note = opts.source
+      ? '<div class="t411-method">' + esc(opts.source) + "</div>"
+      : "";
+    const sql = res.sql
+      ? '<details class="t411-sql"><summary>How was this calculated?</summary>'
+        + '<p class="t411-sql-note">Your question was turned into one read-only database query, '
+        + 'shown below, and run against the data. Check it before relying on the answer.</p>'
+        + "<pre>" + esc(res.sql) + "</pre></details>"
+      : "";
+    return '<div class="t411-card t411-ask">' + head + table + note + sql + "</div>";
   }
 
 
