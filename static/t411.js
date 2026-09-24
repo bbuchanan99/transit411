@@ -553,6 +553,45 @@
     return out + "…";
   }
 
+  // ---- how tall this card needs to be -----------------------------------------------------
+  //
+  // The card used to be a fixed 680x850 and simply cropped: a 40-row answer exported as the first
+  // eight rows, silently. Now the frame is measured, the body says how much room it wants, and the
+  // card grows. The preset aspect gives the WIDTH and a MINIMUM height, never a ceiling.
+
+  function cardHeadBottom(W, spec, opts) {
+    const pad = 30;
+    let y = 62 + 34;
+    if (spec.kicker) y += 22;
+    const titleSize = W > 800 ? 30 : 27;
+    y += svWrap(spec.title || "", titleSize, W - pad * 2, 3).length * titleSize * 1.12;
+    if (spec.deck && opts.methodology !== "only") {
+      y += svWrap(spec.deck, 15, W - pad * 2, 2).length * 20;
+    }
+    return y;
+  }
+
+  function cardFootHeight(spec, opts) {
+    return (spec.methodology && opts.methodology) ? 96 : 78;
+  }
+
+  function bodyHeight(spec, opts, W) {
+    const pad = 30;
+    const ctxH = cardCtx(spec, opts).length ? CTX_H : 0;
+    const takeH = takeHeight(takeLines(spec, opts, W, pad));
+    if (spec.type === "stat") return 236 + ctxH + takeH;
+    if (spec.type === "trend") return 300 + ctxH + takeH;
+    if (spec.type === "table") return 44 + (spec.tableRows || []).length * 24 + ctxH + takeH;
+    return barRowMetrics(spec, opts, W, spec.type === "ranked").reduce((a, m) => a + m.h, 0) + ctxH + takeH;
+  }
+
+  function cardSize(spec, opts) {
+    const base = CARD_SIZES[opts.aspect === "landscape" ? "landscape" : "portrait"];
+    const need = cardHeadBottom(base.w, spec, opts) + 10 + bodyHeight(spec, opts, base.w)
+      + 16 + cardFootHeight(spec, opts);
+    return { w: base.w, h: Math.max(base.h, Math.ceil(need)), base: base.h };
+  }
+
   // The permanent frame: wordmark, badge, kicker, headline, and the source footer. The source line
   // is NOT optional - it is the credibility of the card and it always renders.
   function cardFrame(W, H, spec, opts, bodyFn) {
@@ -593,7 +632,9 @@
       });
     }
     parts.push(svLockup(pad, H - 22, "transit411", ".net", { size: 13, weight: 800 }));
-    parts.push(svText(W - pad, H - 22, "Generated with " + (spec.tool || "Ask NTD"),
+    parts.push(svText(W - pad, H - 22, spec.pageLabel
+      ? spec.pageLabel + " · Generated with " + (spec.tool || "Ask NTD")
+      : "Generated with " + (spec.tool || "Ask NTD"),
       { size: 10, track: 1, fill: CARD.gen, anchor: "end" }));
     // Body, between the title and the footer
     parts.push(bodyFn(y + 10, footTop - 16, pad, W));
@@ -645,35 +686,53 @@
     };
   }
 
+  // A row is as tall as its name needs. Long agency names WRAP - they used to be clipped with an
+  // ellipsis, which is survivable on screen where you can hover, and useless in an exported PNG
+  // where "Kitsap County Public Trans..." is all anyone will ever see of it.
+  const ROW_LINE = 19;     // one wrapped line of a 15px label
+  const ROW_MIN = 46;      // a one-line row: label, sub-line and the bar
+  // Four lines at this column width holds ~100 characters - past the longest name in the NTD
+  // ("Kitsap County Public Transportation Benefit Area Authority", 57). Rows are measured
+  // individually, so allowing a fourth line costs nothing for the short ones.
+  const ROW_MAX_LINES = 4;
+
+  function barRowMetrics(spec, opts, W, ranked) {
+    const nameW = ranked ? 210 : 165;
+    return (spec.rows || []).map(r => {
+      const lines = svWrap(r.label, 15, nameW, ROW_MAX_LINES);
+      const sub = r.sub || null;
+      return { r, lines, sub, h: Math.max(ROW_MIN, lines.length * ROW_LINE + (sub ? 15 : 0) + 20) };
+    });
+  }
+
   function bodyBars(spec, opts, ranked) {
     return (top, bottom, pad, W) => {
-      const rows = (spec.rows || []).slice(0, ranked ? 8 : 5);
-      if (!rows.length) return "";
-      const max = Math.max(...rows.map(r => Math.abs(r.value || 0)), 1);
+      const metrics = barRowMetrics(spec, opts, W, ranked);
+      if (!metrics.length) return "";
+      const max = Math.max(...metrics.map(m => Math.abs(m.r.value || 0)), 1);
       const nameW = ranked ? 210 : 165, valW = 70;
       const trackX = pad + nameW + 14, trackW = W - pad * 2 - nameW - valW - 28;
       const ctx = cardCtx(spec, opts);
       const tl = takeLines(spec, opts, W, pad), takeH = takeHeight(tl);
       const avail = bottom - top - (ctx.length ? CTX_H : 0) - takeH;
-      const gap = Math.min(52, avail / rows.length);
-      const barH = Math.max(9, Math.min(26, gap - 14));
-      // A landscape card is short: when the rows are tight the city/state line is the first thing
-      // to go, because two lines per row would collide before the bars did.
-      const showSub = gap >= 34;
+      const blockH = metrics.reduce((a, m) => a + m.h, 0);
       // Few rows shouldn't leave a hole above the footer: centre what there is in the space it has.
-      const y0 = top + Math.max(0, (avail - gap * rows.length) / 2);
+      let y = top + Math.max(0, (avail - blockH) / 2);
       const parts = [];
-      rows.forEach((r, i) => {
-        const y = y0 + gap * i + gap / 2;
-        const sub = showSub ? r.sub : null;
-        parts.push(svText(pad, y + (sub ? -3 : 4), svFit(r.label, nameW, 15), { size: 15, weight: 700 }));
-        if (sub) parts.push(svText(pad, y + 13, svFit(sub, nameW, 11), { size: 11, font: CARD.serif, fill: CARD.dim }));
+      metrics.forEach((m, i) => {
+        const mid = y + m.h / 2;
+        const textH = m.lines.length * ROW_LINE + (m.sub ? 15 : 0);
+        let ly = mid - textH / 2 + 13;
+        m.lines.forEach(line => { parts.push(svText(pad, ly, line, { size: 15, weight: 700 })); ly += ROW_LINE; });
+        if (m.sub) parts.push(svText(pad, ly + 1, svFit(m.sub, nameW, 11), { size: 11, font: CARD.serif, fill: CARD.dim }));
+        const barH = Math.max(9, Math.min(26, m.h - 20));
         if (opts.chart) {
-          parts.push(sv("rect", { x: trackX, y: y - barH / 2, width: trackW, height: barH, rx: 5, fill: CARD.soft }));
-          parts.push(sv("rect", { x: trackX, y: y - barH / 2, width: Math.max(3, trackW * (Math.abs(r.value || 0) / max)),
-                                  height: barH, rx: 5, fill: i === 0 ? CARD.red : CARD.ink }));
+          parts.push(sv("rect", { x: trackX, y: mid - barH / 2, width: trackW, height: barH, rx: 5, fill: CARD.soft }));
+          parts.push(sv("rect", { x: trackX, y: mid - barH / 2, width: Math.max(3, trackW * (Math.abs(m.r.value || 0) / max)),
+                                  height: barH, rx: 5, fill: i === 0 && !spec.pageIndex ? CARD.red : CARD.ink }));
         }
-        parts.push(svText(W - pad, y + 6, r.display, { size: 16, weight: 700, font: CARD.mono, anchor: "end" }));
+        parts.push(svText(W - pad, mid + 6, m.r.display, { size: 16, weight: 700, font: CARD.mono, anchor: "end" }));
+        y += m.h;
       });
       parts.push(ctxStrip(ctx, pad, W, top + avail + 26));
       parts.push(takeParts(tl, pad, W, bottom));
@@ -716,15 +775,14 @@
 
   function bodyTable(spec, opts) {
     return (top, bottom, pad, W) => {
-      const cols = (spec.columns || []).slice(0, 4), rows = (spec.tableRows || []).slice(0, 9);
+      const cols = (spec.columns || []).slice(0, 4), rows = spec.tableRows || [];
       const colW = (W - pad * 2) / Math.max(cols.length, 1);
-      const ctx = cardCtx(spec, opts), rowsBottom = bottom - 8 - (ctx.length ? CTX_H : 0);
+      const ctx = cardCtx(spec, opts);
       const parts = [sv("rect", { x: pad, y: top + 14, width: W - pad * 2, height: 1, fill: CARD.ink })];
       cols.forEach((c, i) => parts.push(svText(pad + colW * i, top + 6, svFit(String(c).toUpperCase(), colW - 10, 11),
         { size: 10, weight: 800, track: 1, fill: CARD.dim })));
       rows.forEach((r, ri) => {
         const y = top + 36 + ri * 24;
-        if (y > rowsBottom) return;
         cols.forEach((c, ci) => {
           const v = r[ci];
           const isNum = typeof v === "number";
@@ -794,7 +852,7 @@
         spec.takeaway = (change >= 0 ? "Up " : "Down ") + Math.abs(change) + "% since " + a.label + ".";
       }
     } else if (pick.type === "table") {
-      spec.tableRows = spec.tableRows.slice(0, 9);
+      /* every row is kept: the card grows to fit them and the export carries them all */
     } else {
       const sorted = objs.slice().sort((a, b) => (val(b) || 0) - (val(a) || 0));
       spec.rows = sorted.map(r => ({
@@ -827,7 +885,8 @@
 
   function renderCardSvg(spec, opts) {
     opts = Object.assign({}, CARD_DEFAULTS, opts || {});
-    const size = CARD_SIZES[opts.aspect === "landscape" ? "landscape" : "portrait"];
+    const size = cardSize(spec, opts);
+    if (opts.fixedHeight) size.h = opts.fixedHeight;   // print pages are all the same height
     const body = spec.type === "stat" ? bodyStat(spec, opts)
       : spec.type === "trend" ? bodyTrend(spec, opts)
       : spec.type === "table" ? bodyTable(spec, opts)
@@ -837,6 +896,53 @@
       + '" height="' + size.h + '" font-family="' + CARD.sans + '">' + inner + "</svg>";
   }
 
+
+  // ---- pagination, for print -------------------------------------------------------------
+  //
+  // A PNG can be one tall image; a PDF cannot. So for print the rows are dealt into pages that
+  // each fit the preset height, and every page carries the full frame - wordmark, headline and,
+  // crucially, the source line. A page of this that gets separated from page one still says where
+  // its numbers came from.
+
+  function cardPages(spec, opts) {
+    opts = Object.assign({}, CARD_DEFAULTS, opts || {});
+    const base = CARD_SIZES[opts.aspect === "landscape" ? "landscape" : "portrait"];
+    const W = base.w;
+    const isTable = spec.type === "table";
+    const key = isTable ? "tableRows" : "rows";
+    const all = spec[key] || [];
+    if (!all.length || (spec.type !== "table" && spec.type !== "ranked" && spec.type !== "comparison")) {
+      return [spec];
+    }
+    const room = base.h - cardHeadBottom(W, spec, opts) - 10 - 16 - cardFootHeight(spec, opts)
+      - (cardCtx(spec, opts).length ? CTX_H : 0)
+      - takeHeight(takeLines(spec, opts, W, 30))
+      - (isTable ? 44 : 0);
+    const heights = isTable
+      ? all.map(() => 24)
+      : barRowMetrics(spec, opts, W, spec.type === "ranked").map(m => m.h);
+
+    const pages = [];
+    let start = 0;
+    while (start < all.length) {
+      let used = 0, end = start;
+      while (end < all.length && (used + heights[end] <= room || end === start)) {
+        used += heights[end];
+        end++;
+      }
+      pages.push({ from: start, to: end });
+      start = end;
+    }
+    return pages.map((p, i) => Object.assign({}, spec, {
+      [key]: all.slice(p.from, p.to),
+      pageIndex: i,
+      pageLabel: pages.length > 1 ? "Page " + (i + 1) + " of " + pages.length : null,
+      // Only the first page keeps the "so what" line and the benchmark strip; repeating them on
+      // every page would say the same thing five times and eat the room the rows need.
+      takeaway: i === 0 ? spec.takeaway : null,
+      context: i === 0 ? spec.context : [],
+    }));
+  }
 
   // ---- exports. The PNG is rasterised from the very SVG on screen, so it cannot drift from what
   // the user approved. The CSV is always the full result set, whatever the toggles say.
@@ -918,14 +1024,21 @@
   // PDF: the same artwork, page-sized, handed to the browser's own print-to-PDF. No extra library,
   // and it embeds the fonts the page already has.
   function exportCardPdf(spec, opts) {
-    const size = CARD_SIZES[(opts && opts.aspect) === "landscape" ? "landscape" : "portrait"];
+    const base = CARD_SIZES[(opts && opts.aspect) === "landscape" ? "landscape" : "portrait"];
+    const pages = cardPages(spec, opts);
     const w = window.open("", "_blank");
     if (!w) return alert("Allow pop-ups to export a PDF.");
+    // One page element per card page, each breaking after it - so a 40-row answer prints as the
+    // several pages it actually is, rather than being scaled down to illegibility or cropped.
+    const body = pages.map((pg, i) =>
+      '<section' + (i < pages.length - 1 ? ' class="brk"' : "") + ">"
+      + renderCardSvg(pg, Object.assign({}, opts, { fixedHeight: base.h })) + "</section>").join("");
     w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(spec.title || "Transit411 data card")
       + '</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@600;700&display=swap">'
-      + '<style>@page{size:' + (size.w > size.h ? "landscape" : "portrait") + ';margin:14mm}'
-      + 'body{margin:0;display:flex;align-items:center;justify-content:center}svg{width:100%;height:auto}</style></head><body>'
-      + renderCardSvg(spec, opts) + '<script>window.onload=()=>{setTimeout(()=>window.print(),350)}<\/script></body></html>');
+      + '<style>@page{size:' + (base.w > base.h ? "landscape" : "portrait") + ';margin:14mm}'
+      + "body{margin:0}section{display:flex;align-items:center;justify-content:center;min-height:100vh}"
+      + "section.brk{break-after:page;page-break-after:always}svg{width:100%;height:auto}</style></head><body>"
+      + body + '<script>window.onload=()=>{setTimeout(()=>window.print(),350)}<\/script></body></html>');
     w.document.close();
   }
 
@@ -989,7 +1102,7 @@
     return spec;
   }
 
-  window.T411 = { esc, amt, RATING, pickCardType, cardSpecFromAnswer, renderCardSvg, renderDataCard, exportCardCsv, exportCardPng, exportCardPdf, CARD_DEFAULTS, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
+  window.T411 = { esc, amt, RATING, pickCardType, cardSpecFromAnswer, renderCardSvg, renderDataCard, cardPages, cardSize, exportCardCsv, exportCardPng, exportCardPdf, CARD_DEFAULTS, renderCigTable, renderCigMilestones, renderCigTimeline, renderCigChanges, openCigProject,
                   renderCigProfileVersions, sortCigProjects: sortProjects,
                   colLabel, colKind, fmtCell, errorText, askCardHtml };
 })();
