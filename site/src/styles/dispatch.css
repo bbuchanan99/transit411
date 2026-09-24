@@ -45,6 +45,31 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .rail-item .k{font-family:'Archivo',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-top:5px}
 
 /* stat band */
+/* ---- Data-tools band (homepage, under the lead) --------------------------------------------
+   Deliberately inverted: a dark band in BOTH themes. So the colours here are literal rather than
+   var(--ink)/var(--bg) - in dark mode those flip, and the band would turn light-on-light. */
+.band{background:#17140F;color:#F7F4ED;margin:0;padding:34px 0 38px;border-top:3px solid var(--accent)}
+.band-h{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:#EE6A54}
+.band h2{font-family:'Archivo',sans-serif;font-size:30px;font-weight:800;letter-spacing:-.5px;margin:10px 0 22px;line-height:1.1;color:#F7F4ED}
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.tool{background:#211E19;border:1px solid #3A352C;border-radius:14px;padding:22px 22px 20px;display:flex;flex-direction:column}
+.tool .tag{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#EE6A54}
+.tool h3{font-family:'Archivo',sans-serif;font-size:21px;font-weight:800;margin:6px 0 4px;color:#F7F4ED}
+.tool p{font-size:14px;color:#B9B2A4;margin:0 0 16px;line-height:1.5}
+/* The whole pill is the hit target - the Ask button is a visual cue inside it, not a control. */
+/* Tall enough for two lines of the longest question: at card width these wrap, and a pill that
+   grew and shrank on every keystroke made the whole band twitch. */
+.cell{background:#F7F4ED;border:2px solid transparent;border-radius:9px;padding:13px 15px;display:flex;align-items:center;gap:10px;min-height:70px;cursor:pointer;text-decoration:none;margin-top:auto;transition:border-color .15s,transform .15s,box-shadow .15s}
+.cell:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.28)}
+.cell:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(238,106,84,.4)}
+.cell .q{font-family:'JetBrains Mono',monospace;font-size:13.5px;color:#17140F;line-height:1.35}
+.cell .caret{display:inline-block;width:2px;height:16px;background:var(--accent);margin-left:1px;vertical-align:middle;animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+.cell .go{margin-left:auto;flex-shrink:0;background:var(--accent);color:#fff;font-family:'Archivo',sans-serif;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-radius:7px;padding:9px 15px;transition:background .15s}
+.cell:hover .go{background:#8F2415}
+@media (prefers-reduced-motion:reduce){.cell .caret{animation:none}}
+@media (max-width:720px){.tools{grid-template-columns:1fr}.band h2{font-size:24px}}
+
 .stats{display:flex;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .stat{flex:1;min-width:180px;padding:22px 40px;border-right:1px solid var(--line)}
 .stat:last-child{border-right:none}

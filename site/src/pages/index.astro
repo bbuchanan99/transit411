@@ -1,7 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import PostItem from "../components/PostItem.astro";
-import { API_BASE, getPosts, getCigSummary } from "../lib/content.js";
+import { API_BASE, getPosts } from "../lib/content.js";
 
 // Live content, fetched at build time (featured placements first, then newest).
 const posts = await getPosts();
@@ -9,15 +9,30 @@ const [lead, ...rest] = posts;
 const also = rest.slice(0, 3);
 const wire = rest.slice(3, 11);
 
-// CIG pipeline figures from the latest loaded dashboard; "—" if the API is unavailable.
-const cig = await getCigSummary();
-const snapLabel = cig?.snapshot
-  ? new Date(cig.snapshot + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
-  : null;
-const stats = [
-  { l: "Active CIG projects", v: cig ? String(cig.projects) : "—", s: "In the FTA pipeline" },
-  { l: "CIG requested", v: cig ? `$${(cig.total_cig_musd / 1000).toFixed(1)}B` : "—", s: "Total across the pipeline" },
-  { l: "In Engineering", v: cig ? String(cig.by_phase?.Eng ?? 0) : "—", s: "Advanced past Project Development" },
+// The data-tools band under the lead. Replaces the old CIG stat band: three numbers said what the
+// pipeline contained, this shows what you can ask it. Questions are data attributes so the markup
+// and the typing loop can't drift apart.
+const tools = [
+  {
+    id: "ntd", tag: "Ask NTD", href: "/ask-ntd",
+    title: "Ridership, cost & finances",
+    blurb: "Compare any U.S. agency — ridership, cost per rider, operating expense — just by asking.",
+    questions: [
+      "Which heavy-rail system is cheapest per rider?",
+      "Compare BART and WMATA on ridership.",
+      "Top 10 agencies by bus ridership in Texas.",
+    ],
+  },
+  {
+    id: "cig", tag: "Ask CIG", href: "/ask-cig",
+    title: "The FTA funding pipeline",
+    blurb: "Track every Capital Investment Grants project — phase, rating, and funding sought — in plain English.",
+    questions: [
+      "Which projects are seeking the most CIG funding?",
+      "Show light-rail projects in the Engineering phase.",
+      "Which projects advanced a phase this year?",
+    ],
+  },
 ];
 ---
 <Base>
@@ -48,16 +63,31 @@ const stats = [
     </section>
   )}
 
-  <section class="stats wrap" style="padding-left:0;padding-right:0">
-    {stats.map((st) => (
-      <div class="stat">
-        <div class="l">{st.l}</div>
-        <div class="v disp">{st.v}</div>
-        <div class="s">{st.s}</div>
+  <section class="band">
+    <div class="wrap">
+      <div class="band-h">Transit411 Data Tools</div>
+      <h2 class="disp">Ask American transit's data in plain English</h2>
+      <div class="tools">
+        {tools.map((t) => (
+          <div class="tool">
+            <div class="tag">{t.tag}</div>
+            <h3 class="disp">{t.title}</h3>
+            <p>{t.blurb}</p>
+            {/* The whole pill is the link. It carries a real href so it works before the script
+                runs, on middle-click, and from the keyboard; the typing loop keeps that href
+                pointed at whichever question is showing. */}
+            <a class="cell" href={`${t.href}?q=${encodeURIComponent(t.questions[0])}`}
+               aria-label={t.tag} data-cell={t.id} data-base={t.href}
+               data-questions={JSON.stringify(t.questions)}>
+              <span class="q" data-q>{t.questions[0]}</span>
+              <span class="caret" aria-hidden="true"></span>
+              <span class="go" aria-hidden="true">Ask</span>
+            </a>
+          </div>
+        ))}
       </div>
-    ))}
+    </div>
   </section>
-  {snapLabel && <p class="wrap stats-note">From the FTA Capital Investment Grants dashboard of {snapLabel}.</p>}
 
   <div class="wrap">
     {wire.length > 0 && (
@@ -89,6 +119,60 @@ const stats = [
     </section>
   </div>
 </Base>
+
+<script>
+  // Data-tools band: each cell types its example questions on a loop. No libraries, no layout
+  // work per frame - one textContent write per tick - and it only ever touches its own two cells.
+  //
+  // The href is updated whenever the question changes, so the link is real: it works before this
+  // script runs, on middle-click and from the keyboard, and it always points at the question the
+  // reader can currently see. Clicking mid-word sends the WHOLE question rather than the prefix
+  // typed so far, because a half-question pre-filled on the Ask page is of no use to anyone.
+  const TYPE_MS = 85, ERASE_MS = 38, HOLD_MS = 2200, GAP_MS = 600, STAGGER_MS = 900;
+  const cells = Array.from(document.querySelectorAll("[data-cell]"));
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  cells.forEach((cell, index) => {
+    let questions;
+    try { questions = JSON.parse(cell.dataset.questions); } catch { return; }
+    if (!Array.isArray(questions) || !questions.length) return;
+    const out = cell.querySelector("[data-q]");
+    const base = cell.dataset.base;
+    const setQuestion = (q) => { cell.href = base + "?q=" + encodeURIComponent(q); };
+
+    // Someone who asked for less motion gets the first question, sitting still.
+    if (still) {
+      out.textContent = questions[0];
+      setQuestion(questions[0]);
+      const caret = cell.querySelector(".caret");
+      if (caret) caret.style.animation = "none";
+      return;
+    }
+
+    let at = 0, timer = null;
+    const run = () => {
+      const text = questions[at];
+      setQuestion(text);                       // the link is the full question from the first keystroke
+      let i = 0;
+      timer = setInterval(() => {
+        out.textContent = text.slice(0, ++i);
+        if (i < text.length) return;
+        clearInterval(timer);
+        timer = setTimeout(() => {
+          timer = setInterval(() => {
+            out.textContent = text.slice(0, --i);
+            if (i > 0) return;
+            clearInterval(timer);
+            at = (at + 1) % questions.length;
+            timer = setTimeout(run, GAP_MS);
+          }, ERASE_MS);
+        }, HOLD_MS);
+      }, TYPE_MS);
+    };
+    out.textContent = "";
+    setTimeout(run, index * STAGGER_MS);       // so the two cards don't type in lockstep
+  });
+</script>
 
 <script>
   // Newsletter signup -> POST /api/subscribe (the only public write). The address is stored as a
