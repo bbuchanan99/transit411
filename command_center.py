@@ -102,9 +102,11 @@ def collection(status: str = "pending", q: Optional[str] = None, pillar: Optiona
     where, params = _collection_where(status, q, pillar, agency, mode, program, state, tag)
     try:
         with _db() as c, c.cursor() as cur:
+            _ensure_reco(cur)
             cur.execute(
                 "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, relevance, status, "
-                "agencies, mode, programs, tags, state "
+                "agencies, mode, programs, tags, state, "
+                "reco_score, reco_action, reco_reason, reco_flags, reco_group, recommended_at "
                 f"FROM collected_items WHERE {where} ORDER BY collected_at DESC LIMIT 200", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
@@ -113,8 +115,9 @@ def collection(status: str = "pending", q: Optional[str] = None, pillar: Optiona
                 it["fresh_status"], it["fresh_score"] = st, sc
                 it["published"] = it["published"].isoformat() if it.get("published") else None
                 it["deadline"] = it["deadline"].isoformat() if it.get("deadline") else None
-                for k in ("agencies", "mode", "programs", "tags"):
+                for k in ("agencies", "mode", "programs", "tags", "reco_flags"):
                     it[k] = it.get(k) or []
+                it["recommended_at"] = it["recommended_at"].isoformat() if it.get("recommended_at") else None
                 items.append(it)
             cur.execute(f"SELECT count(*) FROM collected_items WHERE {where}", params)
             matched = cur.fetchone()[0]
@@ -148,6 +151,159 @@ def collection_facets(status: str = "pending"):
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return out
+
+
+@app.get("/api/collection/recommendation")
+def collection_recommendation(status: str = "pending", include_approved: bool = False):
+    """The LAST recommendation, read back from the cached reco_* columns. No model call, so the
+    Collection tab can show scores and re-derive the suggested set on every load for free. The
+    Recommend button (POST) is the only thing that spends anything."""
+    import recommend as R
+
+    statuses = [status] + (["approved"] if include_approved else [])
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_reco(cur)
+            cur.execute(
+                "SELECT id, pillar, headline, source_name, reco_score, reco_action, reco_reason, "
+                "reco_flags, reco_group, recommended_at FROM collected_items "
+                "WHERE status = ANY(%s) AND recommended_at IS NOT NULL "
+                "ORDER BY reco_score DESC NULLS LAST", (statuses,))
+            names = [d[0] for d in cur.description]
+            rows = [dict(zip(names, r)) for r in cur.fetchall()]
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not rows:
+        return {"recommended_at": None, "considered": 0, "summary": None,
+                "balanced_set": [], "lead": None, "ranked": []}
+
+    results = {r["id"]: {"score": r["reco_score"], "action": r["reco_action"],
+                         "reason": r["reco_reason"] or "", "flags": r["reco_flags"] or [],
+                         "dupe_group": r["reco_group"]} for r in rows}
+    chosen = R.balanced_set(rows, results)
+    lead = R.lead_story(rows, results, among=chosen)
+
+    def brief(it):
+        r = results.get(it["id"], {})
+        return {"id": it["id"], "headline": it.get("headline"), "pillar": it.get("pillar"),
+                "source_name": it.get("source_name"), "score": r.get("score"),
+                "action": r.get("action"), "reason": r.get("reason"), "flags": r.get("flags") or []}
+
+    ran = max((r["recommended_at"] for r in rows if r.get("recommended_at")), default=None)
+    return {
+        "recommended_at": ran.isoformat() if ran else None,
+        "considered": len(rows),
+        "summary": R.recommendation_summary(rows, results),
+        "balanced_set": [brief(it) for it in chosen],
+        "lead": brief(lead) if lead else None,
+        "ranked": [brief(it) for it in rows],
+    }
+
+
+@app.post("/api/collection/recommend")
+def collection_recommend(status: str = "pending", include_approved: bool = False, limit: int = 300):
+    """Editorial triage of the review queue: score every pending item, say why, and suggest a
+    balanced publish set and a lead.
+
+    ADVISORY ONLY. This writes reco_* columns and nothing else - no status changes, no publishing.
+    On demand (the Collection tab's Recommend button); the result is cached on each row so the
+    queue can be re-sorted and re-read without spending anything.
+    """
+    import recommend as R
+    from datetime import datetime, timezone
+
+    statuses = [status] + (["approved"] if include_approved else [])
+    limit = max(1, min(limit, 500))
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_reco(cur)
+            cur.execute(
+                "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, "
+                "relevance, status, agencies, mode, programs, tags, state "
+                "FROM collected_items WHERE status = ANY(%s) ORDER BY collected_at DESC LIMIT %s",
+                (statuses, limit))
+            names = [d[0] for d in cur.description]
+            items = [dict(zip(names, r)) for r in cur.fetchall()]
+            # Already-published titles, so the model can tell a follow-up from a second run at the
+            # same story.
+            cur.execute("SELECT title FROM content_posts WHERE status='published'")
+            published_titles = [r[0] for r in cur.fetchall() if r[0]]
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not items:
+        raise HTTPException(400, "Nothing in the queue to recommend on.")
+
+    from collection import freshness
+    for it in items:
+        it["fresh_status"], it["fresh_score"] = freshness(it.get("published"), it.get("deadline"))
+        it["published"] = it["published"].isoformat() if it.get("published") else None
+        for k in ("agencies", "mode", "programs", "tags"):
+            it[k] = it.get(k) or []
+
+    # Which agencies we hold data on, so a story about one can be paired with our own figures.
+    agency_names, cig_sponsors = set(), set()
+    try:
+        import agencies as A
+        with _db() as c:
+            for a in A.all_agencies(c):
+                agency_names.add((a.get("name") or "").lower())
+                for alias in (a.get("aliases") or []):
+                    agency_names.add(alias.lower())
+                if a.get("cig_sponsor"):
+                    cig_sponsors.add(a["cig_sponsor"].lower())
+    except Exception:
+        pass                       # the tie-in bonus is a nice-to-have, not a reason to fail
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT DISTINCT lower(sponsor) FROM cig_projects WHERE sponsor IS NOT NULL")
+            cig_sponsors |= {r[0] for r in cur.fetchall() if r[0]}
+    except Exception:
+        pass
+
+    model = os.environ.get("RECOMMEND_MODEL", R.MODEL_DEFAULT)
+    try:
+        results, usage = R.score_items(items, published_titles, agency_names, cig_sponsors, model=model)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Recommendation failed: {e}")
+
+    ran_at = datetime.now(timezone.utc)
+    try:
+        with _db() as c, c.cursor() as cur:
+            for it in items:
+                r = results.get(it["id"], {})
+                cur.execute(
+                    "UPDATE collected_items SET reco_score=%s, reco_action=%s, reco_reason=%s, "
+                    "reco_flags=%s, reco_group=%s, recommended_at=%s WHERE id=%s",
+                    (r.get("score"), r.get("action"), r.get("reason"), r.get("flags") or [],
+                     r.get("dupe_group"), ran_at, it["id"]))
+            c.commit()
+    except Exception as e:
+        raise HTTPException(502, f"DB error saving recommendations: {e}")
+
+    chosen = R.balanced_set(items, results)
+    lead = R.lead_story(items, results, among=chosen)
+
+    def brief(it):
+        r = results.get(it["id"], {})
+        return {"id": it["id"], "headline": it.get("headline"), "pillar": it.get("pillar"),
+                "source_name": it.get("source_name"), "score": r.get("score"),
+                "action": r.get("action"), "reason": r.get("reason"), "flags": r.get("flags") or []}
+
+    ranked = sorted(items, key=lambda it: (results.get(it["id"], {}).get("score") is None,
+                                           -(results.get(it["id"], {}).get("score") or 0)))
+    return {
+        "recommended_at": ran_at.isoformat(),
+        "model": model,
+        "considered": len(items),
+        "summary": R.recommendation_summary(items, results),
+        "usage": usage,
+        "cost_usd": R.run_cost(usage, model),
+        "balanced_set": [brief(it) for it in chosen],
+        "lead": brief(lead) if lead else None,
+        "ranked": [brief(it) for it in ranked],
+    }
 
 
 @app.post("/api/collection/{item_id}/{action}")
@@ -281,6 +437,15 @@ def _ensure_posts_link(cur):
     # Which collected item a post came from, so publish/unpublish keep both in step.
     # (init.sql has it for new databases; this adds it to the existing one.)
     cur.execute("ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS item_id BIGINT")
+
+
+def _ensure_reco(cur):
+    """Columns for the AI recommendation (recommend.py). Advisory fields only: nothing here can
+    change an item's status. collection.migrate() adds them too; this covers a Command Center that
+    starts before the collector has run."""
+    for col in ("reco_score INT", "reco_action TEXT", "reco_reason TEXT", "reco_flags TEXT[]",
+                "reco_group INT", "recommended_at TIMESTAMPTZ"):
+        cur.execute(f"ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS {col}")
 
 
 def _ensure_slugs(cur):

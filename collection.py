@@ -599,6 +599,13 @@ def migrate(conn):
         # Images: a candidate scraped from the source page (never published without review),
         # and on posts the chosen image plus where it came from (candidate|manual|house).
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS image_url TEXT",
+        # AI editorial triage (recommend.py): advisory only, never changes status.
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_score INT",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_action TEXT",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_reason TEXT",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_flags TEXT[]",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_group INT",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS recommended_at TIMESTAMPTZ",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_url TEXT",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_source TEXT",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS source_name TEXT",

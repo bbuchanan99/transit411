@@ -75,6 +75,14 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - **Agency reference table** — `reference/agencies.json` (65 agencies: aliases, state, `ntd_id`, `cig_sponsor`, website/newsroom/procurement, `search_enabled`), synced to Postgres by `agencies.py --sync` and served read-only at `GET /api/agencies`. `match()` resolves a post tag or CIG sponsor to a row (e.g. LACMTA → LA Metro). Websites came from known domains and are **not** fetch-verified; blanks are simply omitted by the site.
 - **Featured / paid People** — `featured`, `featured_until`, `sponsor` columns + a feature endpoint, for paid highlight placements.
 
+### 3.3a AI "Recommend to publish" (editorial triage of the review queue)
+- **`recommend.py`** + **`POST /api/collection/recommend`** (Command Center only; **not** on the public allowlist). Scores every `pending` item 0–100 for a transit-professional audience and returns, per item, a one-line reason, an action (`publish` / `hold` / `skip`) and flags (`likely_duplicate`, `lead_candidate`) — plus a **balanced publish set** and a **suggested lead**.
+- **It recommends only.** Nothing in it changes an item's status, publishes or skips. It writes `reco_score / reco_action / reco_reason / reco_flags / reco_group / recommended_at` and the queue sorts by them; approve/skip/publish stay with a human.
+- **The rubric** (explicit in the prompt, so runs are consistent): audience relevance first, then importance, timeliness (reusing the existing freshness score), uniqueness, data tie-in, source credibility. Pillar balance is deliberately **not** the model's job — it scores each item on merit and the selection step balances.
+- **Three things are computed here, not by the model**, because deterministic is cheaper and reproducible: duplicate clustering (headline overlap, guarded by `state` so "Seattle voters approve…" and "Denver voters approve…" don't merge), the CIG/NTD data tie-in (matched against the agency reference table), and the balanced set (one per pillar, then by score, **max 2 per pillar**).
+- **Duplicate groups are kept in the same model call.** Split across calls the model can see that a group exists but cannot pick which member to keep; together it can. A group is only collapsed when the model confirms at least one member is a duplicate.
+- **Cost:** on demand only, never on load. A run over 262 items is **7 calls, ~45k input + ~15k output tokens, ~$0.12** on `claude-haiku-4-5`. **`GET /api/collection/recommendation`** replays the cached result (and re-derives the set) with **no model call**, so opening the tab is free.
+
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
   - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can usually be fetched by link. Not always: on 2026-09-22 the same PDF link was served once and then refused. When Load from link says 403, download the PDF and upload it.
@@ -241,6 +249,7 @@ curl https://api.transit411.net/api/cig                   # must return 200
 | `ANTHROPIC_API_KEY` | Model calls (collection classify, Ask NTD/CIG SQL generation) |
 | `ASK_NTD_MODEL` | Model for NL→SQL. Code default `claude-haiku-4-5`; **set to `claude-sonnet-5`** on the NAS (more reliable on multi-step questions) |
 | `COLLECT_MODEL` | Model for collector triage (default `claude-haiku-4-5`) |
+| `RECOMMEND_MODEL` | Model for the Collection tab's **Recommend** button (default `claude-haiku-4-5`; ~$0.12 per run over a 262-item queue, ~$0.36 on `claude-sonnet-5`) |
 | `DB_PASSWORD` | Postgres password (`openssl rand -hex 16`) |
 | `DATA_DIR` | NAS path for data volumes (DuckDB, Postgres, kept CIG PDFs) |
 | `COLLECT_AT` / `COLLECT_TZ` | Daily collector schedule (defaults `06:00`, `America/New_York`) |
