@@ -4,9 +4,9 @@
 // question until "New question". Answers are drawn by the shared bundle (T411.askCardHtml), so the page
 // that uses this must load /vendor/t411.js + /vendor/t411.css.
 import { API_BASE } from "../lib/content.js";
-const { endpoint, examples = [], placeholder = "Ask a question..." } = Astro.props;
+const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask NTD" } = Astro.props;
 ---
-<div class="ask" data-api={API_BASE} data-endpoint={endpoint}>
+<div class="ask" data-api={API_BASE} data-endpoint={endpoint} data-tool={tool}>
   <form class="ask-form">
     <label class="ask-label" for="ask-q">Your question</label>
     <div class="ask-row">
@@ -34,11 +34,31 @@ const { endpoint, examples = [], placeholder = "Ask a question..." } = Astro.pro
 
 <script>
   const root = document.querySelector(".ask");
-  const api = root.dataset.api, endpoint = root.dataset.endpoint;
+  const api = root.dataset.api, endpoint = root.dataset.endpoint, tool = root.dataset.tool;
   const input = root.querySelector("#ask-q"), out = root.querySelector(".ask-out");
   const status = root.querySelector(".ask-status"), ctl = root.querySelector(".ask-thread-ctl");
   const go = root.querySelector(".ask-go");
   let thread = [];  // [{question, sql}] sent as history so follow-ups refine the last query
+  let answers = []; // the full result behind each rendered answer, for the data card
+
+  // Any answer can become a branded, shareable card. The card type is chosen from the shape of the
+  // result, so the button says the same thing on every answer and the reader never picks a format.
+  function addCardButton(res) {
+    const card = out.firstElementChild;   // answers are prepended, so the newest is first
+    if (!card) return;
+    const i = answers.push(res) - 1;
+    const bar = document.createElement("div");
+    bar.className = "ask-dc-bar";
+    bar.innerHTML = '<button type="button" class="t411-btn" data-datacard="' + i + '">Make a data card</button>';
+    const host = document.createElement("div");
+    host.className = "ask-dc-host";
+    card.append(bar, host);
+  }
+
+  function clearAnswers() {
+    out.innerHTML = "";
+    answers = [];
+  }
 
   function setStatus(text, isError) {
     status.textContent = text || "";
@@ -62,6 +82,7 @@ const { endpoint, examples = [], placeholder = "Ask a question..." } = Astro.pro
       if (!r.ok) { setStatus(T411.errorText(text, r.status), true); return; }
       const res = JSON.parse(text);
       out.insertAdjacentHTML("afterbegin", T411.askCardHtml(res, { followUp: thread.length > 0 }));
+      addCardButton(res);
       thread.push({ question: res.question || q, sql: res.sql || "" });
       ctl.hidden = false;
       input.value = "";
@@ -86,10 +107,23 @@ const { endpoint, examples = [], placeholder = "Ask a question..." } = Astro.pro
     input.setSelectionRange(input.value.length, input.value.length);
   }
   root.querySelectorAll(".ask-ex").forEach((b) => b.addEventListener("click", () => {
-    thread = []; out.innerHTML = ""; ctl.hidden = true;  // an example starts a fresh question
+    thread = []; clearAnswers(); ctl.hidden = true;  // an example starts a fresh question
     input.value = b.dataset.q; ask(b.dataset.q);
   }));
   root.querySelector(".ask-new").addEventListener("click", () => {
-    thread = []; out.innerHTML = ""; ctl.hidden = true; setStatus(""); input.value = ""; input.focus();
+    thread = []; clearAnswers(); ctl.hidden = true; setStatus(""); input.value = ""; input.focus();
+  });
+
+  // Show/hide the card for one answer. The card, its toggles and its three exports are all drawn
+  // by the shared bundle, so this page and the Command Center produce byte-identical cards.
+  out.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-datacard]");
+    if (!b) return;
+    const res = answers[+b.dataset.datacard];
+    const host = b.parentElement.nextElementSibling;
+    if (!res || !host) return;
+    if (host.innerHTML) { host.innerHTML = ""; b.textContent = "Make a data card"; return; }
+    b.textContent = "Hide the data card";
+    window.T411.renderDataCard(host, res, { tool, fontBase: "/vendor/fonts", id: "ask-card-" + b.dataset.datacard });
   });
 </script>

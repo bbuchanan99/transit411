@@ -384,6 +384,12 @@
   // The card TYPE is decided from the shape of the result, never by a model: same answer, same
   // card, every time, at no cost. pickCardType() is pure and testable.
   const CARD_MONEY = /(cost|expense|fare|revenue|musd|budget|funding|request|\$)/i;
+  // CIG figures arrive in millions of dollars (…_musd). A card that prints "$5,190" for $5.19bn is
+  // worse than useless once it leaves this page and loses the column header, so those columns are
+  // scaled to real dollars and cardNum picks the B/M suffix itself.
+  const CARD_MILLIONS = /_musd$|_musd_|\(\$m\)/i;
+  function cardScale(col) { return CARD_MILLIONS.test(String(col == null ? "" : col)) ? 1e6 : 1; }
+  function cardVal(v, col) { return typeof v === "number" ? v * cardScale(col) : v; }
   const CARD_YEAR = /^(report_)?year$|_year$|^snapshot_date$|_date$/i;
   const CARD_NAME = /(agency|name|project|sponsor|city|state|mode|system|pillar)/i;
   const CARD_NOT_MEASURE = /(^|_)id$|^ntd_id$|_code$/i;
@@ -500,12 +506,12 @@
     const abs = Math.abs(v);
     const unit = abs >= 1e9 ? [1e9, "B"] : abs >= 1e6 ? [1e6, "M"] : abs >= 1e3 && !money ? [1e3, "K"] : [1, ""];
     const n = v / unit[0];
-    // A small dollar figure keeps its cents - $15.80, never $15.8, which reads like a typo in a
-    // column of four-character prices. Everything else drops trailing zeros.
-    const cents = money && abs < 1e3;
+    // Money is padded to two decimals below 100 and cut to none above it, so a column reads evenly:
+    // $5.19B beside $5.10B, not $5.1B; $960M, not $960.00M. Counts just drop trailing zeros.
+    const cents = money && Math.abs(n) < 100;
     const s = n.toLocaleString(undefined, {
       minimumFractionDigits: cents ? 2 : 0,
-      maximumFractionDigits: cents || !Number.isInteger(n) ? 2 : 0,
+      maximumFractionDigits: cents ? 2 : (money || Number.isInteger(n) ? 0 : 2),
     });
     return (money ? "$" : "") + s + unit[1];
   }
@@ -710,7 +716,8 @@
         cols.forEach((c, ci) => {
           const v = r[ci];
           const isNum = typeof v === "number";
-          const s = isNum ? cardNum(v, spec.money) : String(v == null ? "—" : v);
+          // Per column, not one flag for the table: a row can mix dollars, counts and years.
+          const s = isNum ? cardNum(cardVal(v, c), CARD_MONEY.test(c)) : String(v == null ? "—" : v);
           parts.push(svText(pad + colW * ci, y, svFit(s, colW - 10, 13),
             { size: 13, font: isNum ? CARD.mono : CARD.serif, weight: isNum ? 700 : 400 }));
         });
@@ -731,7 +738,8 @@
     const m = Math.floor(s.length / 2);
     return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
   }
-  function prettyCol(c) { return String(c || "").replace(/_musd$/, " ($M)").replace(/_/g, " ").replace(/\b\w/g, m => m.toUpperCase()); }
+  // No "($M)" suffix: the figure itself is scaled to real dollars and carries its own B/M.
+  function prettyCol(c) { return String(c || "").replace(/_musd$/, "").replace(/_/g, " ").replace(/\b\w/g, m => m.toUpperCase()); }
 
   function cardSpecFromAnswer(answer, opts) {
     opts = opts || {};
@@ -740,7 +748,7 @@
     const pick = pickCardType(columns, rows);
     const objs = cardRowObjects(columns, rows);
     const money = pick.money;
-    const val = r => (pick.valueCol ? r[pick.valueCol] : null);
+    const val = r => cardVal(pick.valueCol ? r[pick.valueCol] : null, pick.valueCol);
     const label = r => (pick.labelCol ? r[pick.labelCol] : "");
     const tool = opts.tool || "Ask NTD";
     const spec = {
@@ -763,7 +771,7 @@
       spec.unit = prettyCol(pick.valueCol);
       spec.context = [];
       // Other numbers on the same row make honest context (e.g. trips alongside cost per rider).
-      pick.numericCols.slice(1, 3).forEach(c => spec.context.push({ label: prettyCol(c), value: cardNum(r[c], CARD_MONEY.test(c)) }));
+      pick.numericCols.slice(1, 3).forEach(c => spec.context.push({ label: prettyCol(c), value: cardNum(cardVal(r[c], c), CARD_MONEY.test(c)) }));
       if (label(r)) spec.title = opts.title || (label(r) + " — " + prettyCol(pick.valueCol));
     } else if (pick.type === "trend") {
       const sorted = objs.slice().sort((a, b) => String(a[pick.yearCol]).localeCompare(String(b[pick.yearCol])));

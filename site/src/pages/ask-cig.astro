@@ -19,7 +19,7 @@ const examples = [
       Ask the FTA Capital Investment Grants pipeline in plain English &mdash; who's seeking what, where, at what
       stage, and what's changed month to month. See the full list on the <a href="/cig">CIG Pipeline</a> page.
     </p>
-    <AskPanel endpoint="/api/cig/ask" examples={examples} placeholder="e.g. Light rail projects in California" />
+    <AskPanel endpoint="/api/cig/ask" tool="Ask CIG" examples={examples} placeholder="e.g. Light rail projects in California" />
     <p class="cig-source">Source: Federal Transit Administration, <a href="https://www.transit.dot.gov/CIG" target="_blank" rel="noopener noreferrer">Capital Investment Grants dashboard</a>. Dollar figures in millions. Project mode comes from FTA sources (the dashboard's exclusive-BRT column or the project's FTA profile); a few projects are Unspecified, so mode-based answers leave them out.</p>
   </div>
 </Base>

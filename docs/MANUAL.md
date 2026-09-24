@@ -111,6 +111,15 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 ### 3.6 Shared component bundle
 - **`static/t411.js`** + **`static/t411.css`** — framework-free UI components (`renderCigTable` with expandable milestone/timeline rows, `renderCigMilestones`, `renderCigTimeline`, `renderCigChanges`, `openCigProject`) that use the host page's CSS variables. All values are HTML-escaped (quotes included), since data comes from outside sources. **Loaded by both the Command Center and the public site**, so views are built once and used everywhere.
 
+### 3.6a Data cards (shareable branded cards from any Ask answer)
+- **Where:** a **Make a data card** button under every Ask NTD / Ask CIG answer, in the Command Center *and* on the public `/ask-ntd` and `/ask-cig` pages. Same code both places (`renderDataCard` in the bundle), so a card looks identical wherever it was made.
+- **The format is chosen from the data, never by hand**, so the same question always produces the same card: one row with one number → **stat**; a named set ranked on one measure → **ranked** (8 rows) or **comparison** (5); a year/date column → **trend**; anything with no single measure → **table**. The chosen type and the reason are printed under the card.
+- Two rules stop the obvious wrong answer: a **year column is an axis, never the measure** (or "2024" becomes the headline number), and where several numeric columns compete, the one the answer is **sorted by** is the one the question was about.
+- **Toggles:** "So what" line, Context stats (rows + median of the answer's own set), Chart, Methodology, Landscape. A toggle only appears when the card has something to show for it. **The source line is not a toggle** — a card that travels without saying where its numbers came from is exactly what we don't want published.
+- **Money:** `*_musd` columns (all CIG figures) are scaled to real dollars, so a card reads **$5.19B**, not "$5,190". Dollar figures pad to two decimals below 100 and none above, so a column reads evenly.
+- **Exports:** **PNG** (2× — 1360×1700 portrait, 2000×1126 landscape), **PDF** (print-to-PDF; needs pop-ups allowed), **Excel/CSV** (all columns, unrounded, UTF-8 BOM, with the source as comment lines).
+- **`static/fonts/*.woff2`** (Archivo 800/900, JetBrains Mono 700, OFL) are inlined into the PNG at export time — a rasterised SVG can't see the page's web fonts. Served at `/static/fonts` by the Command Center and copied to `/vendor/fonts` for the site by `site/scripts/copy-bundle.mjs`. Missing fonts degrade to Helvetica; they don't break the export.
+
 ### 3.7 Public site (Astro)
 - **`/site`** — an **Astro** static site deploying to **Cloudflare Pages**. Design is **"Dispatch"** (bold editorial newspaper: near-black + red, Archivo + Spectral).
 - Pages: homepage (`index.astro`), section pages (`[section].astro` → News/Funding/Procurement/People/Policy), a **Data hub** (`data.astro`).
@@ -293,7 +302,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 
 ## 11. Roadmap (logged product to-dos)
 
-- **Branded output templates** — consistent chart/table/export styling and shareable "data cards"; the basis for the Ask NTD/CIG revenue product.
+- ~~**Branded output templates** — shareable "data cards".~~ **Done** (see 3.6a): four card types picked from the data, three exports, on Ask NTD and Ask CIG in both the Command Center and the public site. Still open: facet/format presets and a card for the CIG pipeline table itself.
 - **Ask NTD revenue subsite** — `ask.transit411.*` with freemium tiers, API/bulk data access, branded reports.
 - **"Ask ___" brand family** — Ask NTD, Ask Transit, room to expand.
 - **Marketplace** — paid job/procurement postings; paid featured People placements.

@@ -2013,15 +2013,6 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .imgcard-b{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
 .imgcard-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
 .imgcard-t{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;line-height:1.3}
-.t411-dc{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.t411-dc-art{padding:16px;background:#2A241F;display:flex;justify-content:center}
-.t411-dc-art svg{max-width:100%;height:auto;box-shadow:0 10px 30px rgba(0,0,0,.35)}
-.t411-dc-ctl{padding:12px 16px 14px;display:flex;flex-direction:column;gap:10px}
-.t411-dc-toggles{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
-.t411-dc-tog{font-family:'Archivo',sans-serif;font-size:12px;color:var(--ink);display:flex;align-items:center;gap:6px;cursor:pointer}
-.t411-dc-fixed{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:3px 10px}
-.t411-dc-exports{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.t411-dc-kind{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-left:auto}
 .pimg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .pimg{display:flex;flex-direction:column;gap:3px;padding:0;border:1px solid var(--line);background:var(--card);cursor:pointer;text-align:left;overflow:hidden;border-radius:8px}
 .pimg:hover{border-color:var(--accent)}
@@ -3412,9 +3403,21 @@ async function cigDoAsk(q){
     const th=d.columns.map(c=>"<th>"+esc(c)+"</th>").join("");
     const tb=d.rows.map(row=>"<tr>"+row.map(v=>'<td>'+esc(v==null?"":v)+"</td>").join("")+"</tr>").join("");
     out.innerHTML='<div class="rcard"><div class="rh" style="background:var(--ink);color:var(--panel);padding:11px 18px;font-family:Archivo,sans-serif;font-size:13px">'+esc(q)+' &middot; '+d.rows.length+' rows</div>'
-      +'<div class="twrap" style="padding:6px 18px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Archivo,sans-serif"><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sqlBlock+'</div>';
+      +'<div class="twrap" style="padding:6px 18px;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;font-family:Archivo,sans-serif"><thead><tr>'+th+'</tr></thead><tbody>'+tb+'</tbody></table></div>'+sqlBlock
+      +'<div style="padding:0 18px 14px"><button type="button" class="newq" data-cigcard="1">Make a data card</button></div><div id="cigCardHost" style="padding:0 18px 16px"></div></div>';
+    cigAnswer={question:q,columns:d.columns,rows:d.rows,sql:d.sql};
   }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not reach Ask CIG.</div></div>';}
 }
+// Same card engine as Ask NTD; only the tool name differs, which sets the kicker and the source line.
+let cigAnswer=null;
+document.getElementById("cigAskOut").addEventListener("click",e=>{
+  const b=e.target.closest("[data-cigcard]");
+  if(!b||!cigAnswer)return;
+  const host=document.getElementById("cigCardHost");
+  if(host.innerHTML){host.innerHTML="";b.textContent="Make a data card";return;}
+  b.textContent="Hide the data card";
+  T411.renderDataCard(host,cigAnswer,{tool:"Ask CIG",fontBase:"/static/fonts",id:"cig-card"});
+});
 // ---- Images screen: every published story and the picture it carries -----------------------------
 let imgFilter="all",imgPosts=[];
 document.getElementById("imgRefresh").onclick=()=>loadImagesScreen(true);
