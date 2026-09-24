@@ -70,9 +70,11 @@ function toPost(p) {
     featured: !!p.featured,
     sponsor: p.sponsor || null,
     // A picture only ever appears here after someone chose it in the Publish tab; everything else
-    // falls back to our own pillar graphic, which is always safe to show.
-    image: safeUrl(p.image_url) || houseImage(p.pillar),
-    imageIsHouse: !safeUrl(p.image_url),
+    // falls back to our own pillar graphic, which is always safe to show. The exception is
+    // image_source "none", chosen deliberately in the Publish tab: that story runs as text, with
+    // no photo and no house graphic. Every template checks `image` before drawing anything.
+    image: p.image_source === "none" ? null : (safeUrl(p.image_url) || houseImage(p.pillar)),
+    imageIsHouse: p.image_source !== "none" && !safeUrl(p.image_url),
     imageSource: p.image_source || null,
   };
 }

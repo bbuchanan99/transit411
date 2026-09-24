@@ -34,7 +34,7 @@ const stats = [
         <div class="byline">{[lead.date, lead.source && `Source: ${lead.source}`].filter(Boolean).join(" · ")}</div>
       </div>
       <div class="rail">
-        <div class="rail-h">Also this week</div>
+        <div class="rail-h">Also worth reading</div>
         {also.map((p) => <PostItem post={p} size="compact" />)}
         {also.length === 0 && <p class="rail-empty">More stories coming soon.</p>}
       </div>
@@ -43,7 +43,7 @@ const stats = [
     <section class="wrap">
       <div class="empty empty-lead">
         <strong>No stories published yet.</strong>
-        <span>The first funding, procurement, people and policy stories will appear here as they're published. <a href="#newsletter">Subscribe</a> to get them each week.</span>
+        <span>The first funding, procurement, people and policy stories will appear here as they're published. <a href="#newsletter">Subscribe</a> to get them by email.</span>
       </div>
     </section>
   )}
@@ -78,8 +78,8 @@ const stats = [
 
     <section id="newsletter" class="newsletter">
       <div>
-        <h2 class="disp">Transit411 Weekly Intelligence</h2>
-        <p>Funding news, procurement notices, and career moves &mdash; every Thursday.</p>
+        <h2 class="disp">Transit411 Intelligence</h2>
+        <p>Funding news, procurement notices, and career moves &mdash; straight to your inbox.</p>
       </div>
       <form id="subscribe-form" data-api={API_BASE}>
         <input type="email" name="email" required placeholder="you@agency.gov" aria-label="Email address" />

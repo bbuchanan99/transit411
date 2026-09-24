@@ -546,12 +546,16 @@ def publish_ready():
     items = []
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("SELECT id, pillar, headline, summary, source_name, source_url, published, image_url "
-                        "FROM collected_items WHERE status='approved' ORDER BY collected_at DESC LIMIT 200")
+            _ensure_reco(cur)
+            cur.execute("SELECT id, pillar, headline, summary, source_name, source_url, published, image_url, "
+                        "reco_score, reco_action, reco_reason, reco_flags, reco_full_text "
+                        "FROM collected_items WHERE status='approved' "
+                        "ORDER BY reco_score DESC NULLS LAST, collected_at DESC LIMIT 200")
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
                 it = dict(zip(names, row))
                 it["published"] = it["published"].isoformat() if it.get("published") else None
+                it["reco_flags"] = it.get("reco_flags") or []
                 items.append(it)
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
@@ -625,8 +629,11 @@ class PublishChoice(BaseModel):
 
 @app.post("/api/publish/{item_id}")
 def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
-    """Publish one approved item. The image is whatever was chosen in the review step; with none the
-    post carries no picture and the site falls back to that pillar's house graphic."""
+    """Publish one approved item.
+
+    The image is whatever was chosen in the review step. Three outcomes: a picture, nothing (the
+    site falls back to that pillar's house graphic), or image_source="none", which means the story
+    runs with no picture at all - no photo and no house graphic, anywhere."""
     from urllib.parse import urlparse
     img = (choice.image_url or "").strip() if choice else ""
     src = (choice.image_source or "").strip() if choice else ""
@@ -636,6 +643,8 @@ def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
             raise HTTPException(400, "An image URL must be a full http(s) address.")
         if src not in ("candidate", "manual", "house"):
             src = "manual"
+    elif src != "none":
+        src = ""
     try:
         with _db() as c, c.cursor() as cur:
             post_id = _publish_one(cur, item_id, img or None, src or None)
@@ -1207,7 +1216,7 @@ def confirm(t: str = ""):
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return _page("You're subscribed", "<p>Thanks &mdash; <strong>" + esc_html(email) + "</strong> is confirmed for "
-                 "Transit411 Weekly Intelligence, every Thursday.</p><p>Every issue has a one-click unsubscribe link.</p>")
+                 "Transit411 Intelligence.</p><p>Every issue has a one-click unsubscribe link.</p>")
 
 
 def _unsubscribe_token(t):
@@ -1421,6 +1430,8 @@ def set_post_image(post_id: int, choice: ImageChoice):
         raise HTTPException(400, "An image URL must be a full http(s) address.")
     if img and src not in ("candidate", "manual", "house"):
         src = "manual"
+    if not img and src != "none":
+        src = ""            # cleared: back to the pillar house graphic
     try:
         with _db() as c, c.cursor() as cur:
             cur.execute("UPDATE content_posts SET image_url=%s, image_source=%s WHERE id=%s RETURNING slug",
@@ -3333,7 +3344,8 @@ function pRenderPicker(){
     +'<div class="pimg-grid">'+(d.house||[]).map(c=>pTile(c,chosen.url)).join("")+'</div>'
     +'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center">'
     +'<button class="newq" id="pPickPaste" type="button">Paste a URL...</button>'
-    +'<button class="newq" id="pPickNone" type="button">No picture (use the pillar fallback)</button>'
+    +'<button class="newq" id="pPickNone" type="button">Use the pillar graphic</button>'
+    +'<button class="newq" id="pPickOff" type="button">No picture at all</button>'
     +'<button class="go" id="pPickGo" type="button" style="padding:9px 18px;margin-left:auto">'+(pPick.kind==="item"?"Publish with this picture":"Save picture")+'</button></div>'
     +'<div id="pPickPreview" style="margin-top:12px"></div></div>';
   const prev=document.getElementById("pPickPreview");
@@ -3341,7 +3353,9 @@ function pRenderPicker(){
     ?'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-bottom:6px">This is what readers will see:</div>'
       +'<img src="'+esc(chosen.url)+'" alt="" style="max-width:100%;max-height:260px;border:1px solid var(--line);background:var(--panel)">'
       +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-top:4px;word-break:break-all">'+esc(chosen.url)+'</div>'
-    :'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">No picture chosen &mdash; the '+esc(pPick.pillar||"pillar")+' house graphic will be used everywhere.</div>';
+    :(chosen.none
+      ?'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--accent)">This story will run with <b>no picture at all</b> &mdash; no photo and no house graphic, on the site and in the newsletter.</div>'
+      :'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">No picture chosen &mdash; the '+esc(pPick.pillar||"pillar")+' house graphic will be used everywhere.</div>');
   document.getElementById("pPickClose").onclick=()=>{pPick=null;pRenderPicker();};
   document.getElementById("pPickPaste").onclick=()=>{
     const u=(prompt("Image URL:","")||"").trim();
@@ -3350,6 +3364,8 @@ function pRenderPicker(){
     pPick.chosen={url:u,source:"manual"};pRenderPicker();
   };
   document.getElementById("pPickNone").onclick=()=>{pPick.chosen={};pRenderPicker();};
+  // "None" here really means none: the story runs as text, with no picture and no house graphic.
+  document.getElementById("pPickOff").onclick=()=>{pPick.chosen={none:true};pRenderPicker();};
   document.getElementById("pPickGo").onclick=pPickSave;
 }
 async function pOpenPicker(kind,id,pillar,label,host){
@@ -3368,7 +3384,8 @@ async function pOpenPicker(kind,id,pillar,label,host){
 }
 async function pPickSave(){
   const b=document.getElementById("pPickGo");b.disabled=true;
-  const body=pPick.chosen.url?{image_url:pPick.chosen.url,image_source:pPick.chosen.source||"candidate"}:{};
+  const body=pPick.chosen.url?{image_url:pPick.chosen.url,image_source:pPick.chosen.source||"candidate"}
+          :(pPick.chosen.none?{image_url:null,image_source:"none"}:{});
   try{
     const url=pPick.kind==="item"?("/api/publish/"+pPick.id):("/api/posts/"+pPick.id+"/image");
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -3396,6 +3413,7 @@ function pReadyCard(it){
       +'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);max-width:320px">The source page offers this picture. Use it only if it belongs to the publisher and suits the story &mdash; otherwise publish with the house graphic.<br><a href="'+esc(cand)+'" target="_blank" rel="noopener noreferrer">open full size</a></div></div>'
     :'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-bottom:10px">No picture offered by the source &mdash; the '+esc(it.pillar||"News")+' house graphic will be used.</div>';
   return '<div class="rcard" style="padding:16px 18px">'
+    +recoLine(it)
     +'<div style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:6px">'+esc(it.pillar)+'</div>'
     +'<div style="font-family:Archivo,sans-serif;font-weight:700;font-size:17px;line-height:1.3;margin-bottom:6px">'+esc(it.headline)+'</div>'
     +'<div style="font-size:14px;margin-bottom:10px">'+esc(it.summary)+'</div>'
@@ -3404,6 +3422,7 @@ function pReadyCard(it){
     +'<button class="go" style="padding:9px 18px" data-pickitem="'+it.id+'" data-pillar="'+esc(it.pillar||"")+'" data-label="'+esc(it.headline)+'">Choose picture &amp; publish</button>'
     +(cand?'<button class="newq" data-pub="'+it.id+'" data-img="'+esc(cand)+'">Publish with the one shown</button>':'')
     +'<button class="newq" data-pub="'+it.id+'">Publish with house graphic</button>'
+    +'<button class="newq" data-pubnone="'+it.id+'" title="Runs as text: no photo and no house graphic">Publish with no picture</button>'
     +(safeUrl(it.source_url)?'<a href="'+esc(safeUrl(it.source_url))+'" target="_blank" rel="noopener noreferrer" style="font-family:Archivo,sans-serif;font-size:12px">source</a>':'')+'</div></div>';
 }
 function pPostRow(p){
@@ -3431,6 +3450,8 @@ document.getElementById("pReady").addEventListener("click",e=>{
     const t=u.trim();
     if(t&&!/^https?:\/\//i.test(t)){alert("That needs to be a full http(s) URL.");return;}
     pPost("/api/publish/"+paste.dataset.pubimg,"publish",paste,t?{image_url:t,image_source:"manual"}:null);return;}
+  const none=e.target.closest("[data-pubnone]");
+  if(none){pPost("/api/publish/"+none.dataset.pubnone,"publish",none,{image_url:null,image_source:"none"});return;}
   const b=e.target.closest("[data-pub]");
   if(b)pPost("/api/publish/"+b.dataset.pub,"publish",b,b.dataset.img?{image_url:b.dataset.img,image_source:"candidate"}:null);
 });

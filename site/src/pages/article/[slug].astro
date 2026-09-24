@@ -4,8 +4,8 @@
 // tagged, and a link out to the source. The source's article text is never reproduced here.
 import Base from "../../layouts/Base.astro";
 import PostItem from "../../components/PostItem.astro";
-import { API_BASE, SECTIONS, getPosts, getRelated, getAgencies, getCig, matchAgency, cigProjectsFor }
-  from "../../lib/content.js";
+import { API_BASE, SECTIONS, getPosts, getRelated, getAgencies, getCig, matchAgency, cigProjectsFor,
+  houseImage } from "../../lib/content.js";
 
 export async function getStaticPaths() {
   const posts = await getPosts();
@@ -58,6 +58,10 @@ const showExplore = related.length > 0 || actions.length > 0 || refLinks.length 
 const pillarPath = Object.entries(SECTIONS).find(([, s]) => s.pillar === post.pillar)?.[0];
 const canonical = new URL(`/article/${post.slug}`, Astro.site).href;
 const description = (post.deck || post.title).slice(0, 300);
+// A story can be published with no picture at all. The page then shows none - but a shared
+// link still needs something, or the card renders blank, so the social tags use our own
+// pillar graphic. It is our artwork, never a source's photo.
+const shareImage = post.image || houseImage(post.pillar);
 // Metadata chips. The section pages don't filter by facet yet, so these are labels for now; the
 // pillar (above the headline) is the one link, and CIG programs point at the pipeline page.
 const chips = [
@@ -76,8 +80,8 @@ const chips = [
     <meta property="og:title" content={post.title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
-    <meta property="og:image" content={new URL(post.image, Astro.site).href} />
-    <meta name="twitter:image" content={new URL(post.image, Astro.site).href} />
+    <meta property="og:image" content={new URL(shareImage, Astro.site).href} />
+    <meta name="twitter:image" content={new URL(shareImage, Astro.site).href} />
     {post.publishedAt && <meta property="article:published_time" content={post.publishedAt} />}
     {post.pillar && <meta property="article:section" content={post.pillar} />}
     <meta name="twitter:card" content="summary_large_image" />

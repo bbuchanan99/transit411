@@ -117,7 +117,7 @@ CONFIRM_HTML = """<!doctype html><html><body style="margin:0;background:#F2EEE4;
 <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #D8D2C4;padding:28px">
 <div style="font-family:Arial,sans-serif;font-weight:800;font-size:22px;letter-spacing:-.5px">TRANSIT<span style="color:#C0341F">411</span></div>
 <h1 style="font-family:Arial,sans-serif;font-size:20px;margin:18px 0 10px">Confirm your subscription</h1>
-<p style="font-size:16px;line-height:1.6">One click and you are on the list for <strong>Weekly Intelligence</strong> &mdash; transit funding, procurement, people and policy, every Thursday.</p>
+<p style="font-size:16px;line-height:1.6">One click and you are on the list for <strong>Transit411 Intelligence</strong> &mdash; transit funding, procurement, people and policy.</p>
 <p style="margin:22px 0"><a href="{link}" style="background:#17140F;color:#fff;font-family:Arial,sans-serif;font-weight:700;font-size:15px;padding:13px 22px;text-decoration:none;display:inline-block">Confirm subscription</a></p>
 <p style="font-size:13px;color:#6A6458;line-height:1.6">If the button does not work, paste this into your browser:<br><span style="word-break:break-all">{link}</span></p>
 <p style="font-size:13px;color:#6A6458">Did not sign up? Ignore this email and nothing happens.</p>
@@ -126,7 +126,7 @@ CONFIRM_HTML = """<!doctype html><html><body style="margin:0;background:#F2EEE4;
 
 def confirmation_email(contact):
     link = confirm_url(contact["confirm_token"])
-    text = ("Thanks for signing up for Transit411 Weekly Intelligence.\n\n"
+    text = ("Thanks for signing up for Transit411 Intelligence.\n\n"
             "Please confirm your subscription:\n" + link + "\n\n"
             "If you didn't sign up, ignore this message - you won't hear from us again.\n\n"
             "Transit411 - " + SITE + "\n")

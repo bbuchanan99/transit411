@@ -54,7 +54,7 @@ def posts_for(conn, since, until):
         cur.execute("SELECT 1 FROM information_schema.columns WHERE table_name='content_posts' AND column_name='image_url'")
         has_image = bool(cur.fetchone())
         cur.execute("SELECT id, slug, pillar, title, body, source_name, state, publish_at"
-                    + (", image_url" if has_image else "") + " FROM content_posts "
+                    + (", image_url, image_source" if has_image else "") + " FROM content_posts "
                     "WHERE status='published' AND publish_at >= %s AND publish_at < %s "
                     "ORDER BY publish_at DESC, id DESC", (since, until))
         out = []
@@ -63,7 +63,8 @@ def posts_for(conn, since, until):
             summary = (body or "").split("\n\nSource:")[0].strip()
             out.append({"id": pid, "slug": slug, "pillar": pillar or "News", "title": title,
                         "summary": summary, "source": source, "state": state, "publish_at": at,
-                        "image_url": row[8] if has_image and len(row) > 8 else None})
+                        "image_url": row[8] if has_image and len(row) > 8 else None,
+                        "image_source": row[9] if has_image and len(row) > 9 else None})
     return out
 
 
@@ -111,7 +112,10 @@ def assemble(conn, posts, issue_no, dateline, intro=None, lead_id=None):
     def item(p):
         return {"id": p["id"], "title": p["title"], "summary": p["summary"], "pillar": p["pillar"],
                 "source": p.get("source"), "state": p.get("state"), "url": url(p),
-                "image_url": p.get("image_url") or house_image(p["pillar"]),
+                # image_source "none" means the story was published deliberately without a
+                # picture; the newsletter respects that instead of substituting a house graphic.
+                "image_url": None if p.get("image_source") == "none"
+                             else (p.get("image_url") or house_image(p["pillar"])),
                 "image_alt": p["title"]}
     people = [item(p) for p in posts if p["pillar"] == "People"]
     procure = [item(p) for p in posts if p["pillar"] == "Procurement"]
