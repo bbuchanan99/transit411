@@ -58,14 +58,14 @@ const tools = [
     <section class="wrap">
       <div class="empty empty-lead">
         <strong>No stories published yet.</strong>
-        <span>The first funding, procurement, people and policy stories will appear here as they're published. <a href="#newsletter">Subscribe</a> to get them by email.</span>
+        <span>The first funding, procurement, people and policy stories will appear here as they're published. <a href="#newsletter">Get The Wire</a>, our free newsletter, to have them emailed to you.</span>
       </div>
     </section>
   )}
 
   <section class="band">
     <div class="wrap">
-      <div class="band-h">Transit411 Data Tools</div>
+      <div class="band-h">Transit411 Data Tools <span class="band-free">Free to use</span></div>
       <h2 class="disp">Ask American transit's data in plain English</h2>
       <div class="tools">
         {tools.map((t) => (
@@ -106,16 +106,21 @@ const tools = [
       </>
     )}
 
+    {/* The newsletter. Kept well away from the data-tools band at the top of the page, and given
+        an envelope-and-inbox identity of its own, so that signing up never reads as the way to
+        get at Ask NTD and Ask CIG - those are free to use and need no account. */}
     <section id="newsletter" class="newsletter">
-      <div>
-        <h2 class="disp">Transit411 Intelligence</h2>
-        <p>Funding news, procurement notices, and career moves &mdash; straight to your inbox.</p>
+      <div class="nl-copy">
+        <div class="nl-kicker"><span class="nl-env" aria-hidden="true">&#9993;</span> The newsletter <span class="nl-free">Free</span></div>
+        <h2 class="disp">The Wire &mdash; transit news in your inbox</h2>
+        <p>Funding decisions, procurement notices and the people moving between agencies &mdash; emailed to you. Free, and one click to unsubscribe from any issue.</p>
       </div>
       <form id="subscribe-form" data-api={API_BASE}>
         <input type="email" name="email" required placeholder="you@agency.gov" aria-label="Email address" />
-        <button type="submit">Subscribe</button>
+        <button type="submit">Get The Wire</button>
       </form>
       <p class="nl-status" role="status" aria-live="polite"></p>
+      <p class="nl-fine">Signing up is for the newsletter only. Ask NTD and Ask CIG are free to use and need no account.</p>
     </section>
   </div>
 </Base>

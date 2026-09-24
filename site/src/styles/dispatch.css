@@ -86,6 +86,16 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .grid .cell h3{font-size:16px;font-weight:600;line-height:1.3;margin:0}
 
 /* newsletter */
+/* "Free to use" beside the data tools: they are free now, and are not what the newsletter buys. */
+.band-free{display:inline-block;margin-left:8px;background:rgba(238,106,84,.16);border:1px solid #EE6A54;color:#EE6A54;border-radius:999px;padding:2px 9px;font-size:10px;letter-spacing:1px}
+.btn-free{display:inline-block;margin-left:7px;background:rgba(255,255,255,.22);border-radius:999px;padding:1px 7px;font-size:10px;letter-spacing:.5px}
+/* The newsletter block wears an envelope, not a dashboard: it must never read as tool access. */
+.nl-kicker{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:8px;margin:0 0 8px}
+.nl-env{font-size:16px;line-height:1}
+.nl-free{background:var(--accent);color:#fff;border-radius:999px;padding:2px 9px;letter-spacing:1px}
+.nl-copy{max-width:520px}
+.nl-fine{width:100%;font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:10px 0 0}
+
 .newsletter{margin:44px 0;padding:36px 40px;border:3px solid var(--ink);display:flex;align-items:center;justify-content:space-between;gap:28px;flex-wrap:wrap}
 .newsletter h2{font-family:'Archivo',sans-serif;font-size:24px;font-weight:800;letter-spacing:-.5px;margin:0 0 6px}
 .newsletter p{margin:0;color:var(--muted);font-size:14px}

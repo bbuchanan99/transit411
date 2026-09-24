@@ -33,14 +33,14 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
   </div>
   <div class="dateline">
     <span>{today} &middot; Transit411 Intelligence</span>
-    <span><a href="/#newsletter">Subscribe free</a></span>
+    <span><a href="/#newsletter">The Wire &mdash; free newsletter</a></span>
   </div>
   <header class="mast">
     <a href="/" class="brand">TRANSIT<span>411</span></a>
     <nav class="mast-nav">
       {/* CIG Pipeline lives under Data (and in the footer); a top-level item for it was redundant. */}
       {sections.map((s) => <a href={"/" + s.toLowerCase()}>{s}</a>)}
-      <a class="subscribe-btn" href="/#newsletter">Subscribe</a>
+      <a class="subscribe-btn" href="/#newsletter">Get The Wire <span class="btn-free">Free</span></a>
     </nav>
   </header>
   <main>
@@ -50,6 +50,7 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
     <div>
       <div class="brand foot-brand disp">TRANSIT<span>411</span></div>
       <div class="foot-tag">Independent transit funding &amp; talent coverage</div>
+      <div class="foot-tag"><a href="/#newsletter">&#9993; Get The Wire</a> &mdash; our free newsletter.</div>
     </div>
     <nav class="foot-cols">
       <div><span class="foot-h">Sections</span><a href="/news">News</a><a href="/funding">Funding</a><a href="/data">Data</a><a href="/cig">CIG Pipeline</a><a href="/ask-ntd">Ask NTD</a><a href="/ask-cig">Ask CIG</a></div>
