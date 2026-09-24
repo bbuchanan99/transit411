@@ -65,7 +65,7 @@ const tools = [
 
   <section class="band">
     <div class="wrap">
-      <div class="band-h">Transit411 Data Tools <span class="band-free">Free to use</span></div>
+      <div class="band-h">Transit411 Data Tools</div>
       <h2 class="disp">Ask American transit's data in plain English</h2>
       <div class="tools">
         {tools.map((t) => (
@@ -76,7 +76,7 @@ const tools = [
             {/* The whole pill is the link. It carries a real href so it works before the script
                 runs, on middle-click, and from the keyboard; the typing loop keeps that href
                 pointed at whichever question is showing. */}
-            <a class="cell" href={`${t.href}?q=${encodeURIComponent(t.questions[0])}`}
+            <a class="ask-cell" href={`${t.href}?q=${encodeURIComponent(t.questions[0])}`}
                aria-label={t.tag} data-cell={t.id} data-base={t.href}
                data-questions={JSON.stringify(t.questions)}>
               <span class="q" data-q>{t.questions[0]}</span>
@@ -108,7 +108,7 @@ const tools = [
 
     {/* The newsletter. Kept well away from the data-tools band at the top of the page, and given
         an envelope-and-inbox identity of its own, so that signing up never reads as the way to
-        get at Ask NTD and Ask CIG - those are free to use and need no account. */}
+        get at the data tools. */}
     <section id="newsletter" class="newsletter">
       <div class="nl-copy">
         <div class="nl-kicker"><span class="nl-env" aria-hidden="true">&#9993;</span> The newsletter <span class="nl-free">Free</span></div>
@@ -116,11 +116,10 @@ const tools = [
         <p>Funding decisions, procurement notices and the people moving between agencies &mdash; emailed to you. Free, and one click to unsubscribe from any issue.</p>
       </div>
       <form id="subscribe-form" data-api={API_BASE}>
-        <input type="email" name="email" required placeholder="you@agency.gov" aria-label="Email address" />
+        <input type="email" name="email" required placeholder="Your email address" aria-label="Email address" />
         <button type="submit">Get The Wire</button>
       </form>
       <p class="nl-status" role="status" aria-live="polite"></p>
-      <p class="nl-fine">Signing up is for the newsletter only. Ask NTD and Ask CIG are free to use and need no account.</p>
     </section>
   </div>
 </Base>

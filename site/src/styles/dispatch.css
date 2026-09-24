@@ -59,15 +59,15 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 /* The whole pill is the hit target - the Ask button is a visual cue inside it, not a control. */
 /* Tall enough for two lines of the longest question: at card width these wrap, and a pill that
    grew and shrank on every keystroke made the whole band twitch. */
-.cell{background:#F7F4ED;border:2px solid transparent;border-radius:9px;padding:13px 15px;display:flex;align-items:center;gap:10px;min-height:70px;cursor:pointer;text-decoration:none;margin-top:auto;transition:border-color .15s,transform .15s,box-shadow .15s}
-.cell:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.28)}
-.cell:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(238,106,84,.4)}
-.cell .q{font-family:'JetBrains Mono',monospace;font-size:13.5px;color:#17140F;line-height:1.35}
-.cell .caret{display:inline-block;width:2px;height:16px;background:var(--accent);margin-left:1px;vertical-align:middle;animation:blink 1s step-end infinite}
+.ask-cell{background:#F7F4ED;border:2px solid transparent;border-radius:9px;padding:13px 15px;display:flex;align-items:center;gap:10px;min-height:70px;cursor:pointer;text-decoration:none;margin-top:auto;transition:border-color .15s,transform .15s,box-shadow .15s}
+.ask-cell:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.28)}
+.ask-cell:focus-visible{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(238,106,84,.4)}
+.ask-cell .q{font-family:'JetBrains Mono',monospace;font-size:13.5px;color:#17140F;line-height:1.35}
+.ask-cell .caret{display:inline-block;width:2px;height:16px;background:var(--accent);margin-left:1px;vertical-align:middle;animation:blink 1s step-end infinite}
 @keyframes blink{50%{opacity:0}}
-.cell .go{margin-left:auto;flex-shrink:0;background:var(--accent);color:#fff;font-family:'Archivo',sans-serif;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-radius:7px;padding:9px 15px;transition:background .15s}
-.cell:hover .go{background:#8F2415}
-@media (prefers-reduced-motion:reduce){.cell .caret{animation:none}}
+.ask-cell .go{margin-left:auto;flex-shrink:0;background:var(--accent);color:#fff;font-family:'Archivo',sans-serif;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-radius:7px;padding:9px 15px;transition:background .15s}
+.ask-cell:hover .go{background:#8F2415}
+@media (prefers-reduced-motion:reduce){.ask-cell .caret{animation:none}}
 @media (max-width:720px){.tools{grid-template-columns:1fr}.band h2{font-size:24px}}
 
 .stats{display:flex;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -79,9 +79,18 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 
 /* wire grid */
 .section-h{font-family:'Archivo',sans-serif;font-size:20px;font-weight:800;border-bottom:2px solid var(--ink);padding-bottom:10px;margin:44px 0 0}
-.grid{display:flex;flex-wrap:wrap}
-.grid .cell{flex:1;min-width:220px;padding:20px 24px 20px 0;border-right:1px solid var(--line)}
-.grid .cell:last-child{border-right:none;padding-right:0}
+/* grid-auto-rows:1fr so every box is the same height, not sized by its own headline. */
+.grid{display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:1fr;gap:0}
+.grid .cell{padding:20px 24px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.grid .cell:nth-child(4n){border-right:none;padding-right:0}
+.grid .cell:nth-child(4n+1){padding-left:0}
+@media (max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}
+  .grid .cell:nth-child(4n){border-right:1px solid var(--line);padding-right:24px}
+  .grid .cell:nth-child(4n+1){padding-left:24px}
+  .grid .cell:nth-child(2n){border-right:none;padding-right:0}
+  .grid .cell:nth-child(2n+1){padding-left:0}}
+@media (max-width:560px){.grid{grid-template-columns:1fr}
+  .grid .cell{border-right:none !important;padding:16px 0 !important}}
 .grid .cell .k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
 .grid .cell h3{font-size:16px;font-weight:600;line-height:1.3;margin:0}
 
