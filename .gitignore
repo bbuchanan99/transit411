@@ -22,3 +22,7 @@ Thumbs.db
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Claude Code: the launch config is shared (it starts the site preview); local
+# permission state is not.
+.claude/settings.local.json
