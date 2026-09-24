@@ -368,8 +368,13 @@
     const cols = res.columns || [];
     const rows = (res.rows || []).map(r => Array.isArray(r) ? Object.fromEntries(cols.map((c, i) => [c, r[i]])) : r);
     const kinds = Object.fromEntries(cols.map(c => [c, colKind(c, rows)]));
-    const head = '<div class="t411-ask-head">' + (opts.followUp ? '<span class="t411-ask-fu">Follow-up</span>' : "")
-      + esc(res.question) + ' <span class="t411-ask-n">' + rows.length + (rows.length === 1 ? " row" : " rows") + '</span></div>';
+    // In a thread the question is already on screen above the answer, so repeating it in the
+    // answer's own header just says it twice. "bare" keeps the row count and drops the echo.
+    const count = '<span class="t411-ask-n">' + rows.length + (rows.length === 1 ? " row" : " rows") + "</span>";
+    const head = opts.bare
+      ? '<div class="t411-ask-head t411-ask-bare">' + count + "</div>"
+      : '<div class="t411-ask-head">' + (opts.followUp ? '<span class="t411-ask-fu">Follow-up</span>' : "")
+        + esc(res.question) + " " + count + "</div>";
     const table = rows.length
       ? '<div class="t411-scroll"><table class="t411-table"><thead><tr>' + cols.map(c => '<th class="' + (kinds[c] === "text" ? "" : "num") + '" title="' + esc(c) + '">' + esc(colLabel(c)) + '</th>').join("")
         + '</tr></thead><tbody>' + rows.map(r => '<tr>' + cols.map(c => '<td class="' + (kinds[c] === "text" ? "" : "num") + '">' + esc(fmtCell(r[c], kinds[c])) + '</td>').join("") + '</tr>').join("")
@@ -1001,7 +1006,9 @@
   }
   async function exportCardPng(spec, opts, fontBase) {
     const scale = (opts && opts.scale) || 2;
-    const size = CARD_SIZES[(opts && opts.aspect) === "landscape" ? "landscape" : "portrait"];
+    // The card's MEASURED size, not the preset - a 40-row card is 2706px tall, and sizing the
+    // canvas from the preset squashed all of it into 850px. One tall image, everything in it.
+    const size = cardSize(spec, Object.assign({}, CARD_DEFAULTS, opts || {}));
     let svg = renderCardSvg(spec, opts);
     const css = fontBase ? await cardFonts(fontBase) : "";
     if (css) svg = svg.replace("><", "><style>" + css + "</style><");

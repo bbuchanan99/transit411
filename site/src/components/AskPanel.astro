@@ -1,31 +1,36 @@
 ---
-// Plain-English question box over the public API (Ask NTD / Ask CIG). Mirrors the Command Center:
-// answers show as a table with the generated SQL; follow-ups ("what about Texas?") refine the previous
-// question until "New question". Answers are drawn by the shared bundle (T411.askCardHtml), so the page
-// that uses this must load /vendor/t411.js + /vendor/t411.css.
+// Plain-English question box over the public API (Ask NTD / Ask CIG), as a conversation.
+//
+// Questions and answers stack oldest-first, newest at the bottom, with a persistent "Ask a
+// follow-up..." box under them. Follow-ups have always refined the previous query via the history
+// the API is sent; the thread is what makes that visible, instead of a one-shot box that looked
+// like it forgot everything between questions.
+//
+// Answers are drawn by the shared bundle (T411.askCardHtml), so the page that uses this must load
+// /vendor/t411.js + /vendor/t411.css.
 import { API_BASE } from "../lib/content.js";
 const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask NTD", source = "" } = Astro.props;
 ---
 <div class="ask" data-api={API_BASE} data-endpoint={endpoint} data-tool={tool} data-source={source}>
+  <div class="ask-thread" role="log" aria-live="polite" aria-label={`${tool} conversation`}></div>
+
+  <div class="ask-examples" data-examples>
+    <span class="ask-ex-h">Try:</span>
+    {examples.map((q) => <button type="button" class="ask-ex" data-q={q}>{q}</button>)}
+  </div>
+
   <form class="ask-form">
-    <label class="ask-label" for="ask-q">Your question</label>
+    <label class="ask-label" for="ask-q" data-label>Your question</label>
     <div class="ask-row">
       <input id="ask-q" type="text" name="q" maxlength="500" autocomplete="off" placeholder={placeholder} />
       <button type="submit" class="ask-go">Ask</button>
     </div>
+    <div class="ask-under">
+      <span class="ask-status" role="status" aria-live="polite"></span>
+      <button type="button" class="ask-new" hidden>Start over</button>
+    </div>
   </form>
-  <div class="ask-bar">
-    <div class="ask-examples">
-      <span class="ask-ex-h">Try:</span>
-      {examples.map((q) => <button type="button" class="ask-ex" data-q={q}>{q}</button>)}
-    </div>
-    <div class="ask-thread-ctl" hidden>
-      <span>Follow-ups build on your last question.</span>
-      <button type="button" class="ask-new">New question</button>
-    </div>
-  </div>
-  <div class="ask-status" role="status" aria-live="polite"></div>
-  <div class="ask-out"></div>
+
   <p class="ask-fine">
     Free to use, no account needed. Each question is turned into a read-only database query by AI and run
     against the data &mdash; every answer carries a &ldquo;How was this calculated?&rdquo; toggle showing
@@ -37,34 +42,59 @@ const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask 
   const root = document.querySelector(".ask");
   const api = root.dataset.api, endpoint = root.dataset.endpoint, tool = root.dataset.tool;
   const source = root.dataset.source || "";
-  const input = root.querySelector("#ask-q"), out = root.querySelector(".ask-out");
-  const status = root.querySelector(".ask-status"), ctl = root.querySelector(".ask-thread-ctl");
+  const input = root.querySelector("#ask-q");
+  const thread = root.querySelector(".ask-thread");
+  const status = root.querySelector(".ask-status");
   const go = root.querySelector(".ask-go");
-  let thread = [];  // [{question, sql}] sent as history so follow-ups refine the last query
-  let answers = []; // the full result behind each rendered answer, for the data card
+  const label = root.querySelector("[data-label]");
+  const examples = root.querySelector("[data-examples]");
+  const startOver = root.querySelector(".ask-new");
+
+  let history = [];   // [{question, sql}] sent to the API so a follow-up refines the last query
+  let answers = [];   // the full result behind each answer, for its data card
+
+  function setStatus(text, isError) {
+    status.textContent = text || "";
+    status.classList.toggle("err", !!isError);
+  }
+
+  // Once there is a conversation, the box asks for the next turn rather than the first one.
+  function reflectThread() {
+    const live = history.length > 0;
+    label.textContent = live ? "Ask a follow-up" : "Your question";
+    input.placeholder = live ? "Ask a follow-up — it builds on your last question…" : input.dataset.first;
+    startOver.hidden = !live;
+    examples.hidden = live;
+  }
+
+  function addTurn(question, isFollowUp) {
+    const el = document.createElement("div");
+    el.className = "ask-turn";
+    el.innerHTML = '<div class="ask-q">' + (isFollowUp ? '<span class="ask-fu">Follow-up</span>' : "")
+      + '<span class="ask-q-t"></span></div><div class="ask-a"></div>';
+    el.querySelector(".ask-q-t").textContent = question;   // never innerHTML: this is user input
+    thread.appendChild(el);
+    return el.querySelector(".ask-a");
+  }
 
   // Any answer can become a branded, shareable card. The card type is chosen from the shape of the
   // result, so the button says the same thing on every answer and the reader never picks a format.
-  function addCardButton(res) {
-    const card = out.firstElementChild;   // answers are prepended, so the newest is first
-    if (!card) return;
+  function addCardButton(slot, res) {
     const i = answers.push(res) - 1;
     const bar = document.createElement("div");
     bar.className = "ask-dc-bar";
     bar.innerHTML = '<button type="button" class="t411-btn" data-datacard="' + i + '">Make a data card</button>';
     const host = document.createElement("div");
     host.className = "ask-dc-host";
-    card.append(bar, host);
+    slot.append(bar, host);
   }
 
-  function clearAnswers() {
-    out.innerHTML = "";
-    answers = [];
-  }
-
-  function setStatus(text, isError) {
-    status.textContent = text || "";
-    status.classList.toggle("err", !!isError);
+  function fail(slot, message) {
+    slot.innerHTML = "";
+    const d = document.createElement("div");
+    d.className = "ask-err";
+    d.textContent = message;
+    slot.append(d);
   }
 
   async function ask(q) {
@@ -72,35 +102,42 @@ const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask 
     if (!q) return;
     const T411 = window.T411;
     if (!T411) { setStatus("The answer viewer didn't load. Please refresh the page.", true); return; }
+    const isFollowUp = history.length > 0;
+    const slot = addTurn(q, isFollowUp);
+    slot.innerHTML = '<div class="ask-wait">'
+      + (isFollowUp ? "Working on your follow-up…" : "Working on it — this usually takes a few seconds…")
+      + "</div>";
+    slot.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    input.value = "";
     go.disabled = true;
-    setStatus(thread.length ? "Working on your follow-up..." : "Working on it — this usually takes a few seconds...");
+    setStatus("");
     try {
       const r = await fetch(api + endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, history: thread.slice(-6) }),
+        body: JSON.stringify({ question: q, history: history.slice(-6) }),
       });
       const text = await r.text();
-      if (!r.ok) { setStatus(T411.errorText(text, r.status), true); return; }
+      if (!r.ok) { fail(slot, T411.errorText(text, r.status)); return; }
       const res = JSON.parse(text);
-      out.insertAdjacentHTML("afterbegin", T411.askCardHtml(res, { followUp: thread.length > 0, source }));
-      addCardButton(res);
-      thread.push({ question: res.question || q, sql: res.sql || "" });
-      ctl.hidden = false;
-      input.value = "";
-      setStatus("");
+      slot.innerHTML = T411.askCardHtml(res, { source, bare: true });
+      addCardButton(slot, res);
+      history.push({ question: res.question || q, sql: res.sql || "" });
+      reflectThread();
     } catch (e) {
-      setStatus("Couldn't reach the Transit411 data service. Please try again in a moment.", true);
+      fail(slot, "Couldn't reach the Transit411 data service. Please try again in a moment.");
     } finally {
       go.disabled = false;
       input.focus();
     }
   }
 
+  input.dataset.first = input.placeholder;
   root.querySelector(".ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask(input.value); });
 
-  // ?q=... (e.g. from an article's Explore module) fills the box. It is NOT run automatically: the
-  // reader presses Ask, so no question — and no model call — happens without them asking for it.
+  // ?q=... (e.g. from the homepage data-tools band or an article's Explore module) fills the box.
+  // It is NOT run automatically: the reader presses Ask, so no question — and no model call —
+  // happens without them asking for it.
   const preset = new URLSearchParams(location.search).get("q");
   if (preset) {
     input.value = preset.slice(0, 500);
@@ -108,17 +145,23 @@ const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask 
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   }
+
   root.querySelectorAll(".ask-ex").forEach((b) => b.addEventListener("click", () => {
-    thread = []; clearAnswers(); ctl.hidden = true;  // an example starts a fresh question
-    input.value = b.dataset.q; ask(b.dataset.q);
+    input.value = b.dataset.q;
+    ask(b.dataset.q);
   }));
-  root.querySelector(".ask-new").addEventListener("click", () => {
-    thread = []; clearAnswers(); ctl.hidden = true; setStatus(""); input.value = ""; input.focus();
+
+  startOver.addEventListener("click", () => {
+    history = []; answers = [];
+    thread.innerHTML = "";
+    setStatus(""); input.value = "";
+    reflectThread();
+    input.focus();
   });
 
   // Show/hide the card for one answer. The card, its toggles and its three exports are all drawn
   // by the shared bundle, so this page and the Command Center produce byte-identical cards.
-  out.addEventListener("click", (e) => {
+  thread.addEventListener("click", (e) => {
     const b = e.target.closest("[data-datacard]");
     if (!b) return;
     const res = answers[+b.dataset.datacard];
@@ -128,4 +171,6 @@ const { endpoint, examples = [], placeholder = "Ask a question...", tool = "Ask 
     b.textContent = "Hide the data card";
     window.T411.renderDataCard(host, res, { tool, fontBase: "/vendor/fonts", id: "ask-card-" + b.dataset.datacard });
   });
+
+  reflectThread();
 </script>
