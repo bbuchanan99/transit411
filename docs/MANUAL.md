@@ -64,7 +64,7 @@ The guiding principle: **the public site is a thin reader of an engine that alre
   - **Explore module** (built at build time; no model calls, no client-side fetching): related coverage (internal links scored by shared agency/program/pillar/state), the story's agency in the CIG pipeline (matched through `agencies.json` aliases), "go deeper" links to `/cig?agency=…` and to Ask NTD / Ask CIG with a prefilled `?q=`, and reference links from the agency table. Each layer appears only when it has content.
   - **Ask pages** fill the box from `?q=` but never run it — the reader presses Ask, so no model call happens without them.
 - **Content lifecycle** — nothing falls off the site by itself. A published post stays published (and keeps its `/article/<slug>` URL) until it is unpublished by hand; a *featured* placement expires at `featured_until`, which drops the flag, not the post.
-  - **Homepage** is a 12-slot shop window: a lead, 3 in "Also this week", 8 in the wire grid. Older stories simply move out of those slots.
+  - **Homepage** is a 12-slot shop window: a lead, 3 in "Also worth reading", 8 in the wire grid. Older stories simply move out of those slots.
   - **Section pages paginate** at 20 a page (`/news`, `/news/2`, …), each pre-rendered with prev/next links, so the archive stays browsable and crawlable however large it grows.
   - **`/api/posts` is paged** (`limit`, max 500, and `offset`; the reply carries `total` and `has_more`). The site walks every page at build time — without that, only the newest 200 posts would exist and older article pages would silently stop being generated, turning live URLs into 404s.
 - **Images** — every post can carry a picture, and nothing from a source is published without review.
@@ -167,13 +167,26 @@ captured from now.
 
 ### 3.7 Public site (Astro)
 - **`/site`** — an **Astro** static site deploying to **Cloudflare Pages**. Design is **"Dispatch"** (bold editorial newspaper: near-black + red, Archivo + Spectral).
-- Pages: homepage (`index.astro`), section pages (`[section].astro` → News/Funding/Procurement/People/Policy), a **Data hub** (`data.astro`).
-- **`src/lib/content.js`** — central content source. At **build time** it fetches published posts from `${PUBLIC_API_BASE}/api/posts` and the CIG summary from `/api/cig` (`PUBLIC_API_BASE` defaults to `https://api.transit411.net`; see `site/.env.example`). The homepage shows the lead story, "Also this week" and the wire, plus live CIG figures; section pages filter by pillar. Headlines link to the original source (no article pages yet). If the API is down or slow (8 s timeout) the build still succeeds and pages show a "no stories yet" state.
+- Pages: homepage (`index.astro`), paged section pages (`[section]/[...page].astro` → News/Funding/Procurement/People/Policy, 20 per page), **article pages** (`article/[slug].astro`, one per published post), a **Data hub** (`data.astro`), **Ask NTD** / **Ask CIG** (`ask-ntd.astro`, `ask-cig.astro`), the **CIG pipeline** (`cig.astro`), and About / Contact / Advertise / Privacy / 404.
+- **Top nav:** News, Funding, Procurement, People, Policy, Data, Subscribe. **CIG Pipeline is deliberately not there** — it lives under Data and in the footer; a top-level item for it was redundant.
+- **No cadence is promised anywhere.** The newsletter is **"Transit411 Intelligence"**, not "Weekly Intelligence", and nothing says "every Thursday" or "each week" — on the site, in the subscribe copy or in the confirmation email. (The `weekly` CIG-profile check is an internal cron and keeps its name.)
+- **Homepage:** the lead story with "Also worth reading", then the **data-tools band** (§3.7a), then the wire and the signup panel.
+- **`src/lib/content.js`** — central content source. At **build time** it fetches published posts from `${PUBLIC_API_BASE}/api/posts` (**paged**, 200 at a time, so the archive can outgrow one page without article pages silently disappearing) plus `/api/agencies` and `/api/cig` (`PUBLIC_API_BASE` defaults to `https://api.transit411.net`; see `site/.env.example`). Headlines link to the article page; the article links out to the source. If the API is down or slow (8 s timeout) the build still succeeds and pages show a "no stories yet" state.
+
+### 3.7a Homepage data-tools band
+- A deliberately **dark band directly under the lead story**, replacing the old CIG stat band — three numbers describing the pipeline gave way to showing what you can *ask* it. Mock: `docs/data-tools-band-mock.html`.
+- Two cards (stacking on mobile), Ask NTD and Ask CIG. Each has a search "cell" that **types its example questions on a loop** — ~85ms/char, 2.2s hold, 38ms/char erase, the two staggered ~900ms so they don't move in lockstep. Vanilla JS, no library.
+- **The whole pill is the link**, carrying a real `href` (not `href="#"` plus a click handler), so it works before the script runs, on middle-click, and from the keyboard with a visible focus ring. The typing loop keeps that href pointed at the question on screen: `/ask-ntd?q=…` / `/ask-cig?q=…`, URL-encoded, which the Ask pages read and pre-fill. A click mid-word sends the **whole** current question, not the prefix typed so far — a half-question pre-filled on the Ask page is of no use.
+- Two things worth knowing if you restyle it: its colours are **literal, not tokens**, because the site has a dark mode where `--ink` flips to near-white and `background:var(--ink)` would turn the band light-on-light; and the cell has a **70px floor** (the two-line height) because at card width the questions wrap, and a pill that grew and shrank per keystroke made the band twitch. It also honours `prefers-reduced-motion` — first question, static, no blink.
 - **Static output:** newly published posts appear on the site after the **next Pages build** (a push, a manual redeploy, or a Pages deploy hook). `site/.nvmrc` pins Node 22 for the build.
 - Lives at **`transit411.pages.dev`** (domain stays dark until launch).
 
 ### 3.8 Read-only public API + Cloudflare Tunnel
-- **`readonly_api.py`** — the ONLY service the tunnel exposes. It **allowlists** exactly the safe endpoints (`GET /api/posts`, `GET /api/cig`, `GET /api/cig/history`, `GET /api/cig/changes`, `GET /api/cig/profile`, `POST /api/ask`, `POST /api/cig/ask`) and forwards them to the Command Center; **everything else returns 404.** CORS restricts browser calls to the Transit411 site (`transit411.pages.dev`, `transit411.net`, `transit411.com` and their subdomains).
+- **`readonly_api.py`** — the ONLY service the tunnel exposes. It **allowlists** exactly the safe endpoints and forwards them to the Command Center; **everything else returns 404** — including `/api/usage/*`, `/api/collection/*` and every other private path.
+  - Reads: `GET /api/posts`, `GET /api/posts/<slug>` (pattern-restricted), `GET /api/cig`, `/api/cig/history`, `/api/cig/changes`, `/api/cig/profile`, `GET /api/agencies`.
+  - Model-backed: `POST /api/ask`, `POST /api/cig/ask`.
+  - Email: `POST /api/subscribe` (**the only public write**), `GET /confirm`, `GET`+`POST /unsubscribe`, `POST /api/email/sns`.
+  - It also stamps `x-t411-surface: public` on what it proxies, so usage can be counted separately from the Command Center. The header is set here and never read from the caller. CORS restricts browser calls to the Transit411 site (`transit411.pages.dev`, `transit411.net`, `transit411.com` and their subdomains).
   - The two ask endpoints each cost an Anthropic call, so they are **rate-limited**: `ASK_PER_IP_HOUR` per visitor (default 20, by Cloudflare's visitor-IP header), `ASK_PER_DAY` in total (default 200), questions up to `ASK_MAX_CHARS` (500), requests up to 16 KB. `PUBLIC_ASK_ENABLED=false` turns them off. Counts are in memory and reset when the container restarts.
 - **`cloudflared`** — the tunnel container. Dials out to Cloudflare (no open router ports). Public hostname **`api.transit411.net`** → `http://readonly-api:8000`. It sits on its own `public` Docker network with `readonly-api` only, so a misconfigured hostname in the Cloudflare dashboard can't reach the Command Center, the database or the NTD API. The token is passed as the `TUNNEL_TOKEN` environment variable (not on the command line).
 - **Data path:** internet → Cloudflare → tunnel → `readonly-api` (6 safe endpoints) → Command Center. No path from the public to any write/admin action.
@@ -334,6 +347,14 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - **Mode filter** on `/cig` (chips with counts) and the Grants tab (a dropdown), combinable with the phase filter. "Unspecified" is its own option; `/api/cig?mode=Unspecified` returns projects with no FTA-stated mode, and the summary carries `by_mode`. ✅
 - **Sources tab**: the collector's registry as a control panel (add/edit/delete/enable feeds and keyword searches, Test, per-source health); changes apply to the next run. ✅
 - **Publish all** on the Publish tab: shown when 2+ items are ready. After a confirm with the count, it publishes exactly the items on screen (anything approved after the page loaded waits) in one transaction via `POST /api/publish-all`, with a single site rebuild. ✅
+- **Data cards** (§3.6a): any Ask NTD / Ask CIG answer becomes a branded card — format chosen from the data, four types, PNG / PDF / Excel-CSV, in the Command Center and on both public Ask pages. ✅
+- **AI "Recommend to publish"** (§3.3a): on-demand editorial triage of the review queue — score, reason, action and flags per item, a balanced publish set and a suggested lead, ~$0.17 a run. **Advisory only.** The suggested set is selectable with Approve/Skip and Undo. ✅
+- **Local embeddings** (`embed` service): all-MiniLM-L6-v2 on the NAS filling the pgvector columns, for semantic duplicate detection. No API key, no per-item cost, nothing leaves the NAS. ✅
+- **Full-text second pass**: the best readable items are fetched and re-scored on their own text (used and discarded, never stored). ~82% of the queue is Google News redirects and cannot be read — more direct publisher feeds is the fix. ⬜
+- **Monetization plumbing** (§3.6b): `entitlements.py` wired into both Ask endpoints but **inert**, `usage_events` capturing every question and signup, and a private **Usage** view. Zero user-visible change. ✅
+- **Pictures**: three outcomes at publish time — a chosen picture, the pillar house graphic, or **no picture at all** (§3.3b). ✅
+- **Homepage data-tools band** (§3.7a) replacing the CIG stat band; **CIG Pipeline removed from the top nav**; **no publishing cadence promised anywhere**. ✅
+- **First real content live: 20 posts published** (10 on 2026-09-24). ✅
 
 **Pending / next:**
 - Refresh the profile PDFs as projects enter Engineering, since their profiles then state a mode (fewer Unspecified).
@@ -357,7 +378,7 @@ The public site uses `PUBLIC_API_BASE` (e.g. `https://api.transit411.net`) — s
 - **Ask NTD revenue subsite** — `ask.transit411.*` with freemium tiers, API/bulk data access, branded reports.
 - **"Ask ___" brand family** — Ask NTD, Ask Transit, room to expand.
 - **Marketplace** — paid job/procurement postings; paid featured People placements.
-- **Newsletter** — the retention engine (weekly intelligence).
+- **Newsletter** — the retention engine (Transit411 Intelligence; no cadence is promised publicly yet).
 - **Launch** — point `transit411.net` root → Pages, drop any access gate, go public.
 
 ---
