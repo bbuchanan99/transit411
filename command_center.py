@@ -2296,6 +2296,113 @@ USAGE_THEMES = [
 ]
 
 
+# ---- Image & logo library (private): review candidates before anything reaches the site --------
+# Nothing here is on the read-only allowlist. Approving is a licence and trademark judgement, so
+# it happens on the LAN, by a human, with the provenance on screen.
+
+def _ensure_library(cur):
+    import image_library as L
+    L.schema(cur)
+
+
+@app.get("/api/images/library")
+def images_library(kind: str = "logo", status: str = "candidate", q: Optional[str] = None,
+                   limit: int = 200):
+    """Library assets with their full provenance. Provenance is never optional in the response:
+    the reviewer must see the licence and the credit next to the Approve button."""
+    limit = max(1, min(limit, 500))
+    where, params = ["kind=%s"], [kind]
+    if status and status != "all":
+        where.append("status=%s"); params.append(status)
+    if q:
+        where.append("(coalesce(agency,'') ILIKE %s OR array_to_string(topic_tags,' ') ILIKE %s "
+                     "OR coalesce(notes,'') ILIKE %s)")
+        params += ["%" + q + "%"] * 3
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            c.commit()
+            cur.execute(
+                "SELECT id, kind, agency, topic_tags, url, file_path, width, height, source, "
+                "source_url, license, attribution, fetched_at, status, notes "
+                f"FROM image_library WHERE {' AND '.join(where)} "
+                "ORDER BY status, lower(coalesce(agency,'')), id LIMIT %s", params + [limit])
+            names = [d[0] for d in cur.description]
+            items = []
+            for row in cur.fetchall():
+                it = dict(zip(names, row))
+                it["topic_tags"] = it.get("topic_tags") or []
+                it["fetched_at"] = it["fetched_at"].isoformat() if it.get("fetched_at") else None
+                # The licence class the fetcher worked out, pulled to the front of the row.
+                note = it.get("notes") or ""
+                it["license_class"] = note.split(" | ")[0] if note[:9] in ("free | ", "non-free ", "unclear |") else None
+                items.append(it)
+            cur.execute("SELECT status, count(*) FROM image_library WHERE kind=%s GROUP BY 1", (kind,))
+            counts = {k: v for k, v in cur.fetchall()}
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"items": items, "counts": counts, "kind": kind}
+
+
+class ImageReview(BaseModel):
+    note: Optional[str] = None
+
+
+@app.post("/api/images/library/{image_id}/{action}")
+def images_review(image_id: int, action: str, body: Optional[ImageReview] = None):
+    """approve | reject | reset. Approving a logo makes it that agency's logo."""
+    import image_library as L
+    mapping = {"approve": "approved", "reject": "rejected", "reset": "candidate"}
+    if action not in mapping:
+        raise HTTPException(400, "unknown action")
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            out = L.set_status(cur, image_id, mapping[action])
+            if not out:
+                raise HTTPException(404, "no such image")
+            if body and body.note:
+                cur.execute("UPDATE image_library SET notes = coalesce(notes,'') || %s WHERE id=%s",
+                            (" | reviewer: " + body.note[:200], image_id))
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return out
+
+
+@app.get("/api/images/coverage")
+def images_coverage():
+    """Which agencies have a logo, which have one waiting, which have none."""
+    import image_library as L
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            c.commit()
+            cov = L.coverage(cur)
+            cov["stats"] = L.stats(cur)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return cov
+
+
+@app.get("/api/images/recommend/{post_id}")
+def images_recommend(post_id: int):
+    """What the library would suggest for one post. Advisory; changes nothing."""
+    import image_recommend as R
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            c.commit()
+            out = R.for_post(cur, post_id)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if out is None:
+        raise HTTPException(404, "no such post")
+    return out
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return DASHBOARD
@@ -2572,6 +2679,14 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
         <button class="newq" id="uRefresh" type="button">Refresh</button></div></div>
     <div id="uOut"></div>
   </div>
+  <div class="panel" id="p-imglib">
+    <div class="askhead"><div><h2 class="disp">Image library</h2><p class="lead">Agency logos from Wikimedia and topic photos from Unsplash/Pexels, each stored with the licence and the credit it requires. <b>Nothing here reaches the public site until you approve it</b> &mdash; a logo is a trademark and a stock photo is a licence agreement, and both are your call.</p></div>
+      <button class="newq" id="ilRefresh" type="button">Refresh</button></div>
+    <div class="examples" id="ilKinds"></div>
+    <div class="examples" id="ilStatus"></div>
+    <div id="ilCoverage"></div>
+    <div id="ilOut"></div>
+  </div>
   <div class="panel" id="p-newsletter">
     <div class="askhead"><div><h2 class="disp">Newsletter</h2><p class="lead">Draft an issue from what you've published, edit it, preview it, send yourself a test &mdash; then send it to confirmed subscribers. Every headline links to its article page on the site, and each recipient gets their own unsubscribe link.</p></div>
       <div style="display:flex;gap:8px"><button class="newq" id="nDraft" type="button">Draft issue</button><button class="newq" id="nRefresh" type="button">Refresh</button></div></div>
@@ -2675,7 +2790,7 @@ const WORKSPACES = {
   "web-content": {title:"Web Content", sub:"Gather, review and publish the news feed behind the public site.",
     desc:"Gather, review, and publish the news feed that populates the public site.",
     icon:'<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
-    tools:[["sources","Sources","p-sources"],["collection","Collection","p-collect"],["publish","Publish","p-publish"],["images","Images","p-images"]]},
+    tools:[["sources","Sources","p-sources"],["collection","Collection","p-collect"],["publish","Publish","p-publish"],["images","Images","p-images"],["library","Image library","p-imglib"]]},
   "publications": {title:"Publications", sub:"Compose and send The Wire; reports and the annual snapshot.",
     desc:"Compose and send The Wire; produce reports and the annual snapshot.",
     icon:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
@@ -2733,6 +2848,7 @@ function onToolOpen(tool, panel){
   try{
     if(panel==="p-collect"){loadFacets();loadCollection();loadReco();}
   if(panel==="p-usage")loadUsage();
+  if(panel==="p-imglib")loadLibrary();
     else if(panel==="p-sources")loadSources();
     else if(panel==="p-publish")loadPublish();
     else if(panel==="p-contacts")loadContacts();
@@ -3227,6 +3343,94 @@ async function loadUsage(){
 }
 document.getElementById("uRefresh").onclick=loadUsage;
 document.getElementById("uDays").onchange=loadUsage;
+
+// ---- Image library review: provenance on screen, approval by hand ----
+let ilKind="logo", ilStatus="candidate";
+const IL_CLASS={"free":["#4FA96B","Licence looks free"],
+  "non-free":["#C0341F","NOT free - fair-use on Wikipedia only"],
+  "unclear":["#C99A3A","Licence unclear - read the file page"]};
+
+function ilChips(){
+  const kinds=document.getElementById("ilKinds"),stat=document.getElementById("ilStatus");
+  kinds.innerHTML="";stat.innerHTML="";
+  [["logo","Agency logos"],["stock","Topic photos"]].forEach(([k,label])=>{
+    const b=document.createElement("button");b.className="ex";b.textContent=label;
+    if(k===ilKind)b.style.borderColor="var(--accent)";
+    b.onclick=()=>{ilKind=k;loadLibrary();};kinds.appendChild(b);});
+  [["candidate","Awaiting review"],["approved","Approved"],["rejected","Rejected"],["all","All"]].forEach(([k,label])=>{
+    const b=document.createElement("button");b.className="ex";b.textContent=label;
+    if(k===ilStatus)b.style.borderColor="var(--accent)";
+    b.onclick=()=>{ilStatus=k;loadLibrary();};stat.appendChild(b);});
+}
+
+function ilCard(it){
+  const cls=IL_CLASS[it.license_class]||null;
+  const warn=cls?'<span style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:'+cls[0]+';border:1px solid '+cls[0]+';border-radius:999px;padding:2px 9px">'+esc(cls[1])+'</span>':"";
+  const who=it.agency?esc(it.agency):esc((it.topic_tags||[]).join(", ")||"untagged");
+  const acted=it.status!=="candidate";
+  return '<div class="rcard" style="padding:14px 16px;display:flex;gap:16px;align-items:flex-start">'
+    +'<div style="flex:none;width:170px;height:104px;background:var(--panel);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden">'
+      +(safeUrl(it.url)?'<img src="'+esc(safeUrl(it.url))+'" alt="" style="max-width:100%;max-height:100%;object-fit:contain" loading="lazy">':'<span style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted)">no preview</span>')
+    +'</div><div style="flex:1;min-width:0">'
+    +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+      +'<b style="font-family:Archivo,sans-serif;font-size:15px">'+who+'</b>'+warn
+      +(acted?'<span style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">'+esc(it.status)+'</span>':'')
+      +'</div>'
+    // Provenance, always visible. This is the whole point of the screen.
+    +'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);line-height:1.6">'
+      +'<div><b style="color:var(--ink)">Licence</b> &middot; '+esc(it.license||"(none recorded)")+'</div>'
+      +'<div><b style="color:var(--ink)">Credit</b> &middot; '+esc(it.attribution||"(none recorded)")+'</div>'
+      +'<div><b style="color:var(--ink)">From</b> &middot; '+esc(it.source)+' &middot; <a href="'+esc(safeUrl(it.source_url)||"#")+'" target="_blank" rel="noopener noreferrer">the file page</a>'
+      +(it.width?' &middot; '+esc(it.width+"x"+it.height):'')+'</div>'
+      +(it.notes?'<div style="margin-top:4px">'+esc(it.notes)+'</div>':'')
+    +'</div>'
+    +'<div style="display:flex;gap:8px;margin-top:10px">'
+      +(acted?'<button class="ex" data-il="reset" data-id="'+it.id+'">Undo</button>'
+             :'<button class="go" style="padding:8px 16px" data-il="approve" data-id="'+it.id+'">Approve</button>'
+              +'<button class="ex" data-il="reject" data-id="'+it.id+'">Reject</button>')
+    +'</div></div></div>';
+}
+
+async function loadLibrary(){
+  ilChips();
+  const out=document.getElementById("ilOut");
+  out.innerHTML='<div class="rcard"><div class="loading">Loading the library...</div></div>';
+  try{
+    const r=await fetch("/api/images/library?kind="+encodeURIComponent(ilKind)+"&status="+encodeURIComponent(ilStatus));
+    if(!r.ok){out.innerHTML='<div class="rcard"><div class="err">'+esc(errText(await r.text()))+'</div></div>';return;}
+    const d=await r.json();
+    const c=d.counts||{};
+    const head='<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:0 0 12px">'
+      +esc(String(c.candidate||0))+' awaiting review &middot; '+esc(String(c.approved||0))+' approved &middot; '
+      +esc(String(c.rejected||0))+' rejected</div>';
+    out.innerHTML=head+((d.items||[]).length?d.items.map(ilCard).join("")
+      :'<div class="rcard"><div class="loading">Nothing here. Populate with: docker compose run --rm images-lib logos.py --fetch</div></div>');
+  }catch(e){out.innerHTML='<div class="rcard"><div class="err">Could not reach the library.</div></div>';}
+  loadCoverage();
+}
+
+async function loadCoverage(){
+  const box=document.getElementById("ilCoverage");
+  try{
+    const d=await (await fetch("/api/images/coverage")).json();
+    const none=(d.agencies||[]).filter(a=>!a.approved&&!a.candidates).map(a=>a.agency);
+    box.innerHTML='<div class="rcard" style="padding:12px 16px;margin-bottom:12px">'
+      +'<div style="font-family:Archivo,sans-serif;font-size:12px">'
+      +'<b>'+esc(String(d.with_approved))+'</b> of <b>'+esc(String(d.total))+'</b> agencies have an approved logo &middot; '
+      +'<b>'+esc(String(d.awaiting_review))+'</b> have a candidate waiting &middot; '
+      +'<b>'+esc(String(d.none))+'</b> have nothing yet</div>'
+      +(none.length?'<div style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted);margin-top:6px">No candidate: '+esc(none.slice(0,24).join(", "))+(none.length>24?" and "+(none.length-24)+" more":"")+'</div>':'')
+      +'</div>';
+  }catch(e){box.innerHTML="";}
+}
+
+document.getElementById("ilRefresh").onclick=loadLibrary;
+document.getElementById("ilOut").addEventListener("click",async e=>{
+  const b=e.target.closest("[data-il]");if(!b)return;
+  b.disabled=true;
+  try{await fetch("/api/images/library/"+b.dataset.id+"/"+b.dataset.il,{method:"POST"});loadLibrary();}
+  catch(err){b.disabled=false;}
+});
 
 // ---- Auto-collect switch (header) ----
 const acSwitch=document.getElementById("acSwitch");
