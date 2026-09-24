@@ -1,0 +1,23 @@
+# The local embedding model, kept in its own image.
+#
+# PyTorch is ~300MB. The web containers - including readonly-api, which is the one thing the
+# tunnel exposes - have no reason to carry it, so this is the only image that does.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# CPU-only torch: the GPU build is several times larger and there is no GPU on the NAS.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+ && pip install --no-cache-dir sentence-transformers "psycopg[binary]>=3.1"
+
+# Bake the weights into the image so a container start needs no download and no internet.
+ARG EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
+ENV EMBED_MODEL=${EMBED_MODEL} \
+    HF_HOME=/opt/hf \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+RUN HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python -c \
+    "from sentence_transformers import SentenceTransformer as S; import os; S(os.environ['EMBED_MODEL'])"
+
+COPY embed.py ./
+ENTRYPOINT ["python", "embed.py"]

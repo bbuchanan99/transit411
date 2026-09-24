@@ -605,6 +605,7 @@ def migrate(conn):
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_reason TEXT",
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_flags TEXT[]",
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_group INT",
+        "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS reco_full_text BOOLEAN",
         "ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS recommended_at TIMESTAMPTZ",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_url TEXT",
         "ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_source TEXT",

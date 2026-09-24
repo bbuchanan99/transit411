@@ -152,6 +152,24 @@ services:
       - db
     entrypoint: ["python", "cig_profiles.py"]
 
+  # Local sentence embeddings, for semantic duplicate detection in the review queue. Runs the model
+  # on the NAS: nothing about the queue is sent anywhere. Its own image (Dockerfile.embed), because
+  # PyTorch has no business in the containers that serve HTTP.
+  #   docker compose run --rm embed --once     # embed what's missing, then exit
+  #   docker compose up -d embed               # keep up; picks up new items on a timer
+  embed:
+    build:
+      context: .
+      dockerfile: Dockerfile.embed
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - EMBED_MODEL=${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      - EMBED_DIM=${EMBED_DIM:-384}
+      - EMBED_INTERVAL=${EMBED_INTERVAL:-600}
+    depends_on:
+      - db
+
   # Read-only public API: the ONLY thing the Cloudflare tunnel exposes. It allowlists the safe
   # read/ask endpoints and forwards them to the Command Center; everything else returns 404.
   # No published port: reachable only by the tunnel (and the other containers).

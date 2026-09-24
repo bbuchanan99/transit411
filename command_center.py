@@ -111,7 +111,7 @@ def collection(status: str = "pending", q: Optional[str] = None, pillar: Optiona
             cur.execute(
                 "SELECT id, pillar, headline, summary, source_name, source_url, published, deadline, relevance, status, "
                 "agencies, mode, programs, tags, state, "
-                "reco_score, reco_action, reco_reason, reco_flags, reco_group, recommended_at "
+                "reco_score, reco_action, reco_reason, reco_flags, reco_group, reco_full_text, recommended_at "
                 f"FROM collected_items WHERE {where} ORDER BY {order_sql} LIMIT 200", params)
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
@@ -209,7 +209,8 @@ def collection_recommendation(status: str = "pending", include_approved: bool = 
 
 
 @app.post("/api/collection/recommend")
-def collection_recommend(status: str = "pending", include_approved: bool = False, limit: int = 300):
+def collection_recommend(status: str = "pending", include_approved: bool = False, limit: int = 300,
+                         deep: bool = True, deep_n: int = 0):
     """Editorial triage of the review queue: score every pending item, say why, and suggest a
     balanced publish set and a lead.
 
@@ -222,6 +223,7 @@ def collection_recommend(status: str = "pending", include_approved: bool = False
 
     statuses = [status] + (["approved"] if include_approved else [])
     limit = max(1, min(limit, 500))
+    deep_n = R.DEEP_N if deep_n <= 0 else max(1, min(deep_n, 100))
     try:
         with _db() as c, c.cursor() as cur:
             _ensure_reco(cur)
@@ -268,13 +270,52 @@ def collection_recommend(status: str = "pending", include_approved: bool = False
     except Exception:
         pass
 
+    # Semantic duplicates, from the locally-computed embeddings (embed.py). This is what catches
+    # "CTA breaks ground on Red Line Extension" and "Chicago Transit Authority begins construction
+    # on Red Line Extension": no shared vocabulary, one story. Falls back silently to headline
+    # overlap alone when nothing has been embedded yet.
+    # 0.15 cosine distance. Genuine restatements of one story sit at 0.02-0.10; by 0.17 the
+    # pairs are merely same-topic ("Bay Area transit tax measures" and "Underfunded transit
+    # could double Bay Bridge tolls"). Same-vocabulary duplicates are the lexical pass's job.
+    near = float(os.environ.get("EMBED_DUPE_DISTANCE", "0.15"))
+    extra_pairs, seen_before, embedded = [], set(), 0
+    try:
+        with _db() as c, c.cursor() as cur:
+            cur.execute("SELECT count(embedding) FROM collected_items WHERE status = ANY(%s)", (statuses,))
+            embedded = cur.fetchone()[0]
+            if embedded:
+                cur.execute(
+                    "SELECT a.id, b.id FROM collected_items a JOIN collected_items b ON a.id < b.id "
+                    "WHERE a.status = ANY(%s) AND b.status = ANY(%s) "
+                    "AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL "
+                    "AND (a.embedding <=> b.embedding) <= %s", (statuses, statuses, near))
+                extra_pairs = [(a, b) for a, b in cur.fetchall()]
+                cur.execute(
+                    "SELECT DISTINCT i.id FROM collected_items i JOIN content_posts p ON true "
+                    "WHERE i.status = ANY(%s) AND p.status = 'published' "
+                    "AND i.embedding IS NOT NULL AND p.embedding IS NOT NULL "
+                    "AND (i.embedding <=> p.embedding) <= %s", (statuses, near))
+                seen_before = {r[0] for r in cur.fetchall()}
+    except Exception:
+        pass          # no pgvector data yet, or the column widths disagree: lexical signal stands
+
     model = os.environ.get("RECOMMEND_MODEL", R.MODEL_DEFAULT)
     try:
-        results, usage = R.score_items(items, published_titles, agency_names, cig_sponsors, model=model)
+        results, usage = R.score_items(items, published_titles, agency_names, cig_sponsors,
+                                       model=model, extra_pairs=extra_pairs, seen_before=seen_before)
     except RuntimeError as e:
         raise HTTPException(503, str(e))
     except Exception as e:
         raise HTTPException(502, f"Recommendation failed: {e}")
+
+    # Second pass: read the best stories in full and correct the first pass. The article text is
+    # used and discarded - never stored, never published.
+    deepened = set()
+    if deep:
+        try:
+            deepened = R.deep_score(items, results, model=model, top_n=deep_n, usage=usage)
+        except Exception:
+            deepened = set()      # a failed deep pass leaves every first-pass score standing
 
     ran_at = datetime.now(timezone.utc)
     try:
@@ -283,9 +324,9 @@ def collection_recommend(status: str = "pending", include_approved: bool = False
                 r = results.get(it["id"], {})
                 cur.execute(
                     "UPDATE collected_items SET reco_score=%s, reco_action=%s, reco_reason=%s, "
-                    "reco_flags=%s, reco_group=%s, recommended_at=%s WHERE id=%s",
+                    "reco_flags=%s, reco_group=%s, reco_full_text=%s, recommended_at=%s WHERE id=%s",
                     (r.get("score"), r.get("action"), r.get("reason"), r.get("flags") or [],
-                     r.get("dupe_group"), ran_at, it["id"]))
+                     r.get("dupe_group"), it["id"] in deepened, ran_at, it["id"]))
             c.commit()
     except Exception as e:
         raise HTTPException(502, f"DB error saving recommendations: {e}")
@@ -306,6 +347,9 @@ def collection_recommend(status: str = "pending", include_approved: bool = False
         "model": model,
         "considered": len(items),
         "summary": R.recommendation_summary(items, results),
+        "read_in_full": len(deepened),
+        "embedded": embedded,
+        "semantic_pairs": len(extra_pairs),
         "usage": usage,
         "cost_usd": R.run_cost(usage, model),
         "balanced_set": [brief(it) for it in chosen],
@@ -452,7 +496,7 @@ def _ensure_reco(cur):
     change an item's status. collection.migrate() adds them too; this covers a Command Center that
     starts before the collector has run."""
     for col in ("reco_score INT", "reco_action TEXT", "reco_reason TEXT", "reco_flags TEXT[]",
-                "reco_group INT", "recommended_at TIMESTAMPTZ"):
+                "reco_group INT", "reco_full_text BOOLEAN", "recommended_at TIMESTAMPTZ"):
         cur.execute(f"ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS {col}")
 
 
@@ -2813,6 +2857,7 @@ function recoLine(it){
     +'<span class="reco-act reco-'+esc(act)+'">'+esc(RECO_LABEL[act]||act)+'</span>'
     +(flags.includes("lead_candidate")?'<span class="reco-flag lead">Lead candidate</span>':'')
     +(flags.includes("likely_duplicate")?'<span class="reco-flag">Possible duplicate</span>':'')
+    +(it.reco_full_text?'<span class="reco-ai" title="Scored after reading the article itself, not just the collector summary">READ IN FULL</span>':'')
     +'<span class="reco-why">'+esc(it.reco_reason||"")+'</span></div>';
 }
 

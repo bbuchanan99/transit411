@@ -81,7 +81,11 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - **The rubric** (explicit in the prompt, so runs are consistent): audience relevance first, then importance, timeliness (reusing the existing freshness score), uniqueness, data tie-in, source credibility. Pillar balance is deliberately **not** the model's job — it scores each item on merit and the selection step balances.
 - **Three things are computed here, not by the model**, because deterministic is cheaper and reproducible: duplicate clustering (headline overlap, guarded by `state` so "Seattle voters approve…" and "Denver voters approve…" don't merge), the CIG/NTD data tie-in (matched against the agency reference table), and the balanced set (one per pillar, then by score, **max 2 per pillar**).
 - **Duplicate groups are kept in the same model call.** Split across calls the model can see that a group exists but cannot pick which member to keep; together it can. A group is only collapsed when the model confirms at least one member is a duplicate.
-- **Cost:** on demand only, never on load. A run over 262 items is **7 calls, ~45k input + ~15k output tokens, ~$0.12** on `claude-haiku-4-5`. **`GET /api/collection/recommendation`** replays the cached result (and re-derives the set) with **no model call**, so opening the tab is free.
+- **Semantic duplicates.** `embed.py` runs **sentence-transformers all-MiniLM-L6-v2 on the NAS** (its own image, `Dockerfile.embed`, so PyTorch stays out of the HTTP containers) and fills `collected_items.embedding` / `content_posts.embedding`. Nothing about the queue leaves the NAS and there is no per-item cost. The recommender then asks pgvector for pairs within **0.15 cosine distance** — which is what catches *"FTA Ends Direct Oversight of MBTA Safety Actions"* and *"FTA completes safety oversight review of MBTA"*, near-zero shared vocabulary, one story. Genuine restatements sit at 0.02–0.10; by 0.17 pairs are merely same-topic. The `state` guard applies to this signal too. With no vectors present it degrades silently to headline overlap.
+- **Reading the story itself.** A collector summary is two sentences — enough to tell a funding story from a fare-evasion story, not enough to tell a $5B award from a press release about one. A second pass fetches the **top ~40 readable items**, sends the article text, and re-scores. The text is used and discarded: **never stored, never published.** A publisher that declines us is left alone — no retry, no second user agent — and the item simply keeps its first-pass score.
+- **The second pass may lower a score freely but raise it by at most 15.** Deliberate: a demotion is evidence ("this is a press release", "this is the weaker of two"), while the batch it sees contains only strong items, so it drifts upward by comparing them to each other. Uncapped, it promoted a highway-bridge story to 68 while its own reason read *"non-transit infrastructure; stale"*.
+- **Known limit: ~82% of the queue can't be read in full.** Those items arrive as Google News redirect links whose target is only resolvable by running Google's JavaScript, so they are skipped rather than worked around, and judged on their summary. Adding direct publisher RSS feeds in **Sources** is what widens this.
+- **Cost:** on demand only, never on load. A run over 262 items is **~10 calls, ~84k input + ~17k output tokens, ~$0.17** on `claude-haiku-4-5` (~$0.12 without the full-text pass). **`GET /api/collection/recommendation`** replays the cached result (and re-derives the set) with **no model call**, so opening the tab is free.
 
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
@@ -177,6 +181,7 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 | `collect` | on-demand | `collection.py` — run the collector / seed / migrate / backfill / normalize |
 | `cig` | on-demand | `cig.py` — load a CIG dashboard snapshot from the command line |
 | `cig-profiles` | on-demand | `cig_profiles.py` — profile archive: `--listing FILE`, `--ingest PDF...`, `--seed`, `--weekly`, `--rediff` |
+| `embed` | always-on | `embed.py` — local sentence embeddings for semantic dedupe. Own image (`Dockerfile.embed`); sweeps every `EMBED_INTERVAL`. One pass: `docker compose run --rm embed --once` |
 
 On-demand services use the `tools` profile: run with `docker compose run --rm <service> <args>`. Note that plain `docker compose build` skips them — also run `docker compose --profile tools build ingest collect cig cig-profiles` after code changes.
 
@@ -249,6 +254,9 @@ curl https://api.transit411.net/api/cig                   # must return 200
 | `ANTHROPIC_API_KEY` | Model calls (collection classify, Ask NTD/CIG SQL generation) |
 | `ASK_NTD_MODEL` | Model for NL→SQL. Code default `claude-haiku-4-5`; **set to `claude-sonnet-5`** on the NAS (more reliable on multi-step questions) |
 | `COLLECT_MODEL` | Model for collector triage (default `claude-haiku-4-5`) |
+| `EMBED_MODEL` / `EMBED_DIM` | Local embedding model and its width (default `sentence-transformers/all-MiniLM-L6-v2`, 384). Changing the model resets and re-fills both embedding columns |
+| `EMBED_INTERVAL` | Seconds between embedding sweeps when the `embed` service is up (default 600) |
+| `EMBED_DUPE_DISTANCE` | Cosine distance under which two items are called the same story (default 0.15) |
 | `RECOMMEND_MODEL` | Model for the Collection tab's **Recommend** button (default `claude-haiku-4-5`; ~$0.12 per run over a 262-item queue, ~$0.36 on `claude-sonnet-5`) |
 | `DB_PASSWORD` | Postgres password (`openssl rand -hex 16`) |
 | `DATA_DIR` | NAS path for data volumes (DuckDB, Postgres, kept CIG PDFs) |
