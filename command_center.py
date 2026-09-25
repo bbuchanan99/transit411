@@ -412,6 +412,165 @@ def collection_action(item_id: int, action: str):
     return {"id": item_id, "status": mapping[action]}
 
 
+
+# ---- Web Content workflow: focus mode and the upload queue --------------------------------------
+# The review step now decides the picture, so the choice has to survive until publish time. These
+# columns hold it, plus when the item should go live: publish_at NULL means "now / manual".
+
+
+def _ensure_workflow(cur):
+    """Queue columns on collected_items. Cheap and idempotent, like the other _ensure_* helpers."""
+    cur.execute("ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS publish_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS queue_state TEXT")
+    cur.execute("ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS pick_image_url TEXT")
+    cur.execute("ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS pick_image_source TEXT")
+    cur.execute("ALTER TABLE collected_items ADD COLUMN IF NOT EXISTS pick_image_library_id BIGINT")
+    # A library asset that gets deleted must not leave a dangling id behind, the same way
+    # content_posts.image_library_id is protected.
+    cur.execute("""DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'collected_pick_library_fk') THEN
+            ALTER TABLE collected_items ADD CONSTRAINT collected_pick_library_fk
+              FOREIGN KEY (pick_image_library_id) REFERENCES image_library(id) ON DELETE SET NULL;
+        END IF;
+    END $$;""")
+
+
+class WorkflowPick(BaseModel):
+    image_url: Optional[str] = None
+    image_source: Optional[str] = None       # candidate | manual | none
+    image_library_id: Optional[int] = None
+
+
+def _host_of(u):
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(u or "").netloc or "").replace("www.", "")
+    except ValueError:
+        return ""
+
+
+@app.get("/api/workflow/item/{item_id}")
+def workflow_item(item_id: int):
+    """One item for focus mode, with the small ranked set of pictures to choose between.
+
+    Three sources, in the order the picker shows them: the article's own photo, an approved agency
+    logo, and approved topic stock. House/pillar graphics are deliberately absent - the workflow
+    offers a real picture or no picture at all.
+
+    Only APPROVED library assets appear, so nothing unlicensed can be chosen here.
+    """
+    import image_recommend as R
+    import image_library as L
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_reco(cur)
+            _ensure_library(cur)
+            _ensure_workflow(cur)
+            c.commit()
+            cur.execute(
+                "SELECT id, pillar, headline, summary, source_name, source_url, published, status, "
+                "agencies, mode, programs, tags, state, image_url, "
+                "reco_score, reco_action, reco_reason, reco_flags, "
+                "pick_image_url, pick_image_source, pick_image_library_id "
+                "FROM collected_items WHERE id=%s", (item_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no such item")
+            cols = [d[0] for d in cur.description]
+            it = dict(zip(cols, row))
+            it["published"] = it["published"].isoformat() if it.get("published") else None
+            for k in ("agencies", "mode", "programs", "tags", "reco_flags"):
+                it[k] = it.get(k) or []
+
+            art = dict(it)
+            art["title"] = it.get("headline")
+            ranked = R.rank(cur, art, limit=4)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+
+    options = []
+    # 1. The article's own picture. It is the story's actual photo, which is usually the most apt
+    #    image there is - but its licence is the publisher's and has not been reviewed, so the
+    #    tile says so rather than pretending it is cleared.
+    if (it.get("image_url") or "").strip():
+        options.append({"key": "source", "kind": "source", "label": "Source photo",
+                        "url": it["image_url"], "image_source": "candidate",
+                        "note": "via " + (_host_of(it["image_url"]) or "the source") + " - licence not reviewed",
+                        "library_id": None})
+    # 2 and 3. Whatever the library recommender ranked: an agency logo first, then topic stock.
+    for a in (ranked.get("items") or []):
+        options.append({
+            "key": "lib-" + str(a["id"]),
+            "kind": a.get("kind") or "stock",
+            "label": ("Agency logo" if a.get("kind") == "logo" else "Free stock"),
+            "url": a.get("url"), "image_source": "manual", "library_id": a["id"],
+            "note": " - ".join(x for x in [a.get("attribution"), a.get("license")] if x) or (a.get("why") or ""),
+            "why": a.get("why"), "ai_hint": bool(a.get("ai_top")),
+        })
+    options.append({"key": "none", "kind": "none", "label": "No image", "url": None,
+                    "image_source": "none", "note": "text-only", "library_id": None})
+
+    # Pre-selection: whatever was already chosen, else the first real picture, else no image.
+    chosen = None
+    if it.get("pick_image_source") == "none":
+        chosen = "none"
+    elif it.get("pick_image_library_id"):
+        chosen = "lib-" + str(it["pick_image_library_id"])
+    elif (it.get("pick_image_url") or "").strip():
+        chosen = "source"
+    if not chosen:
+        real = [o for o in options if o["kind"] != "none"]
+        chosen = real[0]["key"] if real else "none"
+    for o in options:
+        o["ai_top"] = (o["key"] == chosen)
+
+    return {"item": it, "options": options, "selected": chosen,
+            "topics": ranked.get("topics") or [],
+            "library_empty": not (ranked.get("items") or [])}
+
+
+@app.post("/api/workflow/{item_id}/approve")
+def workflow_approve(item_id: int, pick: WorkflowPick):
+    """Approve an item into the upload queue with the picture chosen in review.
+
+    This does NOT publish. It moves the item to approved, records the choice, and leaves it in the
+    queue set to publish "now / manual" until someone pushes it live or gives it a time.
+    """
+    from urllib.parse import urlparse
+    img = (pick.image_url or "").strip()
+    src = (pick.image_source or "").strip()
+    if img:
+        u = urlparse(img)
+        if u.scheme not in ("http", "https") or not u.netloc or len(img) > 500:
+            raise HTTPException(400, "An image URL must be a full http(s) address.")
+        if src not in ("candidate", "manual"):
+            src = "manual"
+    elif src != "none":
+        src, img = "", ""
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            _ensure_workflow(cur)
+            cur.execute("SELECT status FROM collected_items WHERE id=%s", (item_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no such item")
+            cur.execute("UPDATE collected_items SET status='approved', queue_state='queued', "
+                        "publish_at=NULL, pick_image_url=%s, pick_image_source=%s, "
+                        "pick_image_library_id=%s WHERE id=%s",
+                        (img or None, src or None, pick.image_library_id, item_id))
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"id": item_id, "status": "approved", "queue_state": "queued",
+            "image_source": src or None, "image_url": img or None,
+            "image_library_id": pick.image_library_id}
+
+
 # ---- Public site rebuilds (Cloudflare Pages deploy hook) ------------------------------------------
 # The site is static, so published/unpublished posts show up after a rebuild. With CF_PAGES_DEPLOY_HOOK
 # set (in .env; it's a secret URL), publish/unpublish request one, delayed REBUILD_DELAY seconds so a
@@ -2879,6 +3038,44 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
 .wf-bar{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:0 0 12px;display:flex;gap:8px;align-items:center}
 .wf-bar button{font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;background:#2A241F;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 12px;cursor:pointer}
 .wf-bar button.on{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+.wf-focus{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.wf-fhead{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+.wf-back{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--muted);cursor:pointer;background:none;border:none;padding:0}
+.wf-back:hover{color:var(--ink)}
+.wf-pos{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+.wf-fbody{padding:20px 22px}
+.wf-frec{display:flex;align-items:center;gap:12px;background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px}
+.wf-frec .sc{font-family:'Archivo',sans-serif;font-weight:900;font-size:24px;flex-shrink:0}
+.wf-frec .txt{font-size:14px;line-height:1.45}
+.wf-frec .txt b{color:var(--accent)}
+.wf-fpill{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent)}
+.wf-fbody h2{font-family:'Archivo',sans-serif;font-size:23px;font-weight:800;margin:6px 0 10px;line-height:1.15}
+.wf-fsum{font-size:15px;color:#C7C0B2;line-height:1.55;margin:0 0 8px}
+.wf-fmeta{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin-bottom:20px}
+.wf-fmeta a{color:var(--accent)}
+.wf-picker{border-top:1px solid var(--line);padding-top:18px}
+.wf-lbl{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+.wf-lbl span{font-weight:600;text-transform:none;letter-spacing:0}
+.wf-opts{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.wf-opt{border:2px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--card2);transition:border-color .15s;position:relative;text-align:left;padding:0;color:inherit;font:inherit}
+.wf-opt:hover{border-color:var(--accent)}
+.wf-opt.sel{border-color:var(--ok)}
+.wf-opt.sel::after{content:"✓";position:absolute;top:5px;right:8px;color:var(--ok);font-weight:900;font-family:'Archivo',sans-serif}
+.wf-thumb{height:74px;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);text-align:center;padding:4px;background:#2A241F;position:relative;overflow:hidden}
+.wf-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.wf-thumb.logo{background:#E9E3D6}
+.wf-thumb.logo img{object-fit:contain}
+.wf-cap{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;padding:6px 8px;border-top:1px solid var(--line);color:var(--ink)}
+.wf-src{font-size:9px;color:var(--muted);padding:0 8px 6px;line-height:1.35}
+.wf-aitag{position:absolute;top:4px;left:5px;font-size:9px;color:var(--accent);font-weight:800;font-family:'Archivo',sans-serif;background:rgba(16,14,12,.78);padding:1px 4px;border-radius:3px}
+.wf-fb{margin-top:14px;font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--ok);min-height:20px}
+.wf-actions{display:flex;gap:10px;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+.wf-btn{font-family:'Archivo',sans-serif;font-weight:800;font-size:14px;border:none;border-radius:9px;padding:13px 22px;cursor:pointer}
+.wf-btn-primary{background:var(--accent2);color:#fff;flex:1}
+.wf-btn-primary:hover{background:#8F2415}
+.wf-btn-sec{background:#2A241F;color:var(--muted)}
+.wf-btn-sec:hover{color:var(--ink)}
+.wf-btn:disabled{opacity:.6;cursor:default}
 </style></head><body>
 <aside>
   <div class="brand">TRANSIT<span>411</span></div>
@@ -2941,6 +3138,7 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
       <div class="wf-bar" id="wfSortBar">Sort<button data-sort="score" class="on">AI score</button><button data-sort="fresh">Newest</button></div>
       <div id="wfList"></div>
     </div>
+    <div id="wf-focus" hidden></div>
     <div id="wf-queue" hidden><div class="wf-note">The upload queue lands at the next checkpoint.</div></div>
     <div id="wf-published" hidden><div class="wf-note">Published posts will list here.</div></div>
   </div>
@@ -3151,7 +3349,12 @@ async function loadWorkflow(){
 document.getElementById("wfStages").addEventListener("click", e => {
   const b = e.target.closest("[data-stage]"); if(!b) return;
   document.querySelectorAll(".wf-stage").forEach(x => x.classList.toggle("on", x===b));
+  document.getElementById("wf-focus").hidden = true;
   ["review","queue","published"].forEach(k => { document.getElementById("wf-"+k).hidden = (k !== b.dataset.stage); });
+});
+document.getElementById("wfList").addEventListener("click", e => {
+  const r = e.target.closest(".wf-row"); if(!r) return;
+  wfOpen(parseInt(r.dataset.id, 10));
 });
 document.getElementById("wfSortBar").addEventListener("click", e => {
   const b = e.target.closest("[data-sort]"); if(!b) return;
@@ -3159,6 +3362,132 @@ document.getElementById("wfSortBar").addEventListener("click", e => {
   document.querySelectorAll("#wfSortBar button").forEach(x => x.classList.toggle("on", x===b));
   loadWorkflow();
 });
+
+
+// ---- Focus mode: one item, everything inline ---------------------------------------------------
+// The picture is decided here, in review, and stored on the item - so the queue and the publish
+// step downstream never have to guess. Only APPROVED library assets are offered, which is what
+// keeps an unlicensed picture from reaching the site.
+const WF_TICK = String.fromCharCode(10003);
+let wfItem = null, wfOpts = [], wfSel = null;
+
+function wfThumb(o){
+  if(o.kind === "none") return '<div class="wf-thumb">No image</div>';
+  const cls = (o.kind === "logo") ? "wf-thumb logo" : "wf-thumb";
+  const tag = o.ai_top ? '<div class="wf-aitag">AI PICK</div>' : "";
+  if(!o.url) return '<div class="'+cls+'">'+tag+'no preview</div>';
+  return '<div class="'+cls+'">'+tag+'<img src="'+esc(o.url)+'" alt="" loading="lazy" onerror="this.remove()"></div>';
+}
+function wfOptTile(o){
+  return '<button type="button" class="wf-opt'+(o.key===wfSel ? " sel" : "")+'" data-key="'+esc(o.key)+'">'
+    +wfThumb(o)
+    +'<div class="wf-cap">'+esc(o.label)+'</div>'
+    +'<div class="wf-src">'+esc(o.note||"")+'</div>'
+  +'</button>';
+}
+function wfFeedbackText(o){
+  if(o.kind === "none") return "No image · clean text-only layout";
+  if(o.kind === "source") return "Using the source photo" + (o.ai_top ? " (AI top pick)" : "");
+  if(o.kind === "logo") return "Agency logo selected";
+  return "Free-stock image selected";
+}
+function wfSetFeedback(){
+  const o = wfOpts.find(x => x.key === wfSel);
+  const fb = document.getElementById("wfFb");
+  if(!fb) return;
+  if(o){ fb.textContent = WF_TICK + " " + wfFeedbackText(o); fb.style.color = "var(--ok)"; }
+  else { fb.textContent = "Pick an image, or choose No image."; fb.style.color = "var(--gold)"; }
+}
+function wfFocusHtml(d){
+  const it = d.item, s = it.reco_score;
+  const meta = [it.source_name ? ("Source: "+it.source_name) : "", it.published || "",
+                (it.tags && it.tags.length) ? ("tags: "+it.tags.join(", ")) : ""]
+               .filter(Boolean).join(" · ");
+  const pos = wfItems.length ? ("Item "+(wfItems.findIndex(x => x.id===it.id)+1)+" of "+wfItems.length) : "";
+  const rec = s==null ? "<b>Not scored yet.</b> Run Recommend in Collection to score the queue."
+    : ("<b>Recommended: "+esc(wfRecLabel(it.reco_action))+".</b> "+esc(it.reco_reason||""));
+  const empty = d.library_empty
+    ? '<div class="wf-src" style="padding:8px 0 0">Nothing approved in the image library yet, so only the source photo is offered. Approve logos or photos in Image library and they appear here.</div>'
+    : "";
+  return '<div class="wf-focus">'
+    +'<div class="wf-fhead"><button class="wf-back" id="wfBack">&larr; Back to review</button>'
+      +'<div class="wf-pos">'+esc(pos)+'</div></div>'
+    +'<div class="wf-fbody">'
+      +'<div class="wf-frec"><div class="sc '+wfScoreClass(s)+'">'+(s==null ? "&mdash;" : s)+'</div>'
+        +'<div class="txt">'+rec+'</div></div>'
+      +'<div class="wf-fpill">'+esc(it.pillar||"News")+'</div>'
+      +'<h2 class="disp">'+esc(it.headline||"")+'</h2>'
+      +'<p class="wf-fsum">'+esc(it.summary||"")+'</p>'
+      +'<div class="wf-fmeta">'+esc(meta)
+        +(it.source_url ? ' · <a href="'+esc(it.source_url)+'" target="_blank" rel="noopener">open source</a>' : "")
+      +'</div>'
+      +'<div class="wf-picker">'
+        +'<div class="wf-lbl">Images AI found for this article <span>— pick one, or no image</span></div>'
+        +'<div class="wf-opts" id="wfOpts">'+wfOpts.map(wfOptTile).join("")+'</div>'
+        +empty
+        +'<div class="wf-fb" id="wfFb"></div>'
+      +'</div>'
+      +'<div class="wf-actions">'
+        +'<button class="wf-btn wf-btn-primary" id="wfApprove">Approve &rarr; add to upload queue</button>'
+        +'<button class="wf-btn wf-btn-sec" id="wfHold">Hold</button>'
+        +'<button class="wf-btn wf-btn-sec" id="wfSkip">Skip</button>'
+      +'</div>'
+    +'</div></div>';
+}
+async function wfOpen(id){
+  const box = document.getElementById("wf-focus");
+  document.getElementById("wf-review").hidden = true;
+  box.hidden = false;
+  box.innerHTML = '<div class="wf-note">Loading the item...</div>';
+  const d = await jget("/api/workflow/item/"+id);
+  if(!d){ box.innerHTML = '<div class="wf-note">Could not load that item.</div>'; return; }
+  wfItem = d.item; wfOpts = d.options || []; wfSel = d.selected;
+  box.innerHTML = wfFocusHtml(d);
+  wfSetFeedback();
+  document.getElementById("wfBack").onclick = wfClose;
+  document.getElementById("wfHold").onclick = wfClose;       // Hold = leave it pending, decide later
+  document.getElementById("wfSkip").onclick = wfSkip;
+  document.getElementById("wfApprove").onclick = wfApprove;
+  document.getElementById("wfOpts").addEventListener("click", e => {
+    const b = e.target.closest("[data-key]"); if(!b) return;
+    wfSel = b.dataset.key;
+    document.querySelectorAll("#wfOpts .wf-opt").forEach(x => x.classList.toggle("sel", x===b));
+    wfSetFeedback();
+  });
+}
+function wfClose(){
+  document.getElementById("wf-focus").hidden = true;
+  document.getElementById("wf-review").hidden = false;
+  wfItem = null;
+}
+async function wfApprove(){
+  const o = wfOpts.find(x => x.key === wfSel);
+  if(!o){ wfSel = null; wfSetFeedback(); return; }
+  const btn = document.getElementById("wfApprove");
+  btn.disabled = true; btn.textContent = "Adding to the queue...";
+  let ok = false;
+  try{
+    const r = await fetch("/api/workflow/"+wfItem.id+"/approve", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({image_url:o.url||null, image_source:o.image_source||null,
+                            image_library_id:o.library_id||null})});
+    ok = r.ok;
+  }catch(e){ ok = false; }
+  if(!ok){
+    btn.disabled = false; btn.innerHTML = "Approve &rarr; add to upload queue";
+    const fb = document.getElementById("wfFb");
+    fb.textContent = "Could not add it to the queue. Nothing was changed."; fb.style.color = "var(--gold)";
+    return;
+  }
+  wfClose();
+  loadWorkflow();          // the item leaves pending; no auto-advance, by design
+}
+async function wfSkip(){
+  const id = wfItem.id;
+  try{ await fetch("/api/collection/"+id+"/skip", {method:"POST"}); }catch(e){}
+  wfClose();
+  loadWorkflow();
+}
 
 // ---- Console navigation: sidebar workspaces, a landing dashboard, and hash deep-links ----------
 // Tools are the existing panels; the router just decides which workspace and which panel is shown,
