@@ -26,7 +26,13 @@ import time
 import urllib.parse
 import urllib.request
 
+import re
+
 import image_library as L
+
+# Titles that sound like an agency rather than a dictionary word.
+TRANSITY = re.compile(r"transit|transport|railway|rail|metro|bus|authority|agency|commuter|"
+                      r"subway|tramway|council|district", re.I)
 
 # Wikimedia asks automated readers to identify themselves and give a contact. This is that.
 UA = os.environ.get("COLLECT_USER_AGENT", "Transit411/1.0 (+https://transit411.net)")
@@ -102,16 +108,28 @@ def find_article(names):
                 continue
             if "(disambiguation)" in title.lower():
                 continue
-            scored.append((L.best_score(names, title), title))
+            # "PATH (rail system)" is the PATH article; the parenthetical is Wikipedia's
+            # disambiguator, not part of the name. Comparing with it attached scored the real
+            # article at 0.50 and let the generic article "Path" win on an exact acronym match.
+            bare = re.sub(r"\s*\([^)]*\)\s*$", "", title).strip()
+            scored.append((max(L.best_score(names, title), L.best_score(names, bare)), title))
         if not scored:
             continue
         top = max(sc for sc, _ in scored)
         if top < MATCH_AT:
             continue
-        # Among equally good matches prefer the plainest title: "Massachusetts Bay Transportation
-        # Authority" over "Massachusetts Bay Transportation Authority Police".
-        best = min((t for sc, t in scored if sc == top), key=len)
-        return {"title": best, "score": round(top, 2), "found_by": name}
+        tied = [t for sc, t in scored if sc == top]
+        # Among equal matches prefer one that sounds like transit - "PATH (rail system)" over
+        # "Path", "Chicago Transit Authority" over "CTA" - then the plainest title, so
+        # "...Transportation Authority" beats "...Transportation Authority Police".
+        transit = [t for t in tied if TRANSITY.search(t)]
+        for cand in sorted(transit or tied, key=len):
+            # "Metropolitan Council", "Madison Metro" and "Ride On" are DISAMBIGUATION pages, not
+            # agency articles - they carry no logo and matched perfectly. Filtering on the
+            # "(disambiguation)" suffix missed them, because they do not have one.
+            if is_disambiguation(cand):
+                continue
+            return {"title": cand, "score": round(top, 2), "found_by": name}
     return None
 
 
@@ -130,6 +148,18 @@ CHROME = ("commons-logo", "wikimedia", "wiktionary", "wikisource", "wikiquote", 
 def _usable(filename):
     f = (filename or "").lower()
     return not any(w in f for w in CHROME) and not any(w in f for w in ROUTE_ICON)
+
+
+def is_disambiguation(title):
+    """A disambiguation page lists other articles. It is never the agency."""
+    try:
+        d = _get(WP_API, {"action": "query", "titles": title, "prop": "pageprops"})
+    except Exception:
+        return False
+    pages = d.get("query", {}).get("pages") or []
+    if not pages:
+        return False
+    return "disambiguation" in (pages[0].get("pageprops") or {})
 
 
 def _looks_like_logo(filename):
@@ -168,7 +198,7 @@ def infobox_logo(title):
         text = text.get("*", "") if isinstance(text, dict) else ""
     for m in INFOBOX_LOGO.finditer(text):
         field = (m.group(1) or "").lower()
-        name = (m.group(2) or "").strip()
+        name = (m.group(2) or "").split("{{")[0].split("|")[0].strip()
         low = name.lower()
         if not _usable(name):
             continue

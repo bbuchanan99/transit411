@@ -291,6 +291,12 @@ def name_score(a, b):
     ta, tb = set(name_key(a).split()), set(name_key(b).split())
     if not ta or not tb:
         return 0.0
+    # One shared word is not a match. The alias "City of Madison" reduces to {madison}, which
+    # scored a perfect 1.00 against "Madison County Transit" - a different agency, in a different
+    # state. Anything resting on a single common word needs the names themselves to agree, which
+    # the exact and acronym tests above already cover.
+    if len(ta & tb) < 2:
+        return 0.0
     # Symmetric, not containment. Containment scored "Massachusetts Bay Transportation Authority"
     # against "Massachusetts Department of Transportation" at 1.00, because the distinctive words
     # left after stripping boilerplate were {massachusetts, bay} and {massachusetts} - one side
