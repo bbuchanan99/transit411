@@ -71,6 +71,17 @@ def schema(cur):
     cur.execute("CREATE INDEX IF NOT EXISTS image_library_tags_idx ON image_library USING GIN (topic_tags)")
     # Which approved logo an agency uses. Set only when a human approves one.
     cur.execute("ALTER TABLE agencies ADD COLUMN IF NOT EXISTS logo_image_id BIGINT")
+    # ...and it must stop pointing at an image that no longer exists. Without this, deleting a
+    # row left the agency claiming an approved logo that had gone, so coverage counted a logo
+    # nothing could load. ON DELETE SET NULL makes the database keep the two in step.
+    cur.execute("UPDATE agencies SET logo_image_id = NULL WHERE logo_image_id IS NOT NULL "
+                "AND logo_image_id NOT IN (SELECT id FROM image_library)")
+    cur.execute("""DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agencies_logo_image_fk') THEN
+            ALTER TABLE agencies ADD CONSTRAINT agencies_logo_image_fk
+                FOREIGN KEY (logo_image_id) REFERENCES image_library(id) ON DELETE SET NULL;
+        END IF;
+    END $$;""")
 
 
 def check_provenance(asset):
