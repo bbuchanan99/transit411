@@ -116,6 +116,29 @@ def add_candidate(cur, asset):
     return rid, ("added" if inserted else "updated")
 
 
+def supersede_candidates(cur, agency, keep_id):
+    """Retire earlier CANDIDATE logos for an agency when a later fetch finds a different file.
+
+    An improved fetcher finds a better file, but the old guess stays: the unique index is on the
+    file URL, so a different file is a new row. That left city and county seals - Seal of Atlanta
+    for MARTA, MKESeal for Milwaukee - sitting in the queue next to the real logo, both marked
+    free, both one click from being approved.
+
+    Only rows still awaiting review are touched. A human's approve or reject is never undone by a
+    re-run; that is the whole contract of this table.
+    """
+    if not agency or not keep_id:
+        return 0
+    cur.execute(
+        """UPDATE image_library
+              SET status='rejected', reviewed_at=now(),
+                  notes = coalesce(notes,'') || ' | superseded by a later fetch (id %s)'
+            WHERE kind='logo' AND status='candidate'
+              AND lower(agency)=lower(%%s) AND id <> %%s""" % int(keep_id),
+        (agency, keep_id))
+    return cur.rowcount
+
+
 def set_status(cur, image_id, status, approve_for_agency=True):
     """Approve or reject one asset. Approving a logo points its agency at it."""
     if status not in STATUSES:

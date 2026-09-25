@@ -384,8 +384,12 @@ def fetch(conn, limit=None, only=None):
         report["by_class"][klass] = report["by_class"].get(klass, 0) + 1
         with conn.cursor() as cur:
             _id, what = L.add_candidate(cur, asset)
+            # Retire this agency's earlier guesses, so an old city seal cannot be approved as a
+            # logo. Only rows still awaiting review; a human decision is never undone.
+            dropped = L.supersede_candidates(cur, name, _id)
         conn.commit()
         report[what] += 1
+        report["superseded"] = report.get("superseded", 0) + dropped
         print("  %-8s %-46s %-9s %s" % (what, name[:46], klass, (asset["license"] or "")[:40]), flush=True)
     return report
 
