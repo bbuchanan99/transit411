@@ -2853,6 +2853,32 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
 .subnav button.on{color:var(--ink);background:#2A241F;border-color:var(--accent)}
 .ws{display:none}.ws.on{display:block}
 @media (max-width:860px){aside{display:none}main{padding:18px}.grid{grid-template-columns:1fr}}
+
+/* ---- Web Content workflow: Review -> Upload queue -> Published --------------------------------
+   Every class is namespaced wf-. The mock uses generic names (.row, .btn, .score, .pill) and this
+   console already defines .pill and .row; an un-namespaced copy would silently restyle them. */
+#p-workflow{--gold:#D6A94A}
+.wf-stages{display:flex;gap:8px;margin:0 0 18px;border-bottom:1px solid var(--line)}
+.wf-stage{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--muted);padding:10px 16px;cursor:pointer;border:none;border-bottom:2px solid transparent;background:none}
+.wf-stage.on{color:var(--ink);border-bottom-color:var(--accent)}
+.wf-stage .n{display:inline-block;background:#2E2822;color:var(--muted);border-radius:999px;font-size:11px;padding:1px 8px;margin-left:6px}
+.wf-stage.on .n{background:var(--accent2);color:#fff}
+.wf-row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px 16px;margin-bottom:9px;cursor:pointer;transition:border-color .15s,transform .12s}
+.wf-row:hover{border-color:var(--accent);transform:translateX(2px)}
+.wf-score{font-family:'Archivo',sans-serif;font-weight:900;font-size:20px;width:40px;text-align:center;flex-shrink:0}
+.wf-hi{color:var(--ok)}.wf-mid{color:var(--gold)}.wf-lo{color:var(--muted)}
+.wf-body{flex:1;min-width:0}
+.wf-pillar{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--accent)}
+.wf-row h3{font-family:'Archivo',sans-serif;font-size:16px;font-weight:700;margin:3px 0 2px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-reason{font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-rec{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:5px 11px;border-radius:999px;flex-shrink:0}
+.wf-rec-pub{background:rgba(95,191,143,.16);color:var(--ok)}
+.wf-rec-hold{background:rgba(214,169,74,.16);color:var(--gold)}
+.wf-rec-skip{background:#2A241F;color:var(--muted)}
+.wf-note{color:var(--muted);font-size:14px;padding:18px 2px}
+.wf-bar{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin:0 0 12px;display:flex;gap:8px;align-items:center}
+.wf-bar button{font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;background:#2A241F;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:4px 12px;cursor:pointer}
+.wf-bar button.on{background:var(--accent2);color:#fff;border-color:var(--accent2)}
 </style></head><body>
 <aside>
   <div class="brand">TRANSIT<span>411</span></div>
@@ -2904,6 +2930,19 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <form id="askForm"><input type="text" id="q" placeholder="Ask a question, then follow up..." autocomplete="off"><button class="go" type="submit">Ask</button></form>
     <div class="askhead"><div class="examples" id="ex"></div><div><span class="follow" id="follow">Following your thread</span> <button class="newq" id="newq" type="button">New question</button></div></div>
     <div id="out"></div>
+  </div>
+  <div class="panel" id="p-workflow">
+    <div class="wf-stages" id="wfStages">
+      <button class="wf-stage on" data-stage="review">Review <span class="n" id="wfNReview">&mdash;</span></button>
+      <button class="wf-stage" data-stage="queue">Upload queue <span class="n" id="wfNQueue">&mdash;</span></button>
+      <button class="wf-stage" data-stage="published">Published <span class="n" id="wfNPub">&mdash;</span></button>
+    </div>
+    <div id="wf-review">
+      <div class="wf-bar" id="wfSortBar">Sort<button data-sort="score" class="on">AI score</button><button data-sort="fresh">Newest</button></div>
+      <div id="wfList"></div>
+    </div>
+    <div id="wf-queue" hidden><div class="wf-note">The upload queue lands at the next checkpoint.</div></div>
+    <div id="wf-published" hidden><div class="wf-note">Published posts will list here.</div></div>
   </div>
   <div class="panel" id="p-collect">
     <div class="askhead"><div><h2 class="disp">Collection queue</h2><p class="lead">Items the engine gathered, freshest first - approve what runs, skip the rest. Populate with the collector job.</p></div><div style="display:flex;gap:8px"><button class="newq" id="cReco" type="button" style="white-space:nowrap;min-width:116px">Recommend</button><button class="newq" id="cRefresh" type="button">Refresh</button></div></div>
@@ -3075,6 +3114,52 @@ const EX=["ridership trend by mode","cheapest heavy rail systems per rider","hig
 const exWrap=document.getElementById("ex");
 EX.forEach(t=>{const b=document.createElement("button");b.className="ex";b.textContent=t;b.onclick=()=>{document.getElementById("q").value=t;doAsk(t);};exWrap.appendChild(b);});
 
+
+// ---- Web Content workflow: Review -> Upload queue -> Published ---------------------------------
+// Checkpoint (a): the review list, built from the real pending queue and the recommender's cached
+// reco_* columns. Read-only - opening this screen never changes an item's status, and it spends
+// nothing, because the scores were already computed by the Recommend button in Collection.
+let wfSort = "score", wfItems = [];
+function wfScoreClass(s){ if(s==null) return "wf-lo"; if(s>=70) return "wf-hi"; if(s>=50) return "wf-mid"; return "wf-lo"; }
+function wfRecClass(a){ return a==="publish" ? "wf-rec-pub" : (a==="hold" ? "wf-rec-hold" : "wf-rec-skip"); }
+function wfRecLabel(a){ return a ? a.charAt(0).toUpperCase()+a.slice(1) : "Unscored"; }
+function wfRow(it){
+  const s = it.reco_score;
+  return '<div class="wf-row" data-id="'+it.id+'">'
+    +'<div class="wf-score '+wfScoreClass(s)+'">'+(s==null ? "&mdash;" : s)+'</div>'
+    +'<div class="wf-body">'
+      +'<div class="wf-pillar">'+esc(it.pillar||"News")+'</div>'
+      +'<h3>'+esc(it.headline||"")+'</h3>'
+      +'<div class="wf-reason">'+esc(it.reco_reason||"Not scored yet - run Recommend in Collection.")+'</div>'
+    +'</div>'
+    +'<div class="wf-rec '+wfRecClass(it.reco_action)+'">'+esc(wfRecLabel(it.reco_action))+'</div>'
+  +'</div>';
+}
+async function loadWorkflow(){
+  const list = document.getElementById("wfList");
+  list.innerHTML = '<div class="wf-note">Loading the review queue...</div>';
+  const d = await jget("/api/collection?status=pending&order="+wfSort);
+  if(!d){ list.innerHTML = '<div class="wf-note">Could not reach the collection API.</div>'; return; }
+  wfItems = d.items || [];
+  const c = d.counts || {};
+  document.getElementById("wfNReview").textContent = c.pending!=null ? c.pending : wfItems.length;
+  document.getElementById("wfNQueue").textContent = c.approved!=null ? c.approved : 0;
+  document.getElementById("wfNPub").textContent = c.published!=null ? c.published : 0;
+  list.innerHTML = wfItems.length ? wfItems.map(wfRow).join("")
+    : '<div class="wf-note">Nothing pending. The queue is clear.</div>';
+}
+document.getElementById("wfStages").addEventListener("click", e => {
+  const b = e.target.closest("[data-stage]"); if(!b) return;
+  document.querySelectorAll(".wf-stage").forEach(x => x.classList.toggle("on", x===b));
+  ["review","queue","published"].forEach(k => { document.getElementById("wf-"+k).hidden = (k !== b.dataset.stage); });
+});
+document.getElementById("wfSortBar").addEventListener("click", e => {
+  const b = e.target.closest("[data-sort]"); if(!b) return;
+  wfSort = b.dataset.sort;
+  document.querySelectorAll("#wfSortBar button").forEach(x => x.classList.toggle("on", x===b));
+  loadWorkflow();
+});
+
 // ---- Console navigation: sidebar workspaces, a landing dashboard, and hash deep-links ----------
 // Tools are the existing panels; the router just decides which workspace and which panel is shown,
 // so every screen that worked before still works - it is reachable from a category instead of a tab.
@@ -3082,7 +3167,7 @@ const WORKSPACES = {
   "web-content": {title:"Web Content", sub:"Gather, review and publish the news feed behind the public site.",
     desc:"Gather, review, and publish the news feed that populates the public site.",
     icon:'<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
-    tools:[["sources","Sources","p-sources"],["collection","Collection","p-collect"],["publish","Publish","p-publish"],["images","Images","p-images"],["library","Image library","p-imglib"]]},
+    tools:[["workflow","Workflow","p-workflow"],["sources","Sources","p-sources"],["collection","Collection","p-collect"],["publish","Publish","p-publish"],["images","Images","p-images"],["library","Image library","p-imglib"]]},
   "publications": {title:"Publications", sub:"Compose and send The Wire; reports and the annual snapshot.",
     desc:"Compose and send The Wire; produce reports and the annual snapshot.",
     icon:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
@@ -3138,6 +3223,7 @@ function go(ws, tool, push){
 // Each tool loads its own data when it is opened (the old tab-click behaviour).
 function onToolOpen(tool, panel){
   try{
+    if(panel==="p-workflow")loadWorkflow();
     if(panel==="p-collect"){loadFacets();loadCollection();loadReco();}
   if(panel==="p-usage")loadUsage();
   if(panel==="p-imglib")loadLibrary();
