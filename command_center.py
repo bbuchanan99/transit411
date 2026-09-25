@@ -625,6 +625,7 @@ def publish_all(p: PublishAll):
 class PublishChoice(BaseModel):
     image_url: Optional[str] = None          # the candidate, or a URL you pasted
     image_source: Optional[str] = None       # candidate | manual | house
+    image_library_id: Optional[int] = None   # set when the pick came from the library
 
 
 @app.post("/api/publish/{item_id}")
@@ -647,7 +648,11 @@ def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
         src = ""
     try:
         with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
             post_id = _publish_one(cur, item_id, img or None, src or None)
+            if post_id and choice and choice.image_library_id:
+                cur.execute("UPDATE content_posts SET image_library_id=%s WHERE id=%s",
+                            (choice.image_library_id, post_id))
             if not post_id:
                 raise HTTPException(404, "no approved item with that id")
             c.commit()
@@ -688,7 +693,7 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
         where.append(f"{live} = %s"); params.append(featured)
     sql = ("SELECT id, slug, pillar, title, status, publish_at, body, source_name, source_url, "
            f"agencies, mode, programs, tags, state, {live} AS featured, featured_until, sponsor, "
-           "image_url, image_source FROM content_posts "
+           "image_url, image_source, image_library_id FROM content_posts "
            "WHERE " + " AND ".join(where) + f" ORDER BY {live} DESC, publish_at DESC NULLS LAST "
            "LIMIT %s OFFSET %s")
     limit = max(1, min(limit, 500))
@@ -698,6 +703,10 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
         with _db() as c, c.cursor() as cur:
             _ensure_slugs(cur)
             c.commit()
+            # The column has to exist before the SELECT names it - ensuring it afterwards, inside
+            # the fill step, meant every /api/posts call failed on a database that had not seen
+            # the library yet.
+            _ensure_library(cur)
             cur.execute(sql, params + [limit, offset])
             names = [d[0] for d in cur.description]
             for row in cur.fetchall():
@@ -707,6 +716,7 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
                 # body is the summary plus a trailing "Source: name - url" line (source fields are separate).
                 p["summary"] = (p.get("body") or "").split("\n\nSource:")[0].strip() or None
                 out.append(p)
+            _credit_picked_images(cur, out)
             _fill_library_images(cur, out)
             cur.execute("SELECT count(*) FROM content_posts WHERE " + " AND ".join(where), params)
             total = cur.fetchone()[0]
@@ -1378,6 +1388,7 @@ async def email_test(t: TestEmail):
 class ImageChoice(BaseModel):
     image_url: Optional[str] = None
     image_source: Optional[str] = None
+    image_library_id: Optional[int] = None   # set when the pick came from the library
 
 
 def _valid_image_url(url):
@@ -1435,8 +1446,10 @@ def set_post_image(post_id: int, choice: ImageChoice):
         src = ""            # cleared: back to the pillar house graphic
     try:
         with _db() as c, c.cursor() as cur:
-            cur.execute("UPDATE content_posts SET image_url=%s, image_source=%s WHERE id=%s RETURNING slug",
-                        (img or None, src or None, post_id))
+            _ensure_library(cur)
+            cur.execute("UPDATE content_posts SET image_url=%s, image_source=%s, image_library_id=%s "
+                        "WHERE id=%s RETURNING slug",
+                        (img or None, src or None, choice.image_library_id, post_id))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "No such post.")
@@ -2297,6 +2310,31 @@ USAGE_THEMES = [
 ]
 
 
+def _credit_picked_images(cur, posts):
+    """Attach the licence and credit for a picture that was PICKED from the library.
+
+    The post stores the library row's id, not a copy of its terms, so this reads them back. A
+    picked stock photo without its credit on the page is the same licence breach as a suggested
+    one - how it got there makes no difference.
+    """
+    ids = [p["image_library_id"] for p in posts if p.get("image_library_id")]
+    if not ids:
+        return
+    try:
+        cur.execute("SELECT id, license, attribution, source_url FROM image_library "
+                    "WHERE id = ANY(%s)", (ids,))
+        by_id = {r[0]: r for r in cur.fetchall()}
+    except Exception:
+        return
+    for p in posts:
+        r = by_id.get(p.get("image_library_id"))
+        if not r:
+            continue
+        p["image_license"] = r[1]
+        p["image_attribution"] = r[2]
+        p["image_source_url"] = r[3]
+
+
 def _fill_library_images(cur, posts):
     """The last two steps of the image cascade, applied as the site reads a post.
 
@@ -2538,6 +2576,63 @@ def images_review(image_id: int, action: str, body: Optional[ImageReview] = None
     except Exception as e:
         raise HTTPException(502, f"DB error: {e}")
     return out
+
+
+@app.get("/api/images/suggest")
+def images_suggest(item_id: Optional[int] = None, post_id: Optional[int] = None,
+                   limit: int = 5, browse: int = 60, q: Optional[str] = None,
+                   kind: Optional[str] = None):
+    """For the picker: the top few library assets AI suggests for this story, plus the rest of the
+    approved library to browse. Suggests only - picking is the whole point."""
+    import image_recommend as R
+    import image_library as L
+    limit = max(1, min(limit, 12))
+    browse = max(0, min(browse, 300))
+    if not item_id and not post_id:
+        raise HTTPException(400, "Give an item_id or a post_id.")
+    col = "collected_items" if item_id else "content_posts"
+    ident = item_id or post_id
+    title_col = "headline" if item_id else "title"
+    body_col = "summary" if item_id else "body"
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            c.commit()
+            cur.execute("SELECT id, %s, %s, pillar, agencies, mode, tags, state "
+                        "FROM %s WHERE id=%%s" % (title_col, body_col, col), (ident,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no such item")
+            art = dict(zip(("id", "title", "summary", "pillar", "agencies", "mode", "tags", "state"), row))
+            art["summary"] = (art.get("summary") or "").split(chr(10) * 2 + "Source:")[0]
+            top = R.rank(cur, art, limit=limit)
+
+            # The rest of the approved library, so there is always something to pick from even
+            # when nothing matches the topics.
+            where = ["status='approved'"]
+            params = []
+            if kind in ("logo", "stock"):
+                where.append("kind=%s"); params.append(kind)
+            if q:
+                where.append("(coalesce(agency,'') ILIKE %s OR array_to_string(topic_tags,' ') ILIKE %s)")
+                params += ["%" + q + "%"] * 2
+            cur.execute("SELECT id, kind, agency, topic_tags, url, file_path, width, height, "
+                        "license, attribution, source_url FROM image_library "
+                        f"WHERE {' AND '.join(where)} ORDER BY kind, lower(coalesce(agency,'')), id "
+                        "LIMIT %s", params + [browse])
+            cols = [d[0] for d in cur.description]
+            library = []
+            for r in cur.fetchall():
+                it = dict(zip(cols, r))
+                it["topic_tags"] = it.get("topic_tags") or []
+                it["url"] = L.public_url(it)
+                library.append(it)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"suggested": top["items"], "topics": top.get("topics") or [],
+            "library": library, "library_total": len(library)}
 
 
 @app.get("/api/images/coverage")
@@ -3777,6 +3872,37 @@ function pTile(c,chosenUrl){
     +'<span class="pimg-k" style="color:'+k[1]+'">'+esc(k[0])+'</span>'
     +'<span class="pimg-m">'+esc(pImgSize(c))+'</span></button>';
 }
+// The library, inside the picker: what AI suggests for THIS story first, then everything else
+// approved. Suggestions are a shortlist to look at, not a decision - you pick.
+function pLibTile(c, chosenUrl, suggested){
+  const on = c.url === chosenUrl;
+  const label = c.kind === "logo" ? (c.agency || "logo") : ((c.topic_tags || []).join(", ") || "photo");
+  return '<button type="button" class="pimg'+(on?" on":"")+'" data-pick="'+esc(c.url)+'" data-kind="library" data-libid="'+esc(String(c.id))+'" title="'+esc((c.attribution||"")+" - "+(c.license||""))+'">'
+    +'<img src="'+esc(c.url)+'" alt="" loading="lazy" onerror="this.parentElement.classList.add(\'bad\')">'
+    +'<span class="pimg-k" style="color:'+(suggested?"var(--accent)":"#1F6B4A")+'">'+(suggested?"Suggested":"Library")+'</span>'
+    +'<span class="pimg-m">'+esc(label)+'</span>'
+    +(c.why?'<span class="pimg-m" style="color:var(--muted)">'+esc(c.why)+'</span>':'')
+    +'</button>';
+}
+function pLibrarySection(){
+  const d = (pPick && pPick.lib) || null;
+  if(!d) return '<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted);margin:14px 0 0">Loading the library...</div>';
+  const chosen = (pPick.chosen||{}).url;
+  let html = "";
+  if((d.suggested||[]).length){
+    html += '<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent);margin:16px 0 6px">Suggested for this story'
+      + (d.topics&&d.topics.length?' <span style="color:var(--muted);font-weight:600">&middot; '+esc(d.topics.join(", "))+'</span>':'')
+      + '</div><div class="pimg-grid">'+d.suggested.map(c=>pLibTile(c,chosen,true)).join("")+'</div>';
+  }
+  const rest = (d.library||[]).filter(c=>!(d.suggested||[]).some(s=>s.id===c.id));
+  html += '<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:16px 0 6px">'
+    + (rest.length?'Everything else in the library':'Nothing approved in the library yet')+'</div>';
+  html += rest.length
+    ? '<div class="pimg-grid">'+rest.map(c=>pLibTile(c,chosen,false)).join("")+'</div>'
+    : '<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">Approve some logos or photos in <b>Image library</b> and they will appear here.</div>';
+  return html;
+}
+
 function pRenderPicker(){
   const box=document.getElementById((pPick&&pPick.host)||"pPicker");
   if(!pPick){box.innerHTML="";return;}
@@ -3790,6 +3916,7 @@ function pRenderPicker(){
     +'<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:10px 0 6px">From the article</div>'
     +(all.length?'<div class="pimg-grid">'+all.map(c=>pTile(c,chosen.url)).join("")+'</div>'
       :'<div style="font-family:Archivo,sans-serif;font-size:12px;color:var(--muted)">The page offered no usable picture (it may block us, or only have icons).</div>')
+    + pLibrarySection()
     +'<div style="font-family:Archivo,sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:16px 0 6px">Our house graphics &mdash; always safe</div>'
     +'<div class="pimg-grid">'+(d.house||[]).map(c=>pTile(c,chosen.url)).join("")+'</div>'
     +'<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center">'
@@ -3830,12 +3957,24 @@ async function pOpenPicker(kind,id,pillar,label,host){
       if(s)pPick.chosen={url:s,source:"candidate"};}
   }catch(e){pPick.data={note:"Couldn't reach the Command Center.",candidates:[],house:[]};}
   pRenderPicker();
+  // The library and its suggestions load after the article's own pictures, so the picker opens
+  // straight away rather than waiting on a model call.
+  try{
+    const lq=(kind==="item"?"item_id=":"post_id=")+id;
+    const lr=await fetch("/api/images/suggest?"+lq);
+    if(lr.ok && pPick && pPick.id===id){pPick.lib=await lr.json();pRenderPicker();}
+  }catch(e){ if(pPick) { pPick.lib={suggested:[],library:[]}; pRenderPicker(); } }
   document.getElementById(pPick.host).scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 async function pPickSave(){
   const b=document.getElementById("pPickGo");b.disabled=true;
-  const body=pPick.chosen.url?{image_url:pPick.chosen.url,image_source:pPick.chosen.source||"candidate"}
-          :(pPick.chosen.none?{image_url:null,image_source:"none"}:{});
+  const ch=pPick.chosen;
+  const body=ch.url?{image_url:ch.url,
+                     image_source:ch.source||"candidate",
+                     // A library pick carries its row id, so the licence and credit stay attached
+                     // to the post instead of being copied and going stale.
+                     image_library_id:ch.libId||null}
+          :(ch.none?{image_url:null,image_source:"none"}:{});
   try{
     const url=pPick.kind==="item"?("/api/publish/"+pPick.id):("/api/posts/"+pPick.id+"/image");
     const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -3847,7 +3986,12 @@ async function pPickSave(){
 }
 document.getElementById("p-publish").addEventListener("click",e=>{
   const t=e.target.closest("[data-pick]");
-  if(t&&pPick){pPick.chosen={url:t.dataset.pick,source:t.dataset.kind==="house"?"house":(t.dataset.kind==="article"?"manual":"candidate")};pRenderPicker();return;}
+  if(t&&pPick){
+    const k=t.dataset.kind;
+    pPick.chosen={url:t.dataset.pick,
+      source:k==="house"?"house":(k==="library"?"library":(k==="article"?"manual":"candidate")),
+      libId:k==="library"?+t.dataset.libid:null};
+    pRenderPicker();return;}
   const open=e.target.closest("[data-pickitem]");
   if(open){pOpenPicker("item",+open.dataset.pickitem,open.dataset.pillar,open.dataset.label);return;}
   const openPost=e.target.closest("[data-pickpost]");

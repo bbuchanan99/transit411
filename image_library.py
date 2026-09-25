@@ -69,6 +69,16 @@ def schema(cur):
     cur.execute("CREATE INDEX IF NOT EXISTS image_library_status_idx ON image_library (status, kind)")
     cur.execute("CREATE INDEX IF NOT EXISTS image_library_agency_idx ON image_library (lower(coalesce(agency, '')))")
     cur.execute("CREATE INDEX IF NOT EXISTS image_library_tags_idx ON image_library USING GIN (topic_tags)")
+    # Which library asset a post carries, when the picture was picked from the library. The post
+    # keeps the LINK, not a copy of the credit - so a correction to the licence or the credit
+    # reaches every post using it, instead of going stale in a dozen places.
+    cur.execute("ALTER TABLE content_posts ADD COLUMN IF NOT EXISTS image_library_id BIGINT")
+    cur.execute("""DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'content_posts_image_library_fk') THEN
+            ALTER TABLE content_posts ADD CONSTRAINT content_posts_image_library_fk
+                FOREIGN KEY (image_library_id) REFERENCES image_library(id) ON DELETE SET NULL;
+        END IF;
+    END $$;""")
     # Which approved logo an agency uses. Set only when a human approves one.
     cur.execute("ALTER TABLE agencies ADD COLUMN IF NOT EXISTS logo_image_id BIGINT")
     # ...and it must stop pointing at an image that no longer exists. Without this, deleting a

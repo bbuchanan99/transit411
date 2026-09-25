@@ -95,6 +95,51 @@ def recommend(cur, article, client=None, model=None, use_model=True):
             "considered": len(pool), "topics": tags}
 
 
+def rank(cur, article, limit=5, client=None, model=None, use_model=True):
+    """The best few library assets for this story, best first, each saying why.
+
+    This is what the picker shows at the top. It is a SHORTLIST, not a decision - the whole point
+    is that a person looks at five pictures and chooses one. Only approved assets appear.
+    """
+    out, seen = [], set()
+
+    def add(img, why, kind):
+        if not img or img.get("id") in seen or not img.get("url"):
+            return
+        seen.add(img["id"])
+        out.append(dict(img, why=why, kind=kind))
+
+    # An agency's own logo is the strongest answer there is, so it leads.
+    for name in agencies_in(article):
+        logo = L.approved_logo(cur, name)
+        if logo:
+            add(logo, "%s's own logo" % name, "logo")
+
+    tags = topics_in(article)
+    pool = L.approved_stock(cur, tags, limit=max(limit * 3, 12))
+    for p in pool:
+        shared = [t for t in (p.get("topic_tags") or []) if t in tags]
+        add(p, "matches " + (", ".join(shared) or "this story's topic"), "stock")
+
+    # Let the model put the best stock image first. It only reorders what is already approved and
+    # already on-topic, so a failed call costs nothing but the original order.
+    stock = [o for o in out if o["kind"] == "stock"]
+    if use_model and len(stock) > 1:
+        picked = _ask_model(article, stock, client=client, model=model)
+        best_id = (picked or {}).get("image_id")
+        if best_id:
+            for o in out:
+                if o["id"] == best_id:
+                    o["why"] = (picked.get("reason") or o["why"])
+                    o["ai_top"] = True
+                    out.remove(o)
+                    # after any logo, before the other stock
+                    at = sum(1 for x in out if x["kind"] == "logo")
+                    out.insert(at, o)
+                    break
+    return {"items": out[:limit], "topics": tags, "considered": len(out)}
+
+
 def _ask_model(article, pool, client=None, model=None):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key and client is None:
