@@ -521,8 +521,13 @@ def workflow_item(item_id: int):
     elif (it.get("pick_image_url") or "").strip():
         chosen = "source"
     if not chosen:
-        real = [o for o in options if o["kind"] != "none"]
-        chosen = real[0]["key"] if real else "none"
+        # Prefer an APPROVED library asset over the article's own photo. Both are offered, but the
+        # library one has a licence somebody has actually checked, and the source photo does not -
+        # so the cleared picture is the safe thing to land on when nobody has chosen yet.
+        cleared = [o for o in options if o.get("library_id")]
+        shot = [o for o in options if o["kind"] == "source"]
+        first = cleared or shot
+        chosen = first[0]["key"] if first else "none"
     for o in options:
         o["ai_top"] = (o["key"] == chosen)
 
@@ -821,6 +826,176 @@ def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
         raise HTTPException(502, f"DB error: {e}")
     _request_site_rebuild("post published")
     return {"post_id": post_id, "item_id": item_id, "status": "published"}
+
+
+
+QUEUE_TICK = 60          # how often the runner looks for scheduled items that have come due
+
+
+def _pick_label(it):
+    """What the queue row says about the picture that was chosen in review."""
+    src = it.get("pick_image_source")
+    if src == "none":
+        return "none (text-only)"
+    if it.get("pick_image_library_id"):
+        return "from the image library"
+    if it.get("pick_image_url"):
+        return "source photo"
+    return "no picture chosen"
+
+
+def _publish_queued(cur, item_id):
+    """Publish one queued item with the picture chosen in review. Returns the post id or None."""
+    cur.execute("SELECT pick_image_url, pick_image_source, pick_image_library_id "
+                "FROM collected_items WHERE id=%s", (item_id,))
+    row = cur.fetchone()
+    if not row:
+        return None
+    img, src, lib = row
+    post_id = _publish_one(cur, item_id, img, src)
+    if post_id and lib:
+        cur.execute("UPDATE content_posts SET image_library_id=%s WHERE id=%s", (lib, post_id))
+    if post_id:
+        cur.execute("UPDATE collected_items SET queue_state=NULL WHERE id=%s", (item_id,))
+    return post_id
+
+
+@app.get("/api/workflow/queue")
+def workflow_queue():
+    """Approved items waiting to go live, with the picture chosen for each and when it publishes.
+
+    publish_at NULL means "now / manual" - it sits here until someone pushes it live. A time in the
+    future means the runner publishes it then.
+    """
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            _ensure_workflow(cur)
+            c.commit()
+            cur.execute(
+                "SELECT id, pillar, headline, publish_at, queue_state, pick_image_url, "
+                "pick_image_source, pick_image_library_id, reco_score "
+                "FROM collected_items WHERE status='approved' "
+                "ORDER BY publish_at NULLS FIRST, id DESC")
+            cols = [d[0] for d in cur.description]
+            items = []
+            for row in cur.fetchall():
+                it = dict(zip(cols, row))
+                it["publish_at"] = it["publish_at"].isoformat() if it.get("publish_at") else None
+                it["image_label"] = _pick_label(it)
+                it["scheduled"] = bool(it["publish_at"])
+                items.append(it)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    now = sum(1 for i in items if not i["scheduled"])
+    return {"items": items, "now_count": now, "scheduled_count": len(items) - now,
+            "tick_seconds": QUEUE_TICK}
+
+
+class QueueTime(BaseModel):
+    publish_at: Optional[str] = None      # ISO 8601, or null for "now / manual"
+
+
+@app.post("/api/workflow/{item_id}/schedule")
+def workflow_schedule(item_id: int, t: QueueTime):
+    """Give a queued item a publish time, or clear it back to "now / manual"."""
+    from datetime import datetime, timezone
+    when = None
+    raw = (t.publish_at or "").strip()
+    if raw:
+        try:
+            when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(400, "That isn't a date and time I can read.")
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when <= datetime.now(timezone.utc):
+            raise HTTPException(400, "That time has already passed - pick a future time, "
+                                     "or push it live now.")
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_workflow(cur)
+            cur.execute("UPDATE collected_items SET publish_at=%s, queue_state=%s "
+                        "WHERE id=%s AND status='approved'",
+                        (when, "scheduled" if when else "queued", item_id))
+            if not cur.rowcount:
+                raise HTTPException(404, "no queued item with that id")
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"id": item_id, "publish_at": when.isoformat() if when else None,
+            "queue_state": "scheduled" if when else "queued"}
+
+
+@app.post("/api/workflow/publish-now")
+def workflow_publish_now():
+    """Publish every queued item set to "now". Scheduled items are left alone to fire on their own."""
+    published, failed = [], []
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            _ensure_workflow(cur)
+            cur.execute("SELECT id FROM collected_items WHERE status='approved' AND publish_at IS NULL "
+                        "ORDER BY id")
+            ids = [r[0] for r in cur.fetchall()]
+            for i in ids:
+                pid = _publish_queued(cur, i)
+                (published if pid else failed).append(i)
+            c.commit()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if published:
+        _request_site_rebuild("queue pushed live")
+    return {"published": published, "failed": failed, "count": len(published)}
+
+
+def _publish_due(dsn):
+    """Publish scheduled items whose time has come. One rebuild for the batch, not one each."""
+    import psycopg
+    done = []
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        _ensure_library(cur)
+        _ensure_workflow(cur)
+        conn.commit()
+        cur.execute("SELECT id FROM collected_items WHERE status='approved' "
+                    "AND publish_at IS NOT NULL AND publish_at <= now() ORDER BY publish_at")
+        for (i,) in cur.fetchall():
+            pid = _publish_queued(cur, i)
+            if pid:
+                done.append(i)
+        conn.commit()
+    if done:
+        _request_site_rebuild("scheduled post published")
+    return done
+
+
+def _queue_runner():
+    """Wake every minute and publish anything that has come due.
+
+    This lives in the Command Center rather than the scheduler service on purpose: publishing has
+    to trigger the Cloudflare rebuild, and CF_PAGES_DEPLOY_HOOK is only in this service's
+    environment. The container is restart:unless-stopped, so it is always up.
+    """
+    import time
+    dsn = os.environ.get("DATABASE_URL", "")
+    if not dsn:
+        return
+    while True:
+        time.sleep(QUEUE_TICK)
+        try:
+            done = _publish_due(dsn)
+            if done:
+                print("Queue: published scheduled items %s" % done, flush=True)
+        except Exception as e:
+            print("Queue: run failed: %s: %s" % (type(e).__name__, e), flush=True)
+
+
+@app.on_event("startup")
+def _start_queue_runner():
+    t = threading.Thread(target=_queue_runner, daemon=True, name="queue-runner")
+    t.start()
 
 
 @app.get("/api/posts")
@@ -3076,6 +3251,25 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
 .wf-btn-sec{background:#2A241F;color:var(--muted)}
 .wf-btn-sec:hover{color:var(--ink)}
 .wf-btn:disabled{opacity:.6;cursor:default}
+.wf-qbar{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 18px;margin-bottom:16px}
+.wf-qbar span{font-family:'Archivo',sans-serif;font-size:14px;font-weight:700}
+.wf-qrow{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 16px;margin-bottom:9px}
+.wf-qthumb{width:44px;height:44px;border-radius:7px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-size:9px;font-weight:700;color:var(--muted);background:#2A241F;text-align:center;overflow:hidden}
+.wf-qthumb img{width:100%;height:100%;object-fit:cover}
+.wf-qmid{flex:1;min-width:0}
+.wf-qmid h3{font-family:'Archivo',sans-serif;font-size:15px;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-qmeta{font-size:12px;color:var(--muted)}
+.wf-qtime{text-align:right;flex-shrink:0}
+.wf-qwhen{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;color:var(--accent)}
+.wf-qwhen.sched{color:var(--gold)}
+.wf-qset{font-size:11px;color:var(--muted);cursor:pointer;text-decoration:underline;background:none;border:none;padding:0;font-family:'Spectral',Georgia,serif}
+.wf-qset:hover{color:var(--ink)}
+.wf-qpick{margin-top:6px;display:flex;gap:6px;justify-content:flex-end;align-items:center}
+/* a class rule with display:flex beats the UA [hidden] rule, so say it explicitly */
+.wf-qpick[hidden]{display:none}
+.wf-qpick input{background:#2A241F;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 6px;font-family:'Archivo',sans-serif;font-size:11px}
+.wf-qpick button{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;border:none;border-radius:6px;padding:4px 9px;cursor:pointer;background:var(--accent2);color:#fff}
+.wf-nopick{color:var(--gold)}
 </style></head><body>
 <aside>
   <div class="brand">TRANSIT<span>411</span></div>
@@ -3351,6 +3545,7 @@ document.getElementById("wfStages").addEventListener("click", e => {
   document.querySelectorAll(".wf-stage").forEach(x => x.classList.toggle("on", x===b));
   document.getElementById("wf-focus").hidden = true;
   ["review","queue","published"].forEach(k => { document.getElementById("wf-"+k).hidden = (k !== b.dataset.stage); });
+  if(b.dataset.stage === "queue") loadQueue();
 });
 document.getElementById("wfList").addEventListener("click", e => {
   const r = e.target.closest(".wf-row"); if(!r) return;
@@ -3481,6 +3676,7 @@ async function wfApprove(){
   }
   wfClose();
   loadWorkflow();          // the item leaves pending; no auto-advance, by design
+  loadQueue();
 }
 async function wfSkip(){
   const id = wfItem.id;
@@ -3488,6 +3684,97 @@ async function wfSkip(){
   wfClose();
   loadWorkflow();
 }
+
+
+// ---- Upload queue: what is approved, with what picture, and when it goes live -------------------
+// publish_at NULL means "now / manual" - it waits here until Push live now. A future time means the
+// runner in this service publishes it then, on its own.
+let wfQueue = [];
+function wfWhenText(iso){
+  try{ return new Date(iso).toLocaleString([], {weekday:"short", month:"short", day:"numeric",
+                                                hour:"numeric", minute:"2-digit"}); }
+  catch(e){ return iso; }
+}
+function wfQThumb(it){
+  if(it.pick_image_source === "none") return '<div class="wf-qthumb">no img</div>';
+  if(it.pick_image_url) return '<div class="wf-qthumb"><img src="'+esc(it.pick_image_url)+'" alt="" onerror="this.remove()"></div>';
+  return '<div class="wf-qthumb">none</div>';
+}
+function wfQRow(it){
+  const sched = it.scheduled;
+  const label = (it.image_label === "no picture chosen")
+    ? '<span class="wf-nopick">no picture chosen</span>' : esc(it.image_label);
+  return '<div class="wf-qrow" data-id="'+it.id+'">'
+    +wfQThumb(it)
+    +'<div class="wf-qmid"><h3>'+esc(it.headline||"")+'</h3>'
+      +'<div class="wf-qmeta">'+esc(it.pillar||"News")+' · image: '+label+'</div></div>'
+    +'<div class="wf-qtime">'
+      +'<div class="wf-qwhen'+(sched ? " sched" : "")+'">'
+        +(sched ? ("Scheduled: "+esc(wfWhenText(it.publish_at))) : "Publish: Now")+'</div>'
+      +'<button class="wf-qset" data-set="'+it.id+'">'+(sched ? "change" : "Set a time")+'</button>'
+      +'<div class="wf-qpick" data-pick="'+it.id+'" hidden>'
+        +'<input type="datetime-local" data-when="'+it.id+'">'
+        +'<button data-save="'+it.id+'">Set</button>'
+        +(sched ? '<button data-clear="'+it.id+'" style="background:#2A241F;color:var(--muted)">Now</button>' : "")
+      +'</div>'
+    +'</div></div>';
+}
+async function loadQueue(){
+  const box = document.getElementById("wf-queue");
+  box.innerHTML = '<div class="wf-note">Loading the queue...</div>';
+  const d = await jget("/api/workflow/queue");
+  if(!d){ box.innerHTML = '<div class="wf-note">Could not load the queue.</div>'; return; }
+  wfQueue = d.items || [];
+  document.getElementById("wfNQueue").textContent = wfQueue.length;
+  const bar = '<div class="wf-qbar"><span>'+d.now_count+' set to publish now · '
+    +d.scheduled_count+' scheduled</span>'
+    +'<button class="wf-btn wf-btn-primary" style="flex:none" id="wfPush"'
+    +(d.now_count ? "" : " disabled")+'>Push live now &rarr;</button></div>';
+  box.innerHTML = bar + (wfQueue.length ? wfQueue.map(wfQRow).join("")
+    : '<div class="wf-note">Nothing in the queue. Approve items in Review to fill it.</div>');
+  const push = document.getElementById("wfPush");
+  if(push) push.onclick = wfPushLive;
+}
+async function wfSetTime(id, iso){
+  const r = await fetch("/api/workflow/"+id+"/schedule", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({publish_at: iso})});
+  if(!r.ok){
+    let why = "That time could not be set.";
+    try{ const j = await r.json(); if(j && j.detail) why = j.detail; }catch(e){}
+    alert(why);
+    return;
+  }
+  loadQueue();
+}
+async function wfPushLive(){
+  const btn = document.getElementById("wfPush");
+  btn.disabled = true; btn.textContent = "Publishing...";
+  try{
+    const r = await fetch("/api/workflow/publish-now", {method:"POST"});
+    const j = r.ok ? await r.json() : null;
+    if(!j){ alert("Could not publish the queue."); btn.disabled = false; btn.innerHTML = "Push live now &rarr;"; return; }
+  }catch(e){ alert("Could not publish the queue."); btn.disabled = false; return; }
+  loadQueue();
+  loadWorkflow();
+}
+document.getElementById("wf-queue").addEventListener("click", e => {
+  const set = e.target.closest("[data-set]");
+  if(set){
+    const box = document.querySelector('[data-pick="'+set.dataset.set+'"]');
+    if(box) box.hidden = !box.hidden;
+    return;
+  }
+  const save = e.target.closest("[data-save]");
+  if(save){
+    const inp = document.querySelector('[data-when="'+save.dataset.save+'"]');
+    if(!inp || !inp.value){ alert("Pick a date and time first."); return; }
+    wfSetTime(save.dataset.save, new Date(inp.value).toISOString());
+    return;
+  }
+  const clr = e.target.closest("[data-clear]");
+  if(clr) wfSetTime(clr.dataset.clear, null);
+});
 
 // ---- Console navigation: sidebar workspaces, a landing dashboard, and hash deep-links ----------
 // Tools are the existing panels; the router just decides which workspace and which panel is shown,
