@@ -65,7 +65,10 @@ ALLOW = {
 # Read-only paths with one path segment: GET /api/posts/<slug> (an article page's post). The slug is
 # restricted so nothing else under /api/posts can be reached.
 import re  # noqa: E402
-ALLOW_PATTERNS = [("GET", re.compile(r"^/api/posts/[a-z0-9][a-z0-9-]{0,120}$"))]
+ALLOW_PATTERNS = [("GET", re.compile(r"^/api/posts/[a-z0-9][a-z0-9-]{0,120}$")),
+                  # An uploaded library graphic. The Command Center serves APPROVED assets
+                  # only to a public caller, so a candidate stays invisible here.
+                  ("GET", re.compile(r"^/api/images/file/[0-9]{1,12}$"))]
 
 app = FastAPI(title="Transit411 read-only public API")
 # Only the Transit411 site (Pages preview + the domains) may call from a browser.

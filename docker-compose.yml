@@ -54,6 +54,7 @@ services:
       - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
       - CIG_PDF_DIR=/data/cig
       - CIG_PROFILE_DIR=/data/cig_profiles
+      - LIBRARY_DIR=/data/library
       # Ask CIG turns questions into SQL itself (the Ask NTD API does its own), so it needs the key too.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ASK_NTD_MODEL=${ASK_NTD_MODEL:-claude-haiku-4-5}
@@ -75,6 +76,8 @@ services:
       - ${DATA_DIR:-/share/Container/transit411/data}/cig:/data/cig
       # Archived versions of every project's FTA profile PDF (and the inbox for new downloads).
       - ${DATA_DIR:-/share/Container/transit411/data}/cig_profiles:/data/cig_profiles
+      # Graphics added by hand to the image library.
+      - ${DATA_DIR:-/share/Container/transit411/data}/library:/data/library
     ports:
       - "8088:8080"
     depends_on:
@@ -151,6 +154,24 @@ services:
     depends_on:
       - db
     entrypoint: ["python", "cig_profiles.py"]
+
+  # Image & logo library: agency logos from Wikimedia, topic stock from Unsplash/Pexels.
+  # Everything it stores is a CANDIDATE - nothing reaches the public site without human approval.
+  #   docker compose run --rm images-lib logos.py --fetch
+  #   docker compose run --rm images-lib stock.py --fetch
+  images-lib:
+    build: .
+    profiles: ["tools"]
+    environment:
+      - DATABASE_URL=postgresql://transit411:${DB_PASSWORD:-transit411}@db:5432/transit411
+      - COLLECT_USER_AGENT=${COLLECT_USER_AGENT:-}
+      - UNSPLASH_KEY=${UNSPLASH_KEY:-}
+      - PEXELS_KEY=${PEXELS_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - RECOMMEND_MODEL=${RECOMMEND_MODEL:-claude-haiku-4-5}
+    depends_on:
+      - db
+    entrypoint: ["python"]
 
   # Local sentence embeddings, for semantic duplicate detection in the review queue. Runs the model
   # on the NAS: nothing about the queue is sent anywhere. Its own image (Dockerfile.embed), because

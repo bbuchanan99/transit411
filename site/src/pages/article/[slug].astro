@@ -104,7 +104,11 @@ const chips = [
           {post.imageIsHouse || !post.url
             ? <img src={post.image} alt={post.imageIsHouse ? `${post.pillar} — Transit411` : post.title} loading="lazy" />
             : <a href={post.url} target="_blank" rel="noopener noreferrer"><img src={post.image} alt={post.title} loading="lazy" /></a>}
-          {!post.imageIsHouse && post.source && <figcaption>Image: {post.source}</figcaption>}
+          {post.imageCredit
+            ? <figcaption>{post.imageCreditUrl
+                ? <a href={post.imageCreditUrl} target="_blank" rel="noopener noreferrer">{post.imageCredit}</a>
+                : post.imageCredit}{post.imageLicense && <span> · {post.imageLicense}</span>}</figcaption>
+            : (!post.imageIsHouse && post.source && <figcaption>Image: {post.source}</figcaption>)}
         </figure>
       )}
     </div>

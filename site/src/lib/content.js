@@ -76,6 +76,13 @@ function toPost(p) {
     image: p.image_source === "none" ? null : (safeUrl(p.image_url) || houseImage(p.pillar)),
     imageIsHouse: p.image_source !== "none" && !safeUrl(p.image_url),
     imageSource: p.image_source || null,
+    // When the picture comes from the library, its credit comes with it. Unsplash and Pexels
+    // require attribution and a Wikimedia file often does too, so the page must be able to print
+    // it - an image shown without the credit its licence asks for is a breach, not a detail.
+    imageCredit: p.image_attribution || null,
+    imageLicense: p.image_license || null,
+    imageCreditUrl: safeUrl(p.image_source_url),
+    imageFromLibrary: String(p.image_source || "").startsWith("library-"),
   };
 }
 
