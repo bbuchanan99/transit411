@@ -159,6 +159,24 @@ def set_status(cur, image_id, status, approve_for_agency=True):
     return {"id": image_id, "kind": kind, "agency": agency, "status": status}
 
 
+import os as _os
+
+# An uploaded file has no public URL of its own, so one is derived: the read-only API serves it at
+# /api/images/file/<id>, and that is what the static site can actually load.
+PUBLIC_API = (_os.environ.get("PUBLIC_API_BASE")
+              or _os.environ.get("EMAIL_LINK_BASE")
+              or "https://api.transit411.net").rstrip("/")
+
+
+def public_url(row):
+    """The URL a reader's browser can fetch, whether the asset is hosted elsewhere or uploaded."""
+    if row.get("url"):
+        return row["url"]
+    if row.get("file_path") and row.get("id"):
+        return "%s/api/images/file/%s" % (PUBLIC_API, row["id"])
+    return None
+
+
 def approved_logo(cur, agency_name):
     """The approved logo for an agency, or None. Only ever returns an approved row."""
     if not agency_name:
@@ -171,8 +189,10 @@ def approved_logo(cur, agency_name):
     row = cur.fetchone()
     if not row:
         return None
-    return dict(zip(("id", "url", "file_path", "width", "height", "license", "attribution",
-                     "source_url"), row))
+    out = dict(zip(("id", "url", "file_path", "width", "height", "license", "attribution",
+                    "source_url"), row))
+    out["url"] = public_url(out)
+    return out
 
 
 def approved_stock(cur, tags, limit=5):
@@ -189,7 +209,10 @@ def approved_stock(cur, tags, limit=5):
             ORDER BY overlap DESC, id DESC LIMIT %s""", (tags, tags, limit))
     cols = ("id", "url", "file_path", "width", "height", "license", "attribution", "source_url",
             "topic_tags", "overlap")
-    return [dict(zip(cols, r)) for r in cur.fetchall()]
+    out = [dict(zip(cols, r)) for r in cur.fetchall()]
+    for r in out:
+        r["url"] = public_url(r)
+    return out
 
 
 def coverage(cur):

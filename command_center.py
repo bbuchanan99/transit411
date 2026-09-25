@@ -2334,6 +2334,137 @@ def _fill_library_images(cur, posts):
 # Nothing here is on the read-only allowlist. Approving is a licence and trademark judgement, so
 # it happens on the LAN, by a human, with the provenance on screen.
 
+LIBRARY_DIR = os.environ.get("LIBRARY_DIR", "/data/library")
+LIBRARY_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/svg+xml": ".svg",
+                 "image/webp": ".webp", "image/gif": ".gif"}
+LIBRARY_MAX = 4_000_000
+
+
+class ManualImage(BaseModel):
+    """A graphic added by hand. Provenance is required here exactly as it is for a fetched asset -
+    an agency emailing us a logo still needs the terms written down, or nobody can answer 'may we
+    use this?' in six months."""
+    kind: str = "logo"
+    agency: Optional[str] = None
+    topic_tags: Optional[List[str]] = None
+    url: Optional[str] = None            # a hosted image, or omit and upload the bytes instead
+    source_url: str
+    license: str
+    attribution: str
+    notes: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+def _library_add(cur, fields, file_path=None, url=None):
+    import image_library as L
+    asset = {
+        "kind": (fields.kind or "logo").strip(),
+        "agency": (fields.agency or "").strip() or None,
+        "topic_tags": [t.strip() for t in (fields.topic_tags or []) if t.strip()],
+        "url": url, "file_path": file_path,
+        "width": fields.width, "height": fields.height,
+        "source": "manual",
+        "source_url": (fields.source_url or "").strip(),
+        "license": (fields.license or "").strip(),
+        "attribution": (fields.attribution or "").strip(),
+        "notes": "manual | " + ((fields.notes or "added by hand").strip())[:240],
+    }
+    if asset["kind"] == "logo" and not asset["agency"]:
+        raise HTTPException(400, "A logo needs the agency it belongs to.")
+    if asset["kind"] == "stock" and not asset["topic_tags"]:
+        raise HTTPException(400, "A stock image needs at least one topic tag.")
+    try:
+        L.check_provenance(asset)
+    except L.MissingProvenance as e:
+        # The same gate the fetchers meet. Adding by hand is not a way around it.
+        raise HTTPException(400, str(e))
+    return L.add_candidate(cur, asset)
+
+
+@app.post("/api/images/library")
+async def images_add_manual(request: Request):
+    """Add a graphic by hand: JSON with a hosted `url`, or multipart with a `file` plus the same
+    provenance fields. Lands as a candidate like everything else."""
+    ctype = (request.headers.get("content-type") or "").split(";")[0].strip()
+    file_path = url = None
+    if ctype == "multipart/form-data":
+        form = await request.form()
+        up = form.get("file")
+        if up is None:
+            raise HTTPException(400, "No file in the upload.")
+        data = await up.read()
+        if not data:
+            raise HTTPException(400, "That file is empty.")
+        if len(data) > LIBRARY_MAX:
+            raise HTTPException(413, "That image is over 4 MB.")
+        ext = LIBRARY_TYPES.get((up.content_type or "").lower())
+        if not ext:
+            raise HTTPException(400, "Use a PNG, JPEG, SVG, WEBP or GIF.")
+        fields = ManualImage(
+            kind=form.get("kind") or "logo", agency=form.get("agency"),
+            topic_tags=[t for t in (form.get("topic_tags") or "").split(",") if t.strip()],
+            source_url=form.get("source_url") or "", license=form.get("license") or "",
+            attribution=form.get("attribution") or "", notes=form.get("notes"))
+        import uuid
+        os.makedirs(LIBRARY_DIR, exist_ok=True)
+        name = uuid.uuid4().hex + ext
+        with open(os.path.join(LIBRARY_DIR, name), "wb") as f:
+            f.write(data)
+        file_path = name
+    else:
+        payload = await request.json()
+        try:
+            fields = ManualImage(**payload)
+        except Exception as e:
+            # Building the model by hand means a validation error escapes as a 500 unless it is
+            # caught. The caller should be told which provenance field is missing, not "error".
+            missing = [f for f in ("source_url", "license", "attribution")
+                       if not str((payload or {}).get(f) or "").strip()]
+            raise HTTPException(400, "refusing to store an image without "
+                                + (", ".join(missing) if missing else str(e)[:160]))
+        url = (fields.url or "").strip()
+        if not _valid_image_url(url):
+            raise HTTPException(400, "Give a full http(s) image URL, or upload a file instead.")
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            rid, what = _library_add(cur, fields, file_path=file_path, url=url)
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"id": rid, "result": what, "status": "candidate"}
+
+
+@app.get("/api/images/file/{image_id}")
+def images_file(image_id: int, request: Request):
+    """Serve an uploaded library file.
+
+    Public callers (through the read-only proxy) get APPROVED images only; on the LAN any status
+    is served, so the review screen can show a candidate before anyone has approved it.
+    """
+    from fastapi.responses import FileResponse
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_library(cur)
+            c.commit()
+            cur.execute("SELECT file_path, status FROM image_library WHERE id=%s", (image_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    if not row or not row[0]:
+        raise HTTPException(404, "no such file")
+    path, status = row
+    if _surface(request) == "public" and status != "approved":
+        raise HTTPException(404, "no such file")
+    full = os.path.join(LIBRARY_DIR, os.path.basename(path))
+    if not os.path.exists(full):
+        raise HTTPException(404, "file missing from disk")
+    return FileResponse(full)
+
+
 def _ensure_library(cur):
     import image_library as L
     L.schema(cur)
@@ -2519,6 +2650,17 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .imgcard-t{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;line-height:1.3}
 /* AI recommendation: always visually distinct from Brian's own decision. The score, the pill and
    the reason all sit inside a dashed "AI" frame so nothing here reads as a status the system set. */
+/* Adding a graphic by hand. Provenance fields are marked required because they are. */
+.ilform{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:0 14px;margin:0 0 14px}
+.ilform summary{cursor:pointer;padding:12px 0;font-family:'Archivo',sans-serif;font-size:13px;font-weight:700}
+.ilnote{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);line-height:1.55;margin:0 0 12px}
+.ilgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px 16px}
+.ilgrid label{display:flex;flex-direction:column;gap:4px;font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.ilgrid input,.ilgrid select{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font-family:'Archivo',sans-serif;font-size:13px;font-weight:400;text-transform:none;letter-spacing:0}
+.ilreq{color:var(--accent);font-weight:700;text-transform:none;letter-spacing:0}
+.ilmsg{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+.ilmsg.err{color:var(--accent)}
+.ilmsg.ok{color:#4FA96B}
 .reco-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
 .reco-run{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
 .reco-set{background:var(--card);border:1px solid var(--accent);border-radius:12px;padding:14px 16px;margin:0 0 16px}
@@ -2719,6 +2861,24 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
   <div class="panel" id="p-imglib">
     <div class="askhead"><div><h2 class="disp">Image library</h2><p class="lead">Agency logos from Wikimedia and topic photos from Unsplash/Pexels, each stored with the licence and the credit it requires. <b>Nothing here reaches the public site until you approve it</b> &mdash; a logo is a trademark and a stock photo is a licence agreement, and both are your call.</p></div>
       <button class="newq" id="ilRefresh" type="button">Refresh</button></div>
+    <details class="ilform"><summary>Add a graphic by hand</summary>
+      <p class="ilnote">For the agencies Wikimedia has nothing for, or a logo an agency sent you. <b>The licence and the credit are required</b> &mdash; the same rule the fetchers meet, because in six months nobody will remember the terms unless they are written down here. It lands as a candidate, like everything else.</p>
+      <div class="ilgrid">
+        <label>Kind<select id="ilfKind"><option value="logo">Agency logo</option><option value="stock">Topic photo</option></select></label>
+        <label>Agency <span class="ilreq" id="ilfAgencyReq">required for a logo</span><input type="text" id="ilfAgency" placeholder="exactly as it appears in the agency list"></label>
+        <label>Topic tags <span class="ilreq" id="ilfTagsReq">required for a photo</span><input type="text" id="ilfTags" placeholder="bus, station, construction"></label>
+        <label>Image URL <span class="ilreq">or choose a file below</span><input type="text" id="ilfUrl" placeholder="https://..."></label>
+        <label>Or upload a file<input type="file" id="ilfFile" accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"></label>
+        <label>Where it came from <span class="ilreq">required</span><input type="text" id="ilfSourceUrl" placeholder="the page or email it came from"></label>
+        <label>Licence <span class="ilreq">required</span><input type="text" id="ilfLicense" placeholder="e.g. Used with permission of the agency, 2026-09-25"></label>
+        <label>Credit <span class="ilreq">required</span><input type="text" id="ilfAttribution" placeholder="the credit line that must appear"></label>
+        <label>Note<input type="text" id="ilfNotes" placeholder="anything a future reader should know"></label>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+        <button class="go" style="padding:9px 18px" id="ilfAdd" type="button">Add to the library</button>
+        <span class="ilmsg" id="ilfMsg"></span>
+      </div>
+    </details>
     <div class="examples" id="ilKinds"></div>
     <div class="examples" id="ilStatus"></div>
     <div id="ilCoverage"></div>
@@ -3405,9 +3565,11 @@ function ilCard(it){
   const warn=cls?'<span style="font-family:Archivo,sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:'+cls[0]+';border:1px solid '+cls[0]+';border-radius:999px;padding:2px 9px">'+esc(cls[1])+'</span>':"";
   const who=it.agency?esc(it.agency):esc((it.topic_tags||[]).join(", ")||"untagged");
   const acted=it.status!=="candidate";
+  // An uploaded file has no external URL; it is served back from this server by id.
+  const src=safeUrl(it.url)||(it.file_path?("/api/images/file/"+it.id):null);
   return '<div class="rcard" style="padding:14px 16px;display:flex;gap:16px;align-items:flex-start">'
     +'<div style="flex:none;width:170px;height:104px;background:var(--panel);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden">'
-      +(safeUrl(it.url)?'<img src="'+esc(safeUrl(it.url))+'" alt="" style="max-width:100%;max-height:100%;object-fit:contain" loading="lazy">':'<span style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted)">no preview</span>')
+      +(src?'<img src="'+esc(src)+'" alt="" style="max-width:100%;max-height:100%;object-fit:contain" loading="lazy">':'<span style="font-family:Archivo,sans-serif;font-size:11px;color:var(--muted)">no preview</span>')
     +'</div><div style="flex:1;min-width:0">'
     +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
       +'<b style="font-family:Archivo,sans-serif;font-size:15px">'+who+'</b>'+warn
@@ -3460,6 +3622,53 @@ async function loadCoverage(){
       +'</div>';
   }catch(e){box.innerHTML="";}
 }
+
+// Adding a graphic by hand. Sends multipart when a file is chosen, JSON when a URL is given;
+// either way the server applies the same provenance gate the fetchers meet.
+function ilMsg(kind,text){const m=document.getElementById("ilfMsg");m.className="ilmsg"+(kind?" "+kind:"");m.textContent=text||"";}
+function ilVal(id){return (document.getElementById(id).value||"").trim();}
+document.getElementById("ilfKind").onchange=()=>{
+  const logo=document.getElementById("ilfKind").value==="logo";
+  document.getElementById("ilfAgencyReq").style.display=logo?"":"none";
+  document.getElementById("ilfTagsReq").style.display=logo?"none":"";
+};
+document.getElementById("ilfAdd").onclick=async()=>{
+  const btn=document.getElementById("ilfAdd");
+  const kind=document.getElementById("ilfKind").value;
+  const file=document.getElementById("ilfFile").files[0];
+  const url=ilVal("ilfUrl");
+  const missing=[["ilfSourceUrl","where it came from"],["ilfLicense","the licence"],["ilfAttribution","the credit"]]
+    .filter(([id])=>!ilVal(id)).map(([,label])=>label);
+  if(!file&&!url)missing.push("an image URL or a file");
+  if(kind==="logo"&&!ilVal("ilfAgency"))missing.push("the agency");
+  if(kind==="stock"&&!ilVal("ilfTags"))missing.push("at least one topic tag");
+  if(missing.length){ilMsg("err","Still needed: "+missing.join(", ")+".");return;}
+  btn.disabled=true;ilMsg("","Adding...");
+  try{
+    let r;
+    if(file){
+      const fd=new FormData();
+      fd.append("file",file);
+      [["kind",kind],["agency",ilVal("ilfAgency")],["topic_tags",ilVal("ilfTags")],
+       ["source_url",ilVal("ilfSourceUrl")],["license",ilVal("ilfLicense")],
+       ["attribution",ilVal("ilfAttribution")],["notes",ilVal("ilfNotes")]].forEach(([k,v])=>fd.append(k,v));
+      r=await fetch("/api/images/library",{method:"POST",body:fd});
+    }else{
+      r=await fetch("/api/images/library",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({kind:kind,agency:ilVal("ilfAgency")||null,
+          topic_tags:ilVal("ilfTags")?ilVal("ilfTags").split(",").map(t=>t.trim()).filter(Boolean):[],
+          url:url,source_url:ilVal("ilfSourceUrl"),license:ilVal("ilfLicense"),
+          attribution:ilVal("ilfAttribution"),notes:ilVal("ilfNotes")||null})});
+    }
+    const t=await r.text();
+    if(!r.ok){ilMsg("err",errText(t));return;}
+    ilMsg("ok","Added as a candidate - review it below.");
+    ["ilfUrl","ilfSourceUrl","ilfLicense","ilfAttribution","ilfNotes","ilfAgency","ilfTags"].forEach(id=>document.getElementById(id).value="");
+    document.getElementById("ilfFile").value="";
+    loadLibrary();
+  }catch(e){ilMsg("err","Could not reach the Command Center.");}
+  finally{btn.disabled=false;}
+};
 
 document.getElementById("ilRefresh").onclick=loadLibrary;
 document.getElementById("ilOut").addEventListener("click",async e=>{
