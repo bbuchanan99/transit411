@@ -707,6 +707,7 @@ def posts(pillar: Optional[str] = None, agency: Optional[str] = None, mode: Opti
                 # body is the summary plus a trailing "Source: name - url" line (source fields are separate).
                 p["summary"] = (p.get("body") or "").split("\n\nSource:")[0].strip() or None
                 out.append(p)
+            _fill_library_images(cur, out)
             cur.execute("SELECT count(*) FROM content_posts WHERE " + " AND ".join(where), params)
             total = cur.fetchone()[0]
     except Exception as e:
@@ -2296,6 +2297,39 @@ USAGE_THEMES = [
 ]
 
 
+def _fill_library_images(cur, posts):
+    """The last two steps of the image cascade, applied as the site reads a post.
+
+    chosen picture -> the agency's APPROVED logo -> an APPROVED topic photo -> nothing.
+
+    Only ever fills a post that has no picture, and never one published deliberately with
+    image_source='none'. The CREDIT TRAVELS WITH THE IMAGE: image_attribution and image_license
+    come back alongside it, because a stock photo shown without its credit is a licence breach and
+    the site has no other way to know what to print.
+    """
+    try:
+        import image_library as L
+        import image_recommend as R
+        L.schema(cur)
+    except Exception:
+        return          # no library yet: posts keep the house-graphic fallback, exactly as before
+    for p in posts:
+        if (p.get("image_url") or "").strip() or p.get("image_source") == "none":
+            continue
+        try:
+            rec = R.recommend(cur, p, use_model=False)
+        except Exception:
+            continue
+        img = rec.get("image")
+        if not img or not img.get("url"):
+            continue
+        p["image_url"] = img["url"]
+        p["image_source"] = "library-" + rec["kind"]
+        p["image_attribution"] = img.get("attribution")
+        p["image_license"] = img.get("license")
+        p["image_source_url"] = img.get("source_url")
+
+
 # ---- Image & logo library (private): review candidates before anything reaches the site --------
 # Nothing here is on the read-only allowlist. Approving is a licence and trademark judgement, so
 # it happens on the LAN, by a human, with the provenance on screen.
@@ -2334,8 +2368,11 @@ def images_library(kind: str = "logo", status: str = "candidate", q: Optional[st
                 it["topic_tags"] = it.get("topic_tags") or []
                 it["fetched_at"] = it["fetched_at"].isoformat() if it.get("fetched_at") else None
                 # The licence class the fetcher worked out, pulled to the front of the row.
-                note = it.get("notes") or ""
-                it["license_class"] = note.split(" | ")[0] if note[:9] in ("free | ", "non-free ", "unclear |") else None
+                # The fetcher writes "free | ...", "non-free | ..." or "unclear | ...". Slicing a
+                # fixed 9 characters matched "non-free " and nothing else, so free and unclear
+                # assets silently lost their badge.
+                first = (it.get("notes") or "").split(" | ")[0].strip()
+                it["license_class"] = first if first in ("free", "non-free", "unclear") else None
                 items.append(it)
             cur.execute("SELECT status, count(*) FROM image_library WHERE kind=%s GROUP BY 1", (kind,))
             counts = {k: v for k, v in cur.fetchall()}
