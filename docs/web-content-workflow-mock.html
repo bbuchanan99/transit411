@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Transit411 — Web Content workflow (mock)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@600&display=swap">
+<style>
+  :root{--bg:#100E0C;--panel:#1A1714;--card:#201C18;--card2:#252019;--ink:#F2EEE4;--muted:#9A9384;--line:#332E28;--accent:#EE6A54;--accent2:#C0341F;--ok:#5FBF8F;--gold:#D6A94A}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'Spectral',Georgia,serif}
+  .disp{font-family:'Archivo',sans-serif}
+  .wrap{max-width:940px;margin:0 auto;padding:26px 22px 60px}
+  h1{font-family:'Archivo',sans-serif;font-size:24px;font-weight:800;margin:0 0 4px}
+  .lede{color:var(--muted);font-size:14px;margin:0 0 20px}
+  /* stage tabs */
+  .stages{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--line);padding-bottom:0}
+  .stage{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--muted);padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent}
+  .stage.on{color:var(--ink);border-bottom-color:var(--accent)}
+  .stage .n{display:inline-block;background:#2E2822;color:var(--muted);border-radius:999px;font-size:11px;padding:1px 8px;margin-left:6px}
+  .stage.on .n{background:var(--accent2);color:#fff}
+  /* list rows */
+  .row{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px 16px;margin-bottom:9px;cursor:pointer;transition:border-color .15s,transform .12s}
+  .row:hover{border-color:var(--accent);transform:translateX(2px)}
+  .score{font-family:'Archivo',sans-serif;font-weight:900;font-size:20px;width:40px;text-align:center;flex-shrink:0}
+  .s-hi{color:var(--ok)} .s-mid{color:var(--gold)} .s-lo{color:var(--muted)}
+  .rmid{flex:1;min-width:0}
+  .rmid .pill{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--accent)}
+  .rmid h3{font-family:'Archivo',sans-serif;font-size:16px;font-weight:700;margin:3px 0 2px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rmid .reason{font-size:13px;color:var(--muted)}
+  .rec{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:5px 11px;border-radius:999px;flex-shrink:0}
+  .rec-pub{background:rgba(95,191,143,.16);color:var(--ok)} .rec-hold{background:rgba(214,169,74,.16);color:var(--gold)} .rec-skip{background:#2A241F;color:var(--muted)}
+  /* focus card */
+  .focus{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:0;overflow:hidden}
+  .fhead{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .fhead .back{font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--muted);cursor:pointer}
+  .fhead .pos{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+  .fbody{padding:20px 22px}
+  .frec{display:flex;align-items:center;gap:12px;background:#241F1B;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px}
+  .frec .sc{font-family:'Archivo',sans-serif;font-weight:900;font-size:24px}
+  .frec .txt{font-size:14px;color:var(--ink)}
+  .frec .txt b{color:var(--accent)}
+  .fpill{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--accent)}
+  .fbody h2{font-family:'Archivo',sans-serif;font-size:23px;font-weight:800;margin:6px 0 10px;line-height:1.15}
+  .fsum{font-size:15px;color:#C7C0B2;line-height:1.55;margin:0 0 8px}
+  .fmeta{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted);margin-bottom:20px}
+  /* image picker */
+  .picker{border-top:1px solid var(--line);padding-top:18px}
+  .picker .lbl{font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+  .opts{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .opt{border:2px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--card2);transition:border-color .15s;position:relative}
+  .opt:hover{border-color:var(--accent)}
+  .opt.sel{border-color:var(--ok)}
+  .opt .thumb{height:74px;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);text-align:center;padding:4px}
+  .opt .cap{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;padding:6px 8px;border-top:1px solid var(--line);color:var(--ink)}
+  .opt .src{font-size:9px;color:var(--muted);padding:0 8px 6px}
+  .opt.sel::after{content:"✓";position:absolute;top:6px;right:8px;color:var(--ok);font-weight:900;font-family:'Archivo',sans-serif}
+  .ph-fund{background:linear-gradient(135deg,#2a2018,#3a2a1a)} .ph-logo{background:#e9e3d6;color:#17140F !important}
+  /* feedback line */
+  .feedback{margin-top:14px;font-family:'Archivo',sans-serif;font-size:13px;font-weight:700;color:var(--ok);min-height:20px}
+  /* actions */
+  .actions{display:flex;gap:10px;margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+  .btn{font-family:'Archivo',sans-serif;font-weight:800;font-size:14px;border:none;border-radius:9px;padding:13px 22px;cursor:pointer}
+  .btn-primary{background:var(--accent2);color:#fff;flex:1}
+  .btn-primary:hover{background:#8F2415}
+  .btn-sec{background:#2A241F;color:var(--muted)}
+  .btn-sec:hover{color:var(--ink)}
+  /* queue */
+  .qrow{display:flex;align-items:center;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 16px;margin-bottom:9px}
+  .qthumb{width:44px;height:44px;border-radius:7px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'Archivo',sans-serif;font-size:9px;font-weight:700;color:var(--muted);background:#2A241F;text-align:center}
+  .qmid{flex:1;min-width:0}
+  .qmid h3{font-family:'Archivo',sans-serif;font-size:15px;font-weight:700;margin:0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .qmid .meta{font-size:12px;color:var(--muted)}
+  .qbadge{font-family:'Archivo',sans-serif;font-size:11px;font-weight:800;text-transform:uppercase;color:var(--gold);background:rgba(214,169,74,.14);padding:5px 11px;border-radius:999px;flex-shrink:0}
+  .qbar{display:flex;justify-content:space-between;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 18px;margin-bottom:16px}
+  .qbar span{font-family:'Archivo',sans-serif;font-size:14px;font-weight:700}
+  .hidden{display:none}
+</style></head>
+<body>
+<div class="wrap">
+  <h1 class="disp">Web Content</h1>
+  <p class="lede">Gather &rarr; review &rarr; queue &rarr; publish. One item at a time, everything in one place.</p>
+
+  <div class="stages">
+    <div class="stage on" onclick="show('list',this)">Review <span class="n">7</span></div>
+    <div class="stage" onclick="show('queue',this)">Upload queue <span class="n" id="qn">2</span></div>
+    <div class="stage" onclick="show('pub',this)">Published <span class="n">—</span></div>
+  </div>
+
+  <!-- LIST -->
+  <div id="list">
+    <div class="row" onclick="openFocus()">
+      <div class="score s-hi">88</div>
+      <div class="rmid"><div class="pill">Funding</div><h3>FTA finalizes FY2026 CIG guidance, simplifying environmental criteria</h3><div class="reason">Major policy shift; high relevance to New Starts sponsors. Strong lead candidate.</div></div>
+      <div class="rec rec-pub">Publish</div>
+    </div>
+    <div class="row" onclick="openFocus()">
+      <div class="score s-hi">81</div>
+      <div class="rmid"><div class="pill">Procurement</div><h3>California HSR to advertise Merced–Madera design-build RFP</h3><div class="reason">Timely, actionable for contractors. Unique in queue.</div></div>
+      <div class="rec rec-pub">Publish</div>
+    </div>
+    <div class="row" onclick="openFocus()">
+      <div class="score s-mid">64</div>
+      <div class="rmid"><div class="pill">People</div><h3>New chief program officer named at a major transit authority</h3><div class="reason">Solid People item; pairs well for pillar balance.</div></div>
+      <div class="rec rec-hold">Hold</div>
+    </div>
+    <div class="row" onclick="openFocus()">
+      <div class="score s-lo">38</div>
+      <div class="rmid"><div class="pill">Policy</div><h3>Op-ed speculates on future transit budget cuts</h3><div class="reason">Opinion, low newsworthiness; likely duplicate of a stronger item.</div></div>
+      <div class="rec rec-skip">Skip</div>
+    </div>
+  </div>
+
+  <!-- FOCUS -->
+  <div id="focus" class="hidden">
+    <div class="focus">
+      <div class="fhead"><div class="back" onclick="closeFocus()">&larr; Back to review</div><div class="pos">Item 1 of 7</div></div>
+      <div class="fbody">
+        <div class="frec"><div class="sc s-hi">88</div><div class="txt"><b>Recommended: Publish.</b> Major policy shift; high relevance to New Starts sponsors. Strong lead candidate.</div></div>
+        <div class="fpill">Funding</div>
+        <h2 class="disp">FTA finalizes FY2026 CIG guidance, simplifying environmental criteria</h2>
+        <p class="fsum">The revised guidance drops the social-cost-of-carbon calculation and reverts to EPA air-quality designations for the environmental rating — a friendlier path for New Starts sponsors heading into the next round.</p>
+        <div class="fmeta">Source: FTA.gov &middot; Sept 23, 2026 &middot; tags: CIG, New Starts, environmental</div>
+
+        <div class="picker">
+          <div class="lbl">Images AI found for this article <span style="font-weight:600;color:var(--muted);text-transform:none;letter-spacing:0">— pick one, or no image</span></div>
+          <div class="opts">
+            <div class="opt sel" onclick="pick(this,'Using the source photo (AI top pick)')"><div class="thumb ph-fund">source<br>photo<div style="position:absolute;top:5px;left:6px;font-size:9px;color:var(--accent);font-weight:800">★ AI PICK</div></div><div class="cap">Source photo</div><div class="src">via fta.gov · review license</div></div>
+            <div class="opt" onclick="pick(this,'Agency logo selected')"><div class="thumb ph-logo">FTA<br>logo</div><div class="cap">Agency logo</div><div class="src">Wikimedia · CC</div></div>
+            <div class="opt" onclick="pick(this,'Free-stock image selected')"><div class="thumb ph-fund">transit<br>photo</div><div class="cap">Free stock</div><div class="src">Unsplash · free license</div></div>
+            <div class="opt" onclick="pick(this,'No image — clean text-only layout')"><div class="thumb">No image</div><div class="cap">No image</div><div class="src">text-only</div></div>
+          </div>
+          <div class="feedback" id="fb" style="color:var(--ok)">✓ Using the source photo (AI top pick)</div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" onclick="approve()">Approve &rarr; add to upload queue</button>
+          <button class="btn btn-sec" onclick="closeFocus()">Hold</button>
+          <button class="btn btn-sec" onclick="closeFocus()">Skip</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- QUEUE -->
+  <div id="queue" class="hidden">
+    <div class="qbar"><span id="qcount">1 item set to publish now · 1 scheduled</span><button class="btn btn-primary" style="flex:none" onclick="alert('Would publish the 1 item set to “Now.” Scheduled items fire on their own at their set time.')">Push live now &rarr;</button></div>
+    <div id="qlist">
+      <div class="qrow">
+        <div class="qthumb ph-fund">photo</div>
+        <div class="qmid"><h3>Regional sales-tax measure qualifies for the November ballot</h3><div class="meta">Funding · image: source photo</div></div>
+        <div class="qtime" style="text-align:right;flex-shrink:0"><div style="font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;color:var(--accent)">Publish: Now</div><div style="font-size:11px;color:var(--muted);cursor:pointer;text-decoration:underline" onclick="alert('Would open a date/time picker to schedule this article.')">Set a time</div></div>
+      </div>
+      <div class="qrow">
+        <div class="qthumb">no img</div>
+        <div class="qmid"><h3>House advances BUILD America 250 with $87.5B for transit</h3><div class="meta">Policy · image: none (text-only)</div></div>
+        <div class="qtime" style="text-align:right;flex-shrink:0"><div style="font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;color:var(--gold)">Scheduled</div><div style="font-size:11px;color:var(--muted)">Thu, 8:00 AM · change</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PUBLISHED -->
+  <div id="pub" class="hidden"><p class="lede">Live posts would list here.</p></div>
+</div>
+
+<script>
+  let picked=true;
+  function show(id,el){
+    ['list','focus','queue','pub'].forEach(x=>document.getElementById(x).classList.add('hidden'));
+    document.getElementById(id).classList.remove('hidden');
+    document.querySelectorAll('.stage').forEach(s=>s.classList.remove('on'));
+    if(el) el.classList.add('on');
+  }
+  function openFocus(){ show('focus'); document.querySelectorAll('.stage')[0].classList.add('on'); resetPicker(); }
+  function closeFocus(){ show('list'); document.querySelectorAll('.stage')[0].classList.add('on'); }
+  function resetPicker(){ picked=true;
+    document.querySelectorAll('.opt').forEach((o,i)=>o.classList.toggle('sel', i===0));
+    const fb=document.getElementById('fb'); fb.textContent='✓ Using the source photo (AI top pick)'; fb.style.color='var(--ok)'; }
+  function pick(el,msg){
+    document.querySelectorAll('.opt').forEach(o=>o.classList.remove('sel'));
+    el.classList.add('sel'); picked=true;
+    const fb=document.getElementById('fb'); fb.textContent='✓ '+msg; fb.style.color='var(--ok)';
+  }
+  function approve(){
+    if(!picked){ const fb=document.getElementById('fb'); fb.textContent='Pick an image first (or choose “No image”).'; fb.style.color='var(--gold)'; return; }
+    // bump queue count, confirm, return to list
+    const qn=document.getElementById('qn'); qn.textContent=parseInt(qn.textContent)+1;
+    alert('✓ Approved → added to the upload queue (set to publish “Now” by default; you can schedule it there).');
+    closeFocus();
+  }
+</script>
+</body></html>

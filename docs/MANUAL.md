@@ -108,6 +108,53 @@ The guiding principle: **the public site is a thin reader of an engine that alre
 - **Adding a graphic by hand** — Image library → *Add a graphic by hand*: paste a hosted URL or upload a file (PNG/JPEG/SVG/WEBP/GIF, 4 MB), with **where it came from, the licence and the credit all required**. Adding by hand is not a way around the provenance rule; it meets the same gate the fetchers do. Uploads land in `DATA_DIR/library` and are served at `/api/images/file/<id>` — **approved assets only to a public caller**, any status on the LAN so the review screen can preview a candidate. That path is the one library route on the read-only allowlist.
 - **Run:** `docker compose run --rm images-lib logos.py --fetch` / `stock.py --fetch`.
 
+### 3.3d Web Content workflow: Review -> Upload queue -> Published (branch `feature/web-content-workflow`)
+
+A rebuild of the review-and-publish path into one screen, matching `docs/web-content-workflow-mock.html`.
+It is an **additional** tool in the Web Content workspace; Sources, Collection, Publish, Images and
+Image library are untouched, so the existing publish path keeps working until this is merged.
+
+- **Review** lists the pending queue as scannable rows: colour-coded AI score, pillar, headline, the
+  recommender's one-line reason and its action pill, sortable by score or freshness. It reads the
+  cached `reco_*` columns, so the screen costs nothing and changes nothing. Items the recommender has
+  not reached show a dash and say so rather than implying a low score.
+- **Focus mode** (click a row) puts the recommendation, the full item and the image picker together.
+  The picker offers a real picture or none at all - source photo, approved agency logo, approved topic
+  stock, No image. House/pillar graphics are deliberately gone. **Only `approved` library assets are
+  offered**, which is what stops an unlicensed picture reaching the site, and every tile prints its own
+  provenance. The source photo is labelled *licence not reviewed*, because it is the one option nobody
+  has cleared.
+  - **The default is a cleared library asset**, falling back to the article's own photo, then No image.
+    Both are always offered; pre-selection just lands on the one with a checked licence.
+  - Approve stores the choice on the item and moves it to the queue. **It does not publish.**
+- **Upload queue** shows what is approved, the picture chosen for each, and when it goes live.
+  `publish_at` NULL means "now / manual"; a future time means the runner publishes it then. *Push live
+  now* publishes only the items set to now and leaves scheduled ones alone, with a single site rebuild
+  for the batch. Items approved through the old Collection tab carry no picture and say **"no picture
+  chosen"** in amber rather than publishing silently with a fallback.
+
+**Columns added to `collected_items`:** `publish_at`, `queue_state` (`queued` | `scheduled`), and
+`pick_image_url` / `pick_image_source` / `pick_image_library_id`. The library id is `ON DELETE SET
+NULL`, so deleting an asset cannot leave a dangling reference.
+
+**The scheduled-publish runner lives in the Command Center, not the `scheduler` container** - a
+daemon thread that wakes every 60s (`QUEUE_TICK`). Publishing has to trigger the Cloudflare rebuild
+and `CF_PAGES_DEPLOY_HOOK` is only in this service's environment; the scheduler container could not
+fire one. Proven end to end: an item due at 22:54:11 published at 22:54:58, logging
+`Queue: published scheduled items [386]`, and carried its library image's credit through to the post.
+
+**Two traps this work hit, both worth remembering:**
+- **`command-center` has no volume mount** (`build: .`), so the code is baked into the image.
+  `scp` + `docker compose restart` silently serves the OLD page. It needs
+  `docker compose build command-center && docker compose up -d command-center`.
+- **A class rule beats the `hidden` attribute.** `.wf-qpick{display:flex}` overrode `[hidden]`, so
+  every queue row showed its date picker at once. `node --check` cannot catch this - only looking at
+  the screen did. Any class that sets `display` needs its own `[hidden]{display:none}`.
+
+**Namespacing:** every class in this screen is prefixed `wf-`. The mock uses `.row`, `.btn`, `.score`
+and `.pill`, and the console already defines `.pill` and `.row` - copying them verbatim would have
+restyled existing screens, which is how the wire grid broke once before.
+
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
   - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can usually be fetched by link. Not always: on 2026-09-22 the same PDF link was served once and then refused. When Load from link says 403, download the PDF and upload it.
