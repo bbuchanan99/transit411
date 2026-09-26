@@ -133,6 +133,17 @@ Image library are untouched, so the existing publish path keeps working until th
   for the batch. Items approved through the old Collection tab carry no picture and say **"no picture
   chosen"** in amber rather than publishing silently with a fallback.
 
+- **Published** is the old Images sweep, moved here: every published story and the picture it carries,
+  filterable by whether it has a real image or is falling back to a house graphic. It is for the back
+  catalogue - fixing up what is already live - which is why it sits at the end of the pipeline.
+
+**The Web Content nav is Workflow / Sources / Collection / Image library.** *Publish* was retired (the
+upload queue replaced it) and *Images* became the Published stage. **Collection is deliberately still
+there** as a safety net until a full batch has gone through the new screen; it is redundant and can go
+once you trust the workflow. The `p-publish` panel markup stays in the page even though nothing links
+to it, because a delegated click handler is bound to it and `getElementById` returning null at parse
+time would take the whole page script down - the same trap the Images move had to avoid.
+
 **Columns added to `collected_items`:** `publish_at`, `queue_state` (`queued` | `scheduled`), and
 `pick_image_url` / `pick_image_source` / `pick_image_library_id`. The library id is `ON DELETE SET
 NULL`, so deleting an asset cannot leave a dangling reference.

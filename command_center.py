@@ -3334,7 +3334,14 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     </div>
     <div id="wf-focus" hidden></div>
     <div id="wf-queue" hidden><div class="wf-note">The upload queue lands at the next checkpoint.</div></div>
-    <div id="wf-published" hidden><div class="wf-note">Published posts will list here.</div></div>
+    <div id="wf-published" hidden>
+      <div class="askhead"><div><h2 class="disp">Published</h2><p class="lead">Every published story and the picture it carries. A story with no chosen picture falls back to its pillar house graphic &mdash; safe, but generic. Sweep through and give the ones worth it a real image.</p></div>
+        <div style="display:flex;gap:8px"><button class="newq" id="imgRefresh" type="button">Refresh</button></div></div>
+      <div class="examples" id="imgFilters"></div>
+      <div id="imgMsg"></div>
+      <div id="imgPicker"></div>
+      <div id="imgOut"></div>
+    </div>
   </div>
   <div class="panel" id="p-collect">
     <div class="askhead"><div><h2 class="disp">Collection queue</h2><p class="lead">Items the engine gathered, freshest first - approve what runs, skip the rest. Populate with the collector job.</p></div><div style="display:flex;gap:8px"><button class="newq" id="cReco" type="button" style="white-space:nowrap;min-width:116px">Recommend</button><button class="newq" id="cRefresh" type="button">Refresh</button></div></div>
@@ -3472,14 +3479,6 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <div id="cigAskOut"></div>
   </div>
 </div>
-  <div class="panel" id="p-images">
-    <div class="askhead"><div><h2 class="disp">Images</h2><p class="lead">Every published story and the picture it carries. A story with no chosen picture falls back to its pillar house graphic &mdash; safe, but generic. Sweep through and give the ones worth it a real image.</p></div>
-      <div style="display:flex;gap:8px"><button class="newq" id="imgRefresh" type="button">Refresh</button></div></div>
-    <div class="examples" id="imgFilters"></div>
-    <div id="imgMsg"></div>
-    <div id="imgPicker"></div>
-    <div id="imgOut"></div>
-  </div>
   <div class="panel" id="p-reports">
     <div class="askhead"><div><h2 class="disp">Reports</h2><p class="lead">The Annual Snapshot and other data reports built from the NTD and CIG engines.</p></div></div>
     <div class="soon">Not built yet. The plan: a scheduled PDF/web report drawing on the same data the Ask tools use &mdash; pipeline movement, ridership and cost trends, and the year's funding picture.</div>
@@ -3546,6 +3545,7 @@ document.getElementById("wfStages").addEventListener("click", e => {
   document.getElementById("wf-focus").hidden = true;
   ["review","queue","published"].forEach(k => { document.getElementById("wf-"+k).hidden = (k !== b.dataset.stage); });
   if(b.dataset.stage === "queue") loadQueue();
+  if(b.dataset.stage === "published") loadImagesScreen();
 });
 document.getElementById("wfList").addEventListener("click", e => {
   const r = e.target.closest(".wf-row"); if(!r) return;
@@ -3783,7 +3783,7 @@ const WORKSPACES = {
   "web-content": {title:"Web Content", sub:"Gather, review and publish the news feed behind the public site.",
     desc:"Gather, review, and publish the news feed that populates the public site.",
     icon:'<path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
-    tools:[["workflow","Workflow","p-workflow"],["sources","Sources","p-sources"],["collection","Collection","p-collect"],["publish","Publish","p-publish"],["images","Images","p-images"],["library","Image library","p-imglib"]]},
+    tools:[["workflow","Workflow","p-workflow"],["sources","Sources","p-sources"],["collection","Collection","p-collect"],["library","Image library","p-imglib"]]},
   "publications": {title:"Publications", sub:"Compose and send The Wire; reports and the annual snapshot.",
     desc:"Compose and send The Wire; produce reports and the annual snapshot.",
     icon:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
@@ -3844,11 +3844,9 @@ function onToolOpen(tool, panel){
   if(panel==="p-usage")loadUsage();
   if(panel==="p-imglib")loadLibrary();
     else if(panel==="p-sources")loadSources();
-    else if(panel==="p-publish")loadPublish();
     else if(panel==="p-contacts")loadContacts();
     else if(panel==="p-newsletter")loadIssues();
     else if(panel==="p-grants")loadCIG();
-    else if(panel==="p-images")loadImagesScreen();
     else if(panel==="p-system")loadSystem();
     else if(panel==="p-listhealth")loadListHealth();
     else if(panel==="p-dataadmin")loadDataAdmin();
@@ -5384,7 +5382,7 @@ function imgCard(p){
     +'<div class="imgcard-t">'+esc(p.title)+'</div>'
     +'<button class="t411-linkbtn" data-imgpick="'+p.id+'" data-pillar="'+esc(p.pillar||"")+'">Choose picture</button></div></div>';
 }
-document.getElementById("p-images").addEventListener("click",e=>{
+document.getElementById("wf-published").addEventListener("click",e=>{
   const t=e.target.closest("[data-pick]");
   if(t&&pPick){pPick.chosen={url:t.dataset.pick,source:t.dataset.kind==="house"?"house":(t.dataset.kind==="article"?"manual":"candidate")};pRenderPicker();return;}
   const b=e.target.closest("[data-imgpick]");
