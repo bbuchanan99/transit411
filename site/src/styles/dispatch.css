@@ -230,7 +230,7 @@ a.data-card:hover{border-color:var(--accent);text-decoration:none}
 /* post thumbnails + article hero images */
 .post-full{display:grid;grid-template-columns:168px 1fr;gap:18px;align-items:start}
 .post-full .post-k,.post-full .post-title,.post-full .post-deck,.post-full .post-meta{grid-column:2}
-.post-thumb{grid-column:1;grid-row:1 / span 4;display:block;border:1px solid var(--line);background:var(--panel);overflow:hidden}
+.post-thumb{grid-column:1;grid-row:1 / span 4;display:block;background:var(--panel);overflow:hidden}
 .post-thumb img{display:block;width:100%;height:96px;object-fit:cover}
 /* A logo is a shape, not a scene: cropping it is a mistake, so show it whole on a plate.
    Sound Transit's wordmark is 540x82 - cover put a quarter of it on screen at 4x. */
@@ -248,7 +248,7 @@ a.data-card:hover{border-color:var(--accent);text-decoration:none}
 .art-head{display:flex;gap:22px;align-items:flex-start;border-bottom:3px solid var(--ink);padding-bottom:14px}
 .art-head-text{flex:1;min-width:0}
 .art-thumb{flex:0 0 200px;margin:6px 0 0;padding:0}
-.art-thumb img{display:block;width:200px;height:134px;object-fit:cover;border:1px solid var(--line);background:var(--panel)}
+.art-thumb img{display:block;width:200px;height:134px;object-fit:cover;background:var(--panel)}
 .art-thumb.is-logo img{object-fit:contain;padding:14px 16px;background:var(--bg)}
 .art-thumb figcaption{font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);margin-top:5px}
 @media (max-width:560px){.art-head{flex-direction:column-reverse;gap:12px}.art-thumb{flex:none}
