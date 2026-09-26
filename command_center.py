@@ -158,6 +158,12 @@ def collection(status: str = "pending", q: Optional[str] = None, pillar: Optiona
                 items.append(it)
             cur.execute(f"SELECT count(*) FROM collected_items WHERE {where}", params)
             matched = cur.fetchone()[0]
+            # How much of the queue the recommender has actually reached. The list is capped at
+            # 200 rows, so counting the loaded page would report "all scored" while older items
+            # sat unscored and invisible.
+            cur.execute(f"SELECT count(*) FROM collected_items WHERE {where} AND reco_score IS NULL",
+                        params)
+            unscored = cur.fetchone()[0]
             cur.execute("SELECT status, count(*) FROM collected_items GROUP BY status")
             counts = {row[0]: row[1] for row in cur.fetchall()}
     except HTTPException:
@@ -168,7 +174,7 @@ def collection(status: str = "pending", q: Optional[str] = None, pillar: Optiona
         items.sort(key=lambda x: (x.get("reco_score") is None, -(x.get("reco_score") or 0)))
     else:
         items.sort(key=lambda x: x["fresh_score"], reverse=True)
-    return {"items": items, "counts": counts, "matched": matched}
+    return {"items": items, "counts": counts, "matched": matched, "unscored": unscored}
 
 
 @app.get("/api/collection/facets")
@@ -3270,6 +3276,13 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
 .wf-qpick input{background:#2A241F;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 6px;font-family:'Archivo',sans-serif;font-size:11px}
 .wf-qpick button{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;border:none;border-radius:6px;padding:4px 9px;cursor:pointer;background:var(--accent2);color:#fff}
 .wf-nopick{color:var(--gold)}
+.wf-grow{flex:1}
+.wf-scored{font-family:'Archivo',sans-serif;font-size:12px;color:var(--muted)}
+/* two classes, so this beats the generic `.wf-bar button` pill above */
+.wf-bar .wf-reco{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+.wf-bar .wf-reco:disabled{opacity:.6;cursor:default}
+.wf-recomsg{font-size:12px;color:var(--muted);margin:-4px 0 12px;min-height:16px;line-height:1.5}
+.wf-recomsg .err{color:#E8604B}
 </style></head><body>
 <aside>
   <div class="brand">TRANSIT<span>411</span></div>
@@ -3329,7 +3342,8 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
       <button class="wf-stage" data-stage="published">Published <span class="n" id="wfNPub">&mdash;</span></button>
     </div>
     <div id="wf-review">
-      <div class="wf-bar" id="wfSortBar">Sort<button data-sort="score" class="on">AI score</button><button data-sort="fresh">Newest</button></div>
+      <div class="wf-bar">Sort<span id="wfSortBar"><button data-sort="score" class="on">AI score</button><button data-sort="fresh">Newest</button></span><span class="wf-grow"></span><span class="wf-scored" id="wfScored"></span><button class="wf-reco" id="wfReco" type="button">Score the queue</button></div>
+      <div class="wf-recomsg" id="wfRecoMsg"></div>
       <div id="wfList"></div>
     </div>
     <div id="wf-focus" hidden></div>
@@ -3538,7 +3552,37 @@ async function loadWorkflow(){
   document.getElementById("wfNPub").textContent = c.published!=null ? c.published : 0;
   list.innerHTML = wfItems.length ? wfItems.map(wfRow).join("")
     : '<div class="wf-note">Nothing pending. The queue is clear.</div>';
+  // Counted over the whole queue, not the 200 rows on screen.
+  const total = (d.matched != null) ? d.matched : wfItems.length;
+  const un = (d.unscored != null) ? d.unscored : wfItems.filter(x => x.reco_score == null).length;
+  const note = document.getElementById("wfScored");
+  if(note) note.textContent = !total ? ""
+    : (un ? (un + " of " + total + " not scored yet") : (total + " scored"));
 }
+
+// Running the recommender. It writes the reco_* columns and NOTHING else - no status changes, no
+// publishing - and only when this button is pressed.
+document.getElementById("wfReco").onclick = async () => {
+  const btn = document.getElementById("wfReco"), msg = document.getElementById("wfRecoMsg");
+  const was = btn.textContent;
+  btn.disabled = true; btn.textContent = "Scoring...";
+  msg.textContent = "Scoring every pending item against the editorial rubric. About two minutes and "
+    + "roughly $0.12. It only ever recommends - nothing is published or skipped.";
+  try{
+    const r = await fetch("/api/collection/recommend?status=pending", {method:"POST"});
+    if(!r.ok){ msg.innerHTML = '<span class="err">'+esc(errText(await r.text()))+'</span>'; return; }
+    await r.json();
+    wfSort = "score";
+    document.querySelectorAll("#wfSortBar button").forEach(x =>
+      x.classList.toggle("on", x.dataset.sort === "score"));
+    msg.textContent = "Scored. Sorted by score, highest first.";
+    loadWorkflow();
+  }catch(e){
+    msg.innerHTML = '<span class="err">Could not reach the recommender. Nothing was changed.</span>';
+  }finally{
+    btn.disabled = false; btn.textContent = was;
+  }
+};
 document.getElementById("wfStages").addEventListener("click", e => {
   const b = e.target.closest("[data-stage]"); if(!b) return;
   document.querySelectorAll(".wf-stage").forEach(x => x.classList.toggle("on", x===b));
