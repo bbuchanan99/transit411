@@ -144,6 +144,16 @@ once you trust the workflow. The `p-publish` panel markup stays in the page even
 to it, because a delegated click handler is bound to it and `getElementById` returning null at parse
 time would take the whole page script down - the same trap the Images move had to avoid.
 
+**Shelf life (on, 7 days).** Pending items older than 7 days move to `expired`, so the review queue
+does not grow without bound. It clears by **age only** - it never reads the recommender's verdict,
+because auto-skipping on the model's judgement is what this system has always refused to do. An item
+with a **future deadline is exempt**, so a live solicitation cannot age out mid-procurement. Nothing
+is deleted: `expired` is a status like any other, visible under Collection's Expired filter and
+restorable with Return to pending. The runner checks hourly; `GET/POST /api/workflow/shelf-life`
+reads and changes the window (1-90 days, or off), and `POST /api/workflow/shelf-life/run` clears now.
+Proven with two 10-day-old items: the one without a deadline expired, the one with an open deadline
+stayed.
+
 **Columns added to `collected_items`:** `publish_at`, `queue_state` (`queued` | `scheduled`), and
 `pick_image_url` / `pick_image_source` / `pick_image_library_id`. The library id is `ON DELETE SET
 NULL`, so deleting an asset cannot leave a dangling reference.

@@ -837,6 +837,93 @@ def publish_item(item_id: int, choice: Optional[PublishChoice] = None):
 
 QUEUE_TICK = 60          # how often the runner looks for scheduled items that have come due
 
+# ---- Review-queue shelf life ---------------------------------------------------------------------
+# News has a short life. An item nobody chose in a week is not going to be chosen, and leaving it
+# there means scrolling past it every day forever. This clears by AGE only - it never reads the
+# recommender's verdict, because auto-skipping on the model's judgement is exactly what this system
+# has always refused to do.
+
+SHELF_DEFAULT = {"enabled": True, "days": 7}
+_last_expiry = {"at": None}
+EXPIRY_EVERY = 3600
+
+
+def _shelf_setting(conn):
+    import collection as C
+    cfg = C.get_setting(conn, "queue_shelf_life", None)
+    return dict(SHELF_DEFAULT) if not isinstance(cfg, dict) else {**SHELF_DEFAULT, **cfg}
+
+
+def _expire_stale(conn, days=None, dry_run=False):
+    """Pending items past their shelf life -> 'expired'. An open deadline is always exempt, so a
+    live solicitation cannot age out from under you mid-procurement."""
+    if days is None:
+        days = int(_shelf_setting(conn).get("days") or 7)
+    where = ("status='pending' AND collected_at < now() - (%s * interval '1 day') "
+             "AND (deadline IS NULL OR deadline < current_date)")
+    with conn.cursor() as cur:
+        if dry_run:
+            cur.execute("SELECT count(*) FROM collected_items WHERE " + where, (days,))
+            return cur.fetchone()[0]
+        cur.execute("UPDATE collected_items SET status='expired' WHERE " + where + " RETURNING id",
+                    (days,))
+        ids = [r[0] for r in cur.fetchall()]
+    conn.commit()
+    return ids
+
+
+class ShelfLife(BaseModel):
+    enabled: Optional[bool] = None
+    days: Optional[int] = None
+
+
+@app.get("/api/workflow/shelf-life")
+def shelf_life_get():
+    try:
+        with _db() as c:
+            cfg = _shelf_setting(c)
+            would = _expire_stale(c, days=int(cfg.get("days") or 7), dry_run=True)
+            with c.cursor() as cur:
+                cur.execute("SELECT count(*) FROM collected_items WHERE status='expired'")
+                expired = cur.fetchone()[0]
+                cur.execute("SELECT count(*) FROM collected_items WHERE status='pending' "
+                            "AND deadline IS NOT NULL AND deadline >= current_date")
+                exempt = cur.fetchone()[0]
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"enabled": bool(cfg.get("enabled", True)), "days": int(cfg.get("days") or 7),
+            "would_clear": would, "expired_total": expired, "deadline_exempt": exempt}
+
+
+@app.post("/api/workflow/shelf-life")
+def shelf_life_set(t: ShelfLife):
+    import collection as C
+    try:
+        with _db() as c:
+            cfg = _shelf_setting(c)
+            if t.enabled is not None:
+                cfg["enabled"] = bool(t.enabled)
+            if t.days is not None:
+                cfg["days"] = max(1, min(int(t.days), 90))
+            C.set_setting(c, "queue_shelf_life", cfg)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return cfg
+
+
+@app.post("/api/workflow/shelf-life/run")
+def shelf_life_run():
+    """Clear anything already past the shelf life now, rather than waiting for the hourly pass."""
+    try:
+        with _db() as c:
+            ids = _expire_stale(c)
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"expired": ids, "count": len(ids)}
+
+
+
+
 
 def _pick_label(it):
     """What the queue row says about the picture that was chosen in review."""
@@ -996,6 +1083,21 @@ def _queue_runner():
                 print("Queue: published scheduled items %s" % done, flush=True)
         except Exception as e:
             print("Queue: run failed: %s: %s" % (type(e).__name__, e), flush=True)
+        # Shelf life, at most once an hour - there is nothing to gain from checking every minute.
+        try:
+            now = time.time()
+            if _last_expiry["at"] is None or (now - _last_expiry["at"]) >= EXPIRY_EVERY:
+                _last_expiry["at"] = now
+                import psycopg
+                with psycopg.connect(dsn) as conn:
+                    cfg = _shelf_setting(conn)
+                    if cfg.get("enabled", True):
+                        gone = _expire_stale(conn)
+                        if gone:
+                            print("Queue: shelf life cleared %d item(s) older than %s days"
+                                  % (len(gone), cfg.get("days")), flush=True)
+        except Exception as e:
+            print("Queue: shelf life failed: %s: %s" % (type(e).__name__, e), flush=True)
 
 
 @app.on_event("startup")
@@ -3283,6 +3385,8 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
 .wf-bar .wf-reco:disabled{opacity:.6;cursor:default}
 .wf-recomsg{font-size:12px;color:var(--muted);margin:-4px 0 12px;min-height:16px;line-height:1.5}
 .wf-recomsg .err{color:#E8604B}
+.wf-shelf{font-size:12px;color:var(--muted);margin:-4px 0 14px;line-height:1.5}
+.wf-shelf b{color:var(--ink);font-weight:600}
 </style></head><body>
 <aside>
   <div class="brand">TRANSIT<span>411</span></div>
@@ -3344,6 +3448,7 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
     <div id="wf-review">
       <div class="wf-bar">Sort<span id="wfSortBar"><button data-sort="score" class="on">AI score</button><button data-sort="fresh">Newest</button></span><span class="wf-grow"></span><span class="wf-scored" id="wfScored"></span><button class="wf-reco" id="wfReco" type="button">Score the queue</button></div>
       <div class="wf-recomsg" id="wfRecoMsg"></div>
+      <div class="wf-shelf" id="wfShelf"></div>
       <div id="wfList"></div>
     </div>
     <div id="wf-focus" hidden></div>
@@ -3555,6 +3660,7 @@ async function loadWorkflow(){
   // Counted over the whole queue, not the 200 rows on screen.
   const total = (d.matched != null) ? d.matched : wfItems.length;
   const un = (d.unscored != null) ? d.unscored : wfItems.filter(x => x.reco_score == null).length;
+  loadShelf();
   const note = document.getElementById("wfScored");
   if(note) note.textContent = !total ? ""
     : (un ? (un + " of " + total + " not scored yet") : (total + " scored"));
@@ -3602,6 +3708,26 @@ document.getElementById("wfSortBar").addEventListener("click", e => {
   loadWorkflow();
 });
 
+
+
+// What the shelf life is doing, said plainly - a queue that silently drops things is worse than a
+// long one.
+async function loadShelf(){
+  const el = document.getElementById("wfShelf");
+  if(!el) return;
+  const d = await jget("/api/workflow/shelf-life");
+  if(!d){ el.textContent = ""; return; }
+  if(!d.enabled){
+    el.innerHTML = "Shelf life is <b>off</b> - nothing clears on its own.";
+    return;
+  }
+  const bits = ["Items clear after <b>" + d.days + " days</b> and move to Expired. Nothing is deleted"
+                + " - open Collection and pick Expired to read or restore them."];
+  if(d.would_clear) bits.push("<b>" + d.would_clear + "</b> past that now, clearing within the hour.");
+  if(d.deadline_exempt) bits.push("<b>" + d.deadline_exempt + "</b> held back for an open deadline.");
+  if(d.expired_total) bits.push(d.expired_total + " expired so far.");
+  el.innerHTML = bits.join(" ");
+}
 
 // ---- Focus mode: one item, everything inline ---------------------------------------------------
 // The picture is decided here, in review, and stored on the item - so the queue and the publish
@@ -4088,7 +4214,7 @@ document.getElementById("out").addEventListener("click",e=>{
 // ---- Collection tab ----
 let cFilter="pending";
 const cChips=document.getElementById("cChips");
-[["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"],["filtered","Auto-filtered"]].forEach(([k,lbl])=>{
+[["pending","Pending"],["approved","Approved"],["skipped","Skipped"],["published","Published"],["filtered","Auto-filtered"],["expired","Expired"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="ex";b.textContent=lbl;
   b.onclick=()=>{cFilter=k;document.querySelectorAll("#cChips .ex").forEach(x=>x.style.borderColor=(x===b?"var(--accent)":""));loadFacets();loadCollection();loadReco();};
   if(k==="pending")b.style.borderColor="var(--accent)";cChips.appendChild(b);});
