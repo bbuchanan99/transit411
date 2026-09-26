@@ -100,7 +100,7 @@ const chips = [
         {post.date && <div class="art-meta">{post.date}{post.source && <span> · Reported by {post.source}</span>}</div>}
       </div>
       {post.image && (
-        <figure class="art-thumb">
+        <figure class={`art-thumb${post.imageKind === "logo" ? " is-logo" : ""}`}>
           {post.imageIsHouse || !post.url
             ? <img src={post.image} alt={post.imageIsHouse ? `${post.pillar} — Transit411` : post.title} loading="lazy" />
             : <a href={post.url} target="_blank" rel="noopener noreferrer"><img src={post.image} alt={post.title} loading="lazy" /></a>}

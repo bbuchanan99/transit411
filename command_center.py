@@ -2763,7 +2763,7 @@ def _credit_picked_images(cur, posts):
     if not ids:
         return
     try:
-        cur.execute("SELECT id, license, attribution, source_url FROM image_library "
+        cur.execute("SELECT id, license, attribution, source_url, kind FROM image_library "
                     "WHERE id = ANY(%s)", (ids,))
         by_id = {r[0]: r for r in cur.fetchall()}
     except Exception:
@@ -2775,6 +2775,8 @@ def _credit_picked_images(cur, posts):
         p["image_license"] = r[1]
         p["image_attribution"] = r[2]
         p["image_source_url"] = r[3]
+        # logo or stock. The site needs it to decide whether the picture may be cropped.
+        p["image_kind"] = r[4]
 
 
 def _fill_library_images(cur, posts):
@@ -2805,6 +2807,7 @@ def _fill_library_images(cur, posts):
             continue
         p["image_url"] = img["url"]
         p["image_source"] = "library-" + rec["kind"]
+        p["image_kind"] = rec["kind"]
         p["image_attribution"] = img.get("attribution")
         p["image_license"] = img.get("license")
         p["image_source_url"] = img.get("source_url")

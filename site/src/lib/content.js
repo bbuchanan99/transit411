@@ -83,6 +83,9 @@ function toPost(p) {
     imageLicense: p.image_license || null,
     imageCreditUrl: safeUrl(p.image_source_url),
     imageFromLibrary: String(p.image_source || "").startsWith("library-"),
+    // "logo" | "stock" | null. A logo must be shown whole; a photograph may be cropped to fit.
+    imageKind: p.image_kind
+      || (String(p.image_source || "").startsWith("library-") ? p.image_source.slice(8) : null),
   };
 }
 
