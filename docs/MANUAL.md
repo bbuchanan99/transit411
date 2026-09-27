@@ -208,6 +208,38 @@ restyled existing screens, which is how the wire grid broke once before.
   beats an empty one. An API that *answers* with zero posts is a real answer and still builds.
   `PUBLIC_ALLOW_EMPTY=1` opts out, for working on the site without the tunnel.
 
+### 3.3f NTD data landing pages (`/data/agency/*`, `/data/rankings/*`)
+
+Pre-rendered pages built from real NTD figures, so a crawler reads the numbers instead of watching
+JavaScript draw them. Everything is server-rendered: tables, and the trend line as inline SVG.
+
+- **The data is a committed snapshot, not a live fetch.** The public API exposes no raw NTD data -
+  only `POST /api/ask`, which spends a model call per question and is capped at 200 a day for the
+  whole internet. NTD publishes once a year, so `site/src/data/ntd-*.json` is the honest shape for
+  it: reproducible builds, no cost, and the public surface unchanged.
+  **Regenerate when a new report year lands:** `python tools/ntd_seo_export.py --db /data/ntd.duckdb
+  --out site/src/data` (run it where the DuckDB is - the `api` container on the NAS).
+- **The quality bar lives in the exporter, not the templates.** An agency earns a page with 1M+
+  annual trips and 3+ years of history; a ranking needs five systems. **301 of 2,237 agencies
+  qualify** - which is the point: 301 real pages rather than 2,237 thin ones. `--limit N` ships the
+  N largest.
+- **Prose is composed from each agency's own numbers** - national and in-state rank, its largest
+  mode against the national median for that mode, ridership against 2019 - so which sentences appear
+  and what they say differ per agency. It is not a template with values dropped in.
+- Every page carries a permanent source-and-method note, `Dataset` JSON-LD, its own
+  title/description/canonical, links to the rankings it appears in, and an Ask NTD link pre-filled
+  for it. Rankings link back to the agency pages that exist and leave the rest as plain text.
+
+**The trap that cost a deploy here: a bare `data/` in `.gitignore` matches a directory of that name
+at ANY depth.** It silently swallowed both `site/src/data` and `site/src/pages/data`, so the site
+built perfectly on the machine where the files existed and Cloudflare rebuilt the *old* site from a
+tree that had neither - with no error anywhere, because as far as git was concerned nothing was
+missing. The rule is now `/data/`, anchored to the repo root. Check `git show --stat` after
+committing generated files.
+
+Also: **`@astrojs/sitemap` is pinned exactly**, not `^3.2.1` - the caret lets a fresh install resolve
+3.7.x, which needs Astro 5 and crashes this build.
+
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
   - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can usually be fetched by link. Not always: on 2026-09-22 the same PDF link was served once and then refused. When Load from link says 403, download the PDF and upload it.

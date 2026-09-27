@@ -94,7 +94,7 @@ const jsonld = JSON.stringify(ld).replace(/</g, "\\u003c");
           {a.modes.map((m) => (
             <tr>
               <td><strong>{m.mode}</strong>{m.mode_rank_by_upt && m.mode_agencies &&
-                <span class="ntd-sub">#{m.mode_rank_by_upt} of {m.mode_agencies} nationally</span>}</td>
+                <span class="ntd-sub">#{m.mode_rank_by_upt} of {int(m.mode_agencies)} nationally</span>}</td>
               <td class="r">{int(m.upt)}</td>
               <td class="r">{bigUsd(m.operating_expense)}</td>
               <td class="r">{usd(m.cost_per_rider)}</td>
