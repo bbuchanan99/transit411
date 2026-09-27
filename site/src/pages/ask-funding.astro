@@ -1,0 +1,44 @@
+---
+import Base from "../layouts/Base.astro";
+import AskPanel from "../components/AskPanel.astro";
+const examples = [
+  "Which urbanized areas get the most State of Good Repair money?",
+  "How much federal formula funding does the Boston area get in total?",
+  "Top 10 areas by Section 5339 bus funding",
+  "Which states get the most 5307 money?",
+];
+---
+<Base
+  title="Ask Funding — Transit411"
+  description="Ask the FTA formula apportionment tables in plain English: Section 5307 urbanized area funding, 5337 State of Good Repair, and 5339 Buses and Bus Facilities, by area and by state."
+>
+  <Fragment slot="head">
+    <link rel="stylesheet" href="/vendor/t411.css" />
+    <script is:inline src="/vendor/t411.js"></script>
+  </Fragment>
+  <div class="wrap section-page">
+    <h1 class="section-title disp">Ask Funding</h1>
+    <p class="section-blurb">
+      Ask the FTA formula apportionment tables in plain English &mdash; who gets what from Section 5307,
+      5337 and 5339, by urbanized area and by state.
+    </p>
+    <AskPanel
+      endpoint="/api/funding/ask"
+      tool="Ask Funding"
+      source="Source: FTA full-year formula apportionment tables. Amounts are whole dollars for a single fiscal year."
+      examples={examples}
+      placeholder="e.g. How much does Seattle get for State of Good Repair?"
+    />
+    <p class="cig-source">
+      Source: Federal Transit Administration,
+      <a href="https://www.transit.dot.gov/funding/apportionments/current-apportionments" target="_blank" rel="noopener noreferrer">full-year apportionment tables</a>
+      &mdash; Table 3 (Sections 5307 and 5340), Table 11 (Section 5337) and Table 12 (Section 5339).
+      Amounts are whole dollars as published, for a single fiscal year.
+      <strong>These are apportionments to places, not to agencies.</strong> FTA distributes formula
+      funds to urbanized areas and to states, and publishes no operator name and no NTD identifier
+      in these tables, so a question about a particular agency is answered by the urbanized area it
+      serves &mdash; which may cover several operators. A multi-state area such as Boston, MA-NH is
+      apportioned separately in each state and added together here.
+    </p>
+  </div>
+</Base>
