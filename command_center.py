@@ -1022,6 +1022,32 @@ def workflow_schedule(item_id: int, t: QueueTime):
             "queue_state": "scheduled" if when else "queued"}
 
 
+
+@app.post("/api/workflow/{item_id}/unqueue/{to}")
+def workflow_unqueue(item_id: int, to: str):
+    """Take a queued item back out: to Review to think again, or to Skipped if it is a duplicate.
+
+    The picture chosen in review is KEPT. An item sent back and approved again should not have to
+    be re-picked - the decision was about the story, not the photograph.
+    """
+    target = {"review": "pending", "skip": "skipped"}.get(to)
+    if not target:
+        raise HTTPException(400, "Unqueue to 'review' or to 'skip'.")
+    try:
+        with _db() as c, c.cursor() as cur:
+            _ensure_workflow(cur)
+            cur.execute("UPDATE collected_items SET status=%s, queue_state=NULL, publish_at=NULL "
+                        "WHERE id=%s AND status='approved'", (target, item_id))
+            if not cur.rowcount:
+                raise HTTPException(404, "That item is not in the queue.")
+            c.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"DB error: {e}")
+    return {"id": item_id, "status": target}
+
+
 @app.post("/api/workflow/publish-now")
 def workflow_publish_now():
     """Publish every queued item set to "now". Scheduled items are left alone to fire on their own."""
@@ -3184,6 +3210,8 @@ pre{margin:0;padding:0 13px 13px;font-family:'JetBrains Mono',monospace;font-siz
 .imgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin-top:14px}
 .imgcard{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
 .imgcard img{width:100%;height:120px;object-fit:cover;display:block;background:var(--soft)}
+/* Same rule as the public site: a logo is shown whole, a photograph may be cropped. */
+.imgcard img.is-logo{object-fit:contain;padding:12px 14px;background:#F2EEE4}
 .imgcard-house{height:120px;display:flex;align-items:center;justify-content:center;background:var(--soft);font-family:'Archivo',sans-serif;font-size:11px;color:var(--muted);text-align:center;padding:0 10px}
 .imgcard-b{padding:10px 12px 12px;display:flex;flex-direction:column;gap:5px}
 .imgcard-k{font-family:'Archivo',sans-serif;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
@@ -3390,6 +3418,11 @@ main{flex-grow:1;padding:26px 34px 40px;overflow:auto;min-width:0}
 .wf-recomsg .err{color:#E8604B}
 .wf-shelf{font-size:12px;color:var(--muted);margin:-4px 0 14px;line-height:1.5}
 .wf-shelf b{color:var(--ink);font-weight:600}
+.wf-qacts{display:flex;flex-direction:column;gap:4px;flex-shrink:0;margin-left:6px}
+.wf-qact{font-family:'Archivo',sans-serif;font-size:11px;font-weight:700;background:#2A241F;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:4px 9px;cursor:pointer;white-space:nowrap}
+.wf-qact:hover{color:var(--ink);border-color:var(--accent)}
+.wf-qact.bad:hover{color:#E8604B;border-color:#E8604B}
+.imgcard-b .wf-qact{margin-left:8px}
 </style></head><body>
 <aside>
   <div class="brand">TRANSIT<span>411</span></div>
@@ -3890,6 +3923,10 @@ function wfQRow(it){
         +'<button data-save="'+it.id+'">Set</button>'
         +(sched ? '<button data-clear="'+it.id+'" style="background:#2A241F;color:var(--muted)">Now</button>' : "")
       +'</div>'
+    +'</div>'
+    +'<div class="wf-qacts">'
+      +'<button class="wf-qact" data-unqueue="'+it.id+'">Back to review</button>'
+      +'<button class="wf-qact bad" data-skipq="'+it.id+'">Skip</button>'
     +'</div></div>';
 }
 async function loadQueue(){
@@ -3946,8 +3983,20 @@ document.getElementById("wf-queue").addEventListener("click", e => {
     return;
   }
   const clr = e.target.closest("[data-clear]");
-  if(clr) wfSetTime(clr.dataset.clear, null);
+  if(clr){ wfSetTime(clr.dataset.clear, null); return; }
+  const back = e.target.closest("[data-unqueue]");
+  if(back){ wfUnqueue(back.dataset.unqueue, "review"); return; }
+  const skip = e.target.closest("[data-skipq]");
+  if(skip) wfUnqueue(skip.dataset.skipq, "skip");
 });
+async function wfUnqueue(id, to){
+  try{
+    const r = await fetch("/api/workflow/"+id+"/unqueue/"+to, {method:"POST"});
+    if(!r.ok){ alert("Could not take that item out of the queue."); return; }
+  }catch(e){ alert("Could not take that item out of the queue."); return; }
+  loadQueue();
+  loadWorkflow();
+}
 
 // ---- Console navigation: sidebar workspaces, a landing dashboard, and hash deep-links ----------
 // Tools are the existing panels; the router just decides which workspace and which panel is shown,
@@ -5548,19 +5597,34 @@ function renderImages(){
 }
 function imgCard(p){
   const img=safeUrl(p.image_url);
-  const pic=img?'<img src="'+esc(img)+'" alt="" loading="lazy">'
+  const pic=img?'<img class="'+(p.image_kind==="logo"?"is-logo":"")+'" src="'+esc(img)+'" alt="" loading="lazy">'
     :'<div class="imgcard-house">'+esc(p.pillar||"News")+' house graphic</div>';
   return '<div class="imgcard">'+pic
     +'<div class="imgcard-b"><div class="imgcard-k">'+esc(p.pillar||"News")+(p.image_source?' · '+esc(p.image_source):' · fallback')+'</div>'
     +'<div class="imgcard-t">'+esc(p.title)+'</div>'
-    +'<button class="t411-linkbtn" data-imgpick="'+p.id+'" data-pillar="'+esc(p.pillar||"")+'">Choose picture</button></div></div>';
+    +'<button class="t411-linkbtn" data-imgpick="'+p.id+'" data-pillar="'+esc(p.pillar||"")+'">Choose picture</button>'
+    +'<button class="wf-qact bad" data-unpub="'+p.id+'">Unpublish</button></div></div>';
 }
 document.getElementById("wf-published").addEventListener("click",e=>{
   const t=e.target.closest("[data-pick]");
   if(t&&pPick){pPick.chosen={url:t.dataset.pick,source:t.dataset.kind==="house"?"house":(t.dataset.kind==="article"?"manual":"candidate")};pRenderPicker();return;}
   const b=e.target.closest("[data-imgpick]");
-  if(b)pOpenPicker("post",+b.dataset.imgpick,b.dataset.pillar,"","imgPicker");
+  if(b){pOpenPicker("post",+b.dataset.imgpick,b.dataset.pillar,"","imgPicker");return;}
+  const u=e.target.closest("[data-unpub]");
+  if(u)wfUnpublish(u.dataset.unpub);
 });
+// Taking a live article down. It goes back to the queue, so it can be fixed and republished, and
+// the site rebuild happens on its own.
+async function wfUnpublish(id){
+  if(!confirm("Take this article off the public site? It goes back to the upload queue.")) return;
+  try{
+    const r = await fetch("/api/posts/"+id+"/unpublish", {method:"POST"});
+    if(!r.ok){ alert("Could not unpublish that article."); return; }
+  }catch(e){ alert("Could not unpublish that article."); return; }
+  loadImagesScreen(true);
+  loadWorkflow();
+  loadQueue();
+}
 
 // ---- System & Settings: health, the daily collector, and rebuilding the site ---------------------
 async function loadSystem(){
