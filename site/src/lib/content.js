@@ -1,7 +1,8 @@
 // Central content source for the public site.
 // Pages are static: posts are fetched ONCE at build time (Cloudflare Pages build) from the
-// read-only API. If the API is unreachable or slow, the build still succeeds and pages show an
-// empty "no items yet" state. New posts appear on the site after the next build/deploy.
+// read-only API. An UNREACHABLE API stops the build rather than shipping an empty site (see
+// fetchAllPosts); supplementary data like agencies and CIG still degrades quietly. New posts
+// appear on the site after the next build/deploy.
 
 const DEFAULT_API_BASE = "https://api.transit411.net";
 export const API_BASE = (import.meta.env.PUBLIC_API_BASE || DEFAULT_API_BASE).replace(/\/+$/, "");
@@ -100,13 +101,36 @@ export function houseImage(pillar) {
 const PAGE = 200;
 const MAX_PAGES = 50;          // 10,000 posts; a stop so a broken API can't spin the build forever
 let postsPromise;
+// An API we cannot reach is NOT the same answer as a site with no posts, and the difference
+// matters at deploy time: the first kind used to render an empty site and ship it. That happened
+// once during the SEO work - a brief tunnel hiccup produced 15 pages instead of 59 and a sitemap
+// missing all 42 articles. Deploying that reads to a search engine as a mass deletion, and the
+// build reported success either way.
+//
+// So an unreachable API now STOPS the build. Cloudflare keeps serving the last good deploy, which
+// is the right failure: yesterday's site beats an empty one. An API that answers with zero posts
+// is a real answer and still builds.
+//
+// PUBLIC_ALLOW_EMPTY=1 opts out, for working on the site without access to the tunnel.
+const ALLOW_EMPTY = String(import.meta.env.PUBLIC_ALLOW_EMPTY || "") === "1";
+
 async function fetchAllPosts() {
   const out = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const d = await getJson(`/api/posts?limit=${PAGE}&offset=${page * PAGE}`);
-    const batch = d && Array.isArray(d.posts) ? d.posts : [];
+    if (!d) {
+      if (ALLOW_EMPTY) {
+        console.warn("[content] API unreachable; building without posts (PUBLIC_ALLOW_EMPTY=1).");
+        break;
+      }
+      throw new Error(
+        `[content] Could not reach ${API_BASE} while fetching posts (page ${page + 1}). ` +
+        `Refusing to build: the archive would be missing or truncated, and deploying that looks ` +
+        `like every article was deleted. Fix the API, or set PUBLIC_ALLOW_EMPTY=1 to build anyway.`);
+    }
+    const batch = Array.isArray(d.posts) ? d.posts : [];
     out.push(...batch);
-    if (!d || !d.has_more || batch.length === 0) break;
+    if (!d.has_more || batch.length === 0) break;
   }
   return out.filter((p) => p && p.title).map(toPost);
 }

@@ -200,10 +200,13 @@ restyled existing screens, which is how the wire grid broke once before.
 - **Three hostnames answer for this site** - `transit411.net`, `www.transit411.net` and
   `transit411.pages.dev` - and all three return 200. Canonicals now point at the apex, which fixes
   the signal, but a redirect at the edge would be better than relying on Google to obey it.
-- **The build degrades silently to an empty site.** `getPosts()` swallows an unreachable API and
-  renders without it, so a brief tunnel hiccup produces a build with **zero articles** - seen once
-  during this work: 15 pages instead of 59, and a sitemap missing 42 URLs. Deploying that would
-  look to Google like the archive was deleted. Check the page count before pushing a build.
+- **An unreachable API stops the build** (`fetchAllPosts` in `src/lib/content.js`). It used to
+  degrade quietly, so a brief tunnel hiccup produced a build with **zero articles** - seen once
+  during this work: 15 pages instead of 59, and a sitemap missing 42 URLs, reported as success.
+  Deploying that reads to a search engine as a mass deletion. The build now throws and exits
+  non-zero, so Cloudflare fails the deploy and keeps serving the last good one - yesterday's site
+  beats an empty one. An API that *answers* with zero posts is a real answer and still builds.
+  `PUBLIC_ALLOW_EMPTY=1` opts out, for working on the site without the tunnel.
 
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
