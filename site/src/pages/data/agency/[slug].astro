@@ -1,0 +1,165 @@
+---
+import Base from "../../../layouts/Base.astro";
+import {
+  agencies, agencyBySlug, rankingsFor, agencyProse, trendSvg,
+  NTD_YEAR, SOURCE_NOTE, int, usd, pct, bigNum, bigUsd,
+} from "../../../lib/ntd.js";
+
+// Pre-rendered at build time: static HTML is what a crawler reads, and these pages exist to be read.
+export function getStaticPaths() {
+  return agencies.map((a) => ({ params: { slug: a.slug } }));
+}
+
+const { slug } = Astro.params;
+const a = agencyBySlug(slug);
+const prose = agencyProse(a);
+const inRankings = rankingsFor(slug);
+const uptTrend = trendSvg(a.trend, "upt");
+const costTrend = trendSvg(a.trend, "cost_per_rider_real");
+const where = [a.city, a.state].filter(Boolean).join(", ");
+
+const title = `${a.agency} — Ridership, Cost & Transit Data | Transit411`;
+const description =
+  `${a.agency}${where ? ` (${where})` : ""} carried ${bigNum(a.total_upt)} passenger trips in ` +
+  `${NTD_YEAR} at ${usd(a.cost_per_rider)} per rider. NTD ridership, operating cost and ` +
+  `cost-per-rider figures by mode, with a ten-year trend.`;
+const canonical = new URL(`/data/agency/${a.slug}/`, Astro.site).href;
+const askUrl = `/ask-ntd?q=${encodeURIComponent(`${a.agency} ridership and cost per rider by mode`)}`;
+
+// Dataset describes what this page actually is: a published extract of a federal dataset.
+const ld = {
+  "@context": "https://schema.org",
+  "@type": "Dataset",
+  name: `${a.agency} — National Transit Database figures, ${NTD_YEAR}`,
+  description,
+  url: canonical,
+  isAccessibleForFree: true,
+  creator: { "@type": "Organization", name: "Transit411", url: new URL("/", Astro.site).href },
+  license: "https://www.usa.gov/government-works",
+  isBasedOn: {
+    "@type": "Dataset",
+    name: "National Transit Database",
+    creator: { "@type": "GovernmentOrganization", name: "Federal Transit Administration" },
+    url: "https://www.transit.dot.gov/ntd",
+  },
+  temporalCoverage: `${a.trend[0]?.year}/${NTD_YEAR}`,
+  variableMeasured: [
+    { "@type": "PropertyValue", name: "Unlinked passenger trips", value: a.total_upt, unitText: "trips per year" },
+    { "@type": "PropertyValue", name: "Operating expense", value: Math.round(a.total_opex), unitText: "USD per year" },
+    { "@type": "PropertyValue", name: "Cost per rider", value: Number(a.cost_per_rider.toFixed(2)), unitText: "USD per trip" },
+  ],
+  about: {
+    "@type": "Organization",
+    name: a.agency,
+    ...(where ? { address: { "@type": "PostalAddress", addressLocality: a.city, addressRegion: a.state } } : {}),
+    identifier: { "@type": "PropertyValue", propertyID: "NTD ID", value: String(a.ntd_id) },
+  },
+};
+const jsonld = JSON.stringify(ld).replace(/</g, "\\u003c");
+---
+<Base title={title} description={description} ogTitle={`${a.agency} — transit ridership & cost data`}>
+  <Fragment slot="head">
+    <script type="application/ld+json" set:html={jsonld} />
+  </Fragment>
+
+  <div class="wrap section-page">
+    <nav class="ntd-crumbs"><a href="/data">Data</a> <span>/</span> <span>Agency profiles</span></nav>
+    <h1 class="section-title disp">{a.agency}</h1>
+    <p class="section-blurb">
+      {where && <>{where} &middot; </>}NTD ID {a.ntd_id} &middot; {NTD_YEAR} report year
+    </p>
+
+    <div class="ntd-stats">
+      <div class="ntd-stat"><span class="k">Annual trips</span><span class="v">{bigNum(a.total_upt)}</span>
+        <span class="n">#{a.national_rank_by_upt} in the US</span></div>
+      <div class="ntd-stat"><span class="k">Operating expense</span><span class="v">{bigUsd(a.total_opex)}</span>
+        <span class="n">{NTD_YEAR}, as reported</span></div>
+      <div class="ntd-stat"><span class="k">Cost per rider</span><span class="v">{usd(a.cost_per_rider)}</span>
+        <span class="n">all modes combined</span></div>
+      <div class="ntd-stat"><span class="k">Farebox recovery</span><span class="v">{a.fare_recovery != null ? pct(a.fare_recovery, 1) : "—"}</span>
+        <span class="n">fares ÷ operating cost</span></div>
+    </div>
+
+    {prose.map((p) => <p class="ntd-prose">{p}</p>)}
+
+    <h2 class="ntd-h2 disp">Service by mode, {NTD_YEAR}</h2>
+    <div class="ntd-tablewrap">
+      <table class="ntd-table">
+        <thead><tr>
+          <th>Mode</th><th class="r">Annual trips</th><th class="r">Operating expense</th>
+          <th class="r">Cost per rider</th><th class="r">vs national median</th>
+          <th class="r">Farebox</th><th class="r">Vehicles</th>
+        </tr></thead>
+        <tbody>
+          {a.modes.map((m) => (
+            <tr>
+              <td><strong>{m.mode}</strong>{m.mode_rank_by_upt && m.mode_agencies &&
+                <span class="ntd-sub">#{m.mode_rank_by_upt} of {m.mode_agencies} nationally</span>}</td>
+              <td class="r">{int(m.upt)}</td>
+              <td class="r">{bigUsd(m.operating_expense)}</td>
+              <td class="r">{usd(m.cost_per_rider)}</td>
+              <td class="r">{m.vs_mode_median_pct == null ? "—" : (
+                <span class={m.vs_mode_median_pct < 0 ? "ntd-good" : "ntd-bad"}>
+                  {m.vs_mode_median_pct > 0 ? "+" : ""}{m.vs_mode_median_pct}%
+                </span>)}</td>
+              <td class="r">{m.fare_recovery != null ? pct(m.fare_recovery, 0) : "—"}</td>
+              <td class="r">{m.voms != null ? int(m.voms) : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    {uptTrend && (
+      <>
+        <h2 class="ntd-h2 disp">Ridership, {a.trend[0].year}&ndash;{NTD_YEAR}</h2>
+        <svg class="ntd-chart" viewBox={`0 0 ${uptTrend.w} ${uptTrend.h}`} role="img"
+             aria-label={`Annual passenger trips from ${uptTrend.first.year} to ${uptTrend.last.year}`}>
+          <path d={uptTrend.d} fill="none" stroke="var(--accent)" stroke-width="2.5" />
+          {uptTrend.dots.map((p) => <circle cx={p.cx} cy={p.cy} r="3" fill="var(--accent)" />)}
+          <text x="4" y="14" class="ntd-ax">{bigNum(uptTrend.max)}</text>
+          <text x="4" y={uptTrend.h - 4} class="ntd-ax">{bigNum(uptTrend.min)}</text>
+          <text x={uptTrend.w - 4} y={uptTrend.h - 4} class="ntd-ax" text-anchor="end">{uptTrend.last.year}</text>
+          <text x="34" y={uptTrend.h - 4} class="ntd-ax">{uptTrend.first.year}</text>
+        </svg>
+      </>
+    )}
+
+    <div class="ntd-tablewrap">
+      <table class="ntd-table">
+        <thead><tr><th>Year</th><th class="r">Annual trips</th>
+          <th class="r">Operating expense ({NTD_YEAR} $)</th><th class="r">Cost per rider ({NTD_YEAR} $)</th></tr></thead>
+        <tbody>
+          {a.trend.slice().reverse().map((t) => (
+            <tr>
+              <td>{t.year}</td>
+              <td class="r">{int(t.upt)}</td>
+              <td class="r">{bigUsd(t.opex_real)}</td>
+              <td class="r">{usd(t.cost_per_rider_real)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    {inRankings.length > 0 && (
+      <>
+        <h2 class="ntd-h2 disp">Where {a.agency} ranks</h2>
+        <ul class="ntd-links">
+          {inRankings.map((r) => (
+            <li><a href={`/data/rankings/${r.slug}/`}>{r.title}</a>
+              <span class="ntd-sub">#{r.rank} of {r.of}</span></li>
+          ))}
+        </ul>
+      </>
+    )}
+
+    <div class="ntd-cta">
+      <h2 class="disp">Ask a different question</h2>
+      <p>These are the headline figures. Ask NTD answers the rest in plain English &mdash; by mode, by year, against any other agency.</p>
+      <a class="ntd-btn" href={askUrl}>Ask NTD about {a.agency} &rarr;</a>
+    </div>
+
+    <p class="ntd-source"><strong>Source &amp; method.</strong> {SOURCE_NOTE}</p>
+  </div>
+</Base>

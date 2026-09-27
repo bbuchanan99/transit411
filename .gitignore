@@ -6,7 +6,10 @@
 # Built data (rebuild with: docker compose run --rm ingest)
 *.duckdb
 *.duckdb.wal
-data/
+# Anchored: a bare "data/" matches a directory of that name at ANY depth, and it silently
+# swallowed site/src/data - the NTD snapshot the public data pages are built from - so the site
+# built locally and failed on Cloudflare with an unresolvable import.
+/data/
 
 # Python
 __pycache__/

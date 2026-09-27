@@ -1,0 +1,107 @@
+---
+import Base from "../../../layouts/Base.astro";
+import {
+  rankings, rankingBySlug, rankingProse,
+  NTD_YEAR, SOURCE_NOTE, int, usd, pct, bigNum, bigUsd,
+} from "../../../lib/ntd.js";
+
+export function getStaticPaths() {
+  return rankings.map((r) => ({ params: { slug: r.slug } }));
+}
+
+const { slug } = Astro.params;
+const r = rankingBySlug(slug);
+const prose = rankingProse(r);
+
+const title = `${r.title} (${r.year}) | Transit411`;
+const first = r.rows[0];
+const description =
+  `${r.lede} ${r.rows.length} US ${r.mode.toLowerCase()} systems ranked from ${NTD_YEAR} National ` +
+  `Transit Database reporting, led by ${first.agency}.`;
+const canonical = new URL(`/data/rankings/${r.slug}/`, Astro.site).href;
+const askUrl = `/ask-ntd?q=${encodeURIComponent(
+  r.metric === "cost_per_rider" ? `${r.mode} systems ranked by cost per rider`
+  : r.metric === "fare_recovery" ? `${r.mode} systems ranked by farebox recovery`
+  : `${r.mode} agencies ranked by annual ridership`)}`;
+
+const ld = {
+  "@context": "https://schema.org",
+  "@type": "Dataset",
+  name: `${r.title}, ${r.year}`,
+  description,
+  url: canonical,
+  isAccessibleForFree: true,
+  creator: { "@type": "Organization", name: "Transit411", url: new URL("/", Astro.site).href },
+  license: "https://www.usa.gov/government-works",
+  temporalCoverage: String(r.year),
+  isBasedOn: {
+    "@type": "Dataset",
+    name: "National Transit Database",
+    creator: { "@type": "GovernmentOrganization", name: "Federal Transit Administration" },
+    url: "https://www.transit.dot.gov/ntd",
+  },
+  variableMeasured: [{ "@type": "PropertyValue", name: r.metric_label }],
+};
+const jsonld = JSON.stringify(ld).replace(/</g, "\\u003c");
+
+const cell = (row) =>
+  r.metric === "cost_per_rider" ? usd(row.cost_per_rider)
+  : r.metric === "fare_recovery" ? pct(row.fare_recovery, 1)
+  : int(row.upt);
+---
+<Base title={title} description={description} ogTitle={r.title}>
+  <Fragment slot="head">
+    <script type="application/ld+json" set:html={jsonld} />
+  </Fragment>
+
+  <div class="wrap section-page">
+    <nav class="ntd-crumbs"><a href="/data">Data</a> <span>/</span> <span>Rankings</span></nav>
+    <h1 class="section-title disp">{r.title}</h1>
+    <p class="section-blurb">{r.lede} &middot; {NTD_YEAR} report year</p>
+
+    {prose.map((p) => <p class="ntd-prose">{p}</p>)}
+
+    <div class="ntd-tablewrap">
+      <table class="ntd-table">
+        <thead><tr>
+          <th class="r">#</th><th>Agency</th><th>Location</th>
+          <th class="r">{r.metric_label}</th><th class="r">Annual trips</th>
+          <th class="r">Operating expense</th><th class="r">Farebox</th>
+        </tr></thead>
+        <tbody>
+          {r.rows.map((row) => (
+            <tr>
+              <td class="r ntd-rank">{row.rank}</td>
+              <td>{row.slug
+                ? <a href={`/data/agency/${row.slug}/`}><strong>{row.agency}</strong></a>
+                : <strong>{row.agency}</strong>}</td>
+              <td class="ntd-sub-cell">{[row.city, row.state].filter(Boolean).join(", ")}</td>
+              <td class="r"><strong>{cell(row)}</strong></td>
+              <td class="r">{int(row.upt)}</td>
+              <td class="r">{bigUsd(row.operating_expense)}</td>
+              <td class="r">{row.fare_recovery != null ? pct(row.fare_recovery, 0) : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="ntd-h2 disp">Other rankings</h2>
+    <ul class="ntd-links">
+      {rankings.filter((x) => x.slug !== r.slug).map((x) => (
+        <li><a href={`/data/rankings/${x.slug}/`}>{x.title}</a>
+          <span class="ntd-sub">{x.rows.length} systems</span></li>
+      ))}
+    </ul>
+
+    <div class="ntd-cta">
+      <h2 class="disp">Ask a different question</h2>
+      <p>This is one cut of the data. Ask NTD answers the rest in plain English &mdash; any mode, any metric, any year.</p>
+      <a class="ntd-btn" href={askUrl}>Open this in Ask NTD &rarr;</a>
+    </div>
+
+    <p class="ntd-source"><strong>Source &amp; method.</strong> {SOURCE_NOTE}
+      {r.floor > 0 && <> This table is limited to systems carrying at least {bigNum(r.floor)} trips a year.</>}
+    </p>
+  </div>
+</Base>
