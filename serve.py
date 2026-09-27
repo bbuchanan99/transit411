@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from query import run_sql, nl_to_sql  # same read-only guardrails as the CLI
+import funding_query  # Ask Funding: the same shape over FTA apportionments
 
 DB = os.environ.get("NTD_DB", "ntd.duckdb")
 app = FastAPI(title="Transit411 — Ask NTD")
@@ -107,6 +108,37 @@ def ask(a: Ask):
     if not generated:
         raise HTTPException(status_code=400, detail="Set ANTHROPIC_API_KEY (or wire a local model) for natural language.")
     con = _con()
+    try:
+        df = run_sql(con, generated)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Generated query was not read-only; refused. ({e})")
+    except duckdb.Error as e:
+        raise HTTPException(status_code=422, detail={"error": f"Generated SQL failed: {e}", "sql": generated})
+    finally:
+        con.close()
+    return {"question": a.question, "sql": generated, **_result(df)}
+
+
+@app.post("/funding/ask")
+def funding_ask(a: Ask):
+    """Ask Funding. Same contract as /ask, over FTA formula apportionments instead of NTD.
+
+    A separate database and a separate schema note: apportionments are keyed on urbanized-area
+    NAME (FTA publishes no UZA code and no NTD id), so the two datasets do not share a key and
+    answering across them would be a join the data cannot support.
+    """
+    try:
+        generated = funding_query.nl_to_sql(a.question, history=[t.model_dump() for t in (a.history or [])])
+    except anthropic.AnthropicError as e:
+        raise HTTPException(status_code=502, detail=_anthropic_detail(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if not generated:
+        raise HTTPException(status_code=400, detail="Set ANTHROPIC_API_KEY (or wire a local model) for natural language.")
+    try:
+        con = funding_query.con()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="Funding data is not loaded yet (%s). Run funding.py." % e)
     try:
         df = run_sql(con, generated)
     except ValueError as e:

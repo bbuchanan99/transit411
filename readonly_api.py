@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 UPSTREAM = os.environ.get("UPSTREAM_URL", "http://command-center:8080")
 
 # Spending limits for the model-backed endpoints (counts are in memory; a restart resets them).
-ASK_PATHS = {"/api/ask", "/api/cig/ask"}
+ASK_PATHS = {"/api/ask", "/api/cig/ask", "/api/funding/ask"}
 ASK_ENABLED = os.environ.get("PUBLIC_ASK_ENABLED", "true").lower() not in ("0", "false", "no", "off")
 ASK_PER_IP_HOUR = int(os.environ.get("ASK_PER_IP_HOUR", "20"))
 ASK_PER_DAY = int(os.environ.get("ASK_PER_DAY", "200"))
@@ -55,6 +55,7 @@ ALLOW = {
     ("GET", "/api/agencies"),      # the agency reference table (names, NTD ids, links) the site builds from
     ("POST", "/api/ask"),
     ("POST", "/api/cig/ask"),
+    ("POST", "/api/funding/ask"),   # FTA apportionments; rate-limited like the other two
     ("POST", "/api/subscribe"),    # the ONLY public write: creates a pending newsletter contact
     ("GET", "/confirm"),           # double opt-in link from the confirmation email
     ("GET", "/unsubscribe"),       # one-click unsubscribe (human click)

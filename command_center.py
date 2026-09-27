@@ -98,6 +98,31 @@ def ask(a: Ask, request: Request):
     return out
 
 
+@app.post("/api/funding/ask")
+def funding_ask(a: Ask, request: Request):
+    """Ask Funding. Proxies to the api service, exactly as Ask NTD does, with the same inert
+    entitlement check and the same fire-and-forget usage logging."""
+    import entitlements as ent
+    import usage
+    allowed, limit = ent.can_use("ask_funding", ent.FREE)
+    if not allowed:
+        raise HTTPException(429, f"You have used your {limit} Ask Funding questions for this period.")
+
+    payload = {"question": a.question, "history": [t.model_dump() for t in (a.history or [])]}
+    try:
+        r = httpx.post(f"{API_URL}/funding/ask", json=payload, timeout=60)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"API unreachable: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    out = r.json()
+    usage.log("ask_funding", query_text=a.question,
+              result_shape=usage.result_shape(out.get("columns"), out.get("rows")),
+              surface=_surface(request), follow_up=bool(a.history),
+              rows=len(out.get("rows") or []))
+    return out
+
+
 def _db():
     if not psycopg:
         raise HTTPException(500, "psycopg not installed")

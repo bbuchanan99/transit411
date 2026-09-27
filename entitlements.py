@@ -20,16 +20,16 @@ PLANS = (FREE, "pro", "founding", "team")
 
 # Metered features. The name is what gets written to usage_events.event_type, so usage and
 # entitlements always talk about the same thing.
-FEATURES = ("ask_ntd", "ask_cig", "card_export", "data_export")
+FEATURES = ("ask_ntd", "ask_cig", "ask_funding", "card_export", "data_export")
 
 # plan -> feature -> calls allowed per PERIOD_DAYS. None means unlimited.
 # PLACEHOLDERS, inert. Set from the usage data before any of this is switched on.
 PERIOD_DAYS = 30
 LIMITS = {
-    "free":     {"ask_ntd": 25, "ask_cig": 25, "card_export": 10, "data_export": 0},
-    "pro":      {"ask_ntd": None, "ask_cig": None, "card_export": None, "data_export": 100},
-    "founding": {"ask_ntd": None, "ask_cig": None, "card_export": None, "data_export": None},
-    "team":     {"ask_ntd": None, "ask_cig": None, "card_export": None, "data_export": None},
+    "free":     {"ask_ntd": 25, "ask_cig": 25, "ask_funding": 25, "card_export": 10, "data_export": 0},
+    "pro":      {"ask_ntd": None, "ask_cig": None, "ask_funding": None, "card_export": None, "data_export": 100},
+    "founding": {"ask_ntd": None, "ask_cig": None, "ask_funding": None, "card_export": None, "data_export": None},
+    "team":     {"ask_ntd": None, "ask_cig": None, "ask_funding": None, "card_export": None, "data_export": None},
 }
 
 
