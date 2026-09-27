@@ -240,6 +240,40 @@ committing generated files.
 Also: **`@astrojs/sitemap` is pinned exactly**, not `^3.2.1` - the caret lets a fresh install resolve
 3.7.x, which needs Astro 5 and crashes this build.
 
+### 3.3g Ask Funding (FTA formula apportionments)
+
+A third Ask tool, over the FTA full-year apportionment tables: Section 5307/5340 (Table 3),
+Section 5337 State of Good Repair (Table 11) and Section 5339 Buses and Bus Facilities (Table 12).
+
+- **`funding.py` loads the workbooks** into `fta_apportionments` in `/data/funding.duckdb`, one row
+  per (program, place, component). **Files are dropped in by hand** - `transit.dot.gov` returns 403
+  to every scripted client, page handler and static `/files/` path alike, and we do not work around
+  bot protection. FTA publishes once a year. Refresh with
+  `docker compose exec api python /app/funding.py --dir /data/funding --year <FY>`.
+- **The key is a UZA NAME.** FTA publishes no UZA code and no NTD id in any of these tables, so
+  these figures cannot be joined to NTD agency data on anything but a name. Apportionments go to
+  **places, not operators** - an area may cover several agencies.
+- **Three traps the loader handles, each of which produces a plausible-looking wrong answer:**
+  - 5307's breakout sheet puts a **state rollup in the UZA column** right above that state's small
+    UZAs. Counting both double-counts the whole small-UZA tier ($942,157,286 in FY2026) while every
+    individual figure stays correct. A real UZA name has a ", XX" suffix; a rollup does not.
+  - 5339 has **one identifier column meaning three different things** depending on the section, and
+    "New York" appears twice as a state. The merged section header is the only thing distinguishing
+    a UZA from a state.
+  - 5337 calls the largest recipient **"New York, NY"** where the other two say
+    **"New York-Jersey City-Newark, NY-NJ"**. Unaliased it fails to join and 27.9% of the program
+    disappears silently. `UZA_ALIASES` fixes it; that one entry takes the UZAs present in all three
+    programs from 83 to 84.
+- **The loader reconciles every program against the total FTA printed in its own workbook and
+  refuses to write if any disagree.** That check is what caught the 5307 double count, which was
+  invisible row by row. All three match to the dollar.
+- `funding_query.py` is the question-to-SQL path, importing `run_sql` from `query.py` so there is
+  one definition of read-only for both Ask tools. Served at `/funding/ask` (api),
+  `/api/funding/ask` (Command Center) and allowlisted on the public proxy, counted against the same
+  per-IP and per-day caps as the other two because it spends a model call.
+- **Both funding modules must be in the Dockerfile's COPY line.** The image copies named files, not
+  the directory, so adding a module and rebuilding produces a container that crashes on import.
+
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
   - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can usually be fetched by link. Not always: on 2026-09-22 the same PDF link was served once and then refused. When Load from link says 403, download the PDF and upload it.
