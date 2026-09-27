@@ -20,7 +20,10 @@ export async function getStaticPaths({ paginate }) {
 const { page, meta, section } = Astro.props;
 const { start, end, total } = { start: page.start + 1, end: page.end + 1, total: page.total };
 ---
-<Base title={meta.label + (page.currentPage > 1 ? ` — page ${page.currentPage}` : "") + " — Transit411"}>
+<Base
+  title={meta.label + (page.currentPage > 1 ? ` — page ${page.currentPage}` : "") + " — Transit411"}
+  description={meta.blurb + (page.currentPage > 1 ? ` Page ${page.currentPage} of ${page.lastPage}.` : "")}
+>
   <Fragment slot="head">
     {page.url.prev && <link rel="prev" href={page.url.prev} />}
     {page.url.next && <link rel="next" href={page.url.next} />}

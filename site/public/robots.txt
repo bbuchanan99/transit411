@@ -1,0 +1,9 @@
+# Transit411 — public site.
+# Everything served on this domain is meant to be read. The Command Center and the collection
+# database are on the LAN, not on this host, so there is nothing private here to disallow —
+# and listing private paths in a public file would only advertise them.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://transit411.net/sitemap-index.xml

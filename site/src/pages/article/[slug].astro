@@ -64,6 +64,41 @@ const description = (post.deck || post.title).slice(0, 300);
 const shareImage = post.image || houseImage(post.pillar);
 // Metadata chips. The section pages don't filter by facet yet, so these are labels for now; the
 // pillar (above the headline) is the one link, and CIG programs point at the pipeline page.
+// A feed label like "Google News: transit ballot measure OR sales tax" is a search we ran, not a
+// masthead, and a news.google.com link is a redirect, not the article. Neither belongs in markup
+// that claims to name the source.
+const isAggregator = (u) => { try { return new URL(u).hostname.endsWith("news.google.com"); } catch { return false; } };
+const realSourceUrl = post.url && !isAggregator(post.url) ? post.url : null;
+const realSourceName = post.source && !/^google news/i.test(post.source) && !post.source.includes(":")
+  ? post.source : null;
+
+// NewsArticle schema. Everything in it is already on the page - this just states it in the form a
+// search engine reads. dateModified is left out rather than guessed: we do not track edits.
+const newsArticle = {
+  "@context": "https://schema.org",
+  "@type": "NewsArticle",
+  "headline": post.title.slice(0, 110),
+  "description": description,
+  "mainEntityOfPage": { "@type": "WebPage", "@id": canonical },
+  "url": canonical,
+  ...(post.publishedAt ? { "datePublished": post.publishedAt } : {}),
+  ...(post.pillar ? { "articleSection": post.pillar } : {}),
+  "image": [new URL(shareImage, Astro.site).href],
+  "author": { "@type": "Organization", "name": "Transit411", "url": new URL("/", Astro.site).href },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Transit411",
+    "logo": { "@type": "ImageObject", "url": new URL("/icon-512.png", Astro.site).href },
+    "parentOrganization": { "@type": "Organization", "name": "Shepherd Labs, LLC" },
+  },
+  // Where the story came from - but only when that is genuinely a publisher and a real address.
+  // Most items arrive through Google News, whose "source" is the collector's own search query
+  // ("Google News: transit agency CEO OR general manager") and whose link is an obfuscated
+  // redirect. Publishing either as structured data would state something untrue about the story.
+  ...(realSourceUrl ? { "isBasedOn": realSourceUrl } : {}),
+  ...(realSourceName ? { "sourceOrganization": { "@type": "Organization", "name": realSourceName } } : {}),
+};
+
 const chips = [
   ...(post.state ? [{ label: post.state, href: null }] : []),
   ...post.agencies.map((a) => ({ label: a, href: null })),
@@ -72,21 +107,17 @@ const chips = [
   ...post.tags.slice(0, 6).map((t) => ({ label: t, href: null })),
 ];
 ---
-<Base title={`${post.title} — Transit411`} description={description}>
+<Base
+  title={`${post.title} — Transit411`}
+  description={description}
+  ogTitle={post.title}
+  image={shareImage}
+  ogType="article"
+  publishedAt={post.publishedAt}
+  section={post.pillar}
+>
   <Fragment slot="head">
-    <link rel="canonical" href={canonical} />
-    <meta property="og:type" content="article" />
-    <meta property="og:site_name" content="Transit411" />
-    <meta property="og:title" content={post.title} />
-    <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical} />
-    <meta property="og:image" content={new URL(shareImage, Astro.site).href} />
-    <meta name="twitter:image" content={new URL(shareImage, Astro.site).href} />
-    {post.publishedAt && <meta property="article:published_time" content={post.publishedAt} />}
-    {post.pillar && <meta property="article:section" content={post.pillar} />}
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content={post.title} />
-    <meta name="twitter:description" content={description} />
+    <script type="application/ld+json" set:html={JSON.stringify(newsArticle).replace(/</g, "\\u003c")} />
   </Fragment>
 
   <article class="wrap article">

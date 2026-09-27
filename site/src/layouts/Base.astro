@@ -4,7 +4,42 @@ import { getPosts } from "../lib/content.js";
 const {
   title = "Transit411 — Transit funding, procurement & talent",
   description = "Independent coverage of transit funding, procurement, and the people moving public transportation — plus data tools over the National Transit Database and the FTA CIG pipeline.",
+  // Social/SEO. Pages pass what they know; everything else falls back to the brand defaults.
+  ogTitle,                 // the bare headline, when the <title> carries a "— Transit411" suffix
+  image,                   // share image for this page
+  ogType = "website",
+  publishedAt,             // ISO date, articles only
+  section,                 // pillar, articles only
+  noindex = false,         // the 404 page; nothing else should set this
 } = Astro.props;
+
+// Canonical. Three hostnames answer for this site (apex, www and the Pages subdomain), so every
+// page has to say which one is the real address or the same story counts as three.
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+// Our own artwork, 1200x630 - the size a share card wants. Never a source's photograph.
+const shareImage = new URL(image || "/images/house/news.png", Astro.site).href;
+const siteUrl = new URL("/", Astro.site).href;
+
+// JSON-LD. Organization and WebSite are site-wide; an article adds NewsArticle of its own.
+const ldOrg = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "Transit411",
+  "url": siteUrl,
+  "logo": new URL("/icon-512.png", Astro.site).href,
+  "description": "Independent coverage of transit funding, procurement, people and policy.",
+  "parentOrganization": { "@type": "Organization", "name": "Shepherd Labs, LLC" },
+};
+const ldSite = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "Transit411",
+  "alternateName": "Transit411 Intelligence",
+  "url": siteUrl,
+  "publisher": { "@type": "Organization", "name": "Transit411" },
+};
+// A "<" inside a JSON string would close the script element early, so it is escaped.
+const ld = (o) => JSON.stringify(o).replace(/</g, "\\u003c");
 const latest = (await getPosts())[0];
 const sections = ["News", "Funding", "Procurement", "People", "Policy", "Data"];
 const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
@@ -25,6 +60,22 @@ const today = new Date().toLocaleDateString("en-US", { weekday: "long", month: "
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Spectral:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" />
+  <link rel="canonical" href={canonical} />
+  {noindex && <meta name="robots" content="noindex, follow" />}
+  <meta property="og:type" content={ogType} />
+  <meta property="og:site_name" content="Transit411" />
+  <meta property="og:title" content={ogTitle || title} />
+  <meta property="og:description" content={description} />
+  <meta property="og:url" content={canonical} />
+  <meta property="og:image" content={shareImage} />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content={ogTitle || title} />
+  <meta name="twitter:description" content={description} />
+  <meta name="twitter:image" content={shareImage} />
+  {publishedAt && <meta property="article:published_time" content={publishedAt} />}
+  {section && <meta property="article:section" content={section} />}
+  <script type="application/ld+json" set:html={ld(ldOrg)} />
+  <script type="application/ld+json" set:html={ld(ldSite)} />
   <slot name="head" />
 </head>
 <body>

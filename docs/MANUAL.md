@@ -176,6 +176,35 @@ fire one. Proven end to end: an item due at 22:54:11 published at 22:54:58, logg
 and `.pill`, and the console already defines `.pill` and `.row` - copying them verbatim would have
 restyled existing screens, which is how the wire grid broke once before.
 
+### 3.3e Technical SEO
+
+- **`site` in `astro.config.mjs` is `https://transit411.net`** and nothing else. Canonicals, Open
+  Graph URLs and the sitemap are all built from it, so while it pointed at `transit411.pages.dev`
+  every page was telling Google the real site lived on the Pages subdomain.
+- **Sitemap:** `@astrojs/sitemap` writes `sitemap-index.xml` + `sitemap-0.xml`, covering the
+  homepage, the static pages, the data tools, the section pages **including pagination** and every
+  article. The 404 is filtered out. **Pin the integration at 3.2.x** while the site is on Astro 4 -
+  3.7.x reads a routes payload only Astro 5 provides and dies with
+  `Cannot read properties of undefined (reading 'reduce')`.
+- **`robots.txt`** allows everything and points at the sitemap. It deliberately names no private
+  paths: the Command Center is not on this domain, and listing private paths in a public file only
+  advertises them.
+- **Head tags live in `Base.astro`**, not the pages: canonical, Open Graph, Twitter card and the
+  site-wide `Organization` + `WebSite` JSON-LD. Article pages used to emit their own and now pass
+  props instead - two `og:image` tags on a page is worse than none, because the crawler picks one
+  and you do not find out which. Pages pass `description`; the 404 passes `noindex`.
+- **`NewsArticle` JSON-LD** on every article. **Source attribution is only emitted when it is true:**
+  most items arrive via Google News, whose "source" is the collector's own search query
+  ("Google News: transit ballot measure OR sales tax") and whose link is an obfuscated redirect, so
+  `sourceOrganization` and `isBasedOn` are omitted for those and kept for real publishers.
+- **Three hostnames answer for this site** - `transit411.net`, `www.transit411.net` and
+  `transit411.pages.dev` - and all three return 200. Canonicals now point at the apex, which fixes
+  the signal, but a redirect at the edge would be better than relying on Google to obey it.
+- **The build degrades silently to an empty site.** `getPosts()` swallows an unreachable API and
+  renders without it, so a brief tunnel hiccup produces a build with **zero articles** - seen once
+  during this work: 15 pages instead of 59, and a sitemap missing 42 URLs. Deploying that would
+  look to Google like the archive was deleted. Check the page count before pushing a build.
+
 ### 3.4 CIG pipeline + Ask CIG
 - **`cig.py`** — parses the monthly **FTA CIG Dashboard PDF** (by column position; validated against the real dashboard) into `cig_projects`. **Versioned by `snapshot_date`** — every month is kept, so phase advances, rating changes, and cost drift are recoverable. Full milestone dates captured (PD entry, NEPA, Engineering, LONP, rating dates, estimated grant).
   - **Load a month (usual way):** on the Command Center's **Grants** tab, paste the dashboard PDF's link from transit.dot.gov/CIG into **Load from link**, or download it and use **Upload dashboard**. transit.dot.gov blocks automated access to its /CIG page (so `--latest` fails with HTTP 403), but the PDF files themselves can usually be fetched by link. Not always: on 2026-09-22 the same PDF link was served once and then refused. When Load from link says 403, download the PDF and upload it.
