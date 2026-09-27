@@ -321,6 +321,7 @@ a.data-card:hover{border-color:var(--accent);text-decoration:none}
 .ntd-bad{color:var(--accent);font-weight:700}
 .ntd-chart{width:100%;max-width:700px;height:auto;display:block;margin:6px 0 18px}
 .ntd-ax{font-family:'Archivo',sans-serif;font-size:11px;fill:var(--muted)}
+.ntd-count{font-family:'Archivo',sans-serif;font-size:12px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 9px;vertical-align:middle;margin-left:6px}
 .ntd-links{list-style:none;padding:0;margin:0 0 8px}
 .ntd-links li{padding:9px 0;border-bottom:1px solid var(--line-soft);display:flex;justify-content:space-between;gap:16px;align-items:baseline}
 .ntd-links a{font-family:'Archivo',sans-serif;font-weight:700;color:var(--ink)}

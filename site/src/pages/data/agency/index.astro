@@ -1,0 +1,79 @@
+---
+import Base from "../../../layouts/Base.astro";
+import { agencies, rankings, stateName, NTD_YEAR, SOURCE_NOTE, int, usd, bigNum } from "../../../lib/ntd.js";
+
+// With 301 profiles, an index is not a nicety. A page reachable only from the sitemap is an orphan,
+// and orphans do not rank - so every profile is linked from here, grouped by state.
+const byState = {};
+for (const a of agencies) {
+  const k = a.state || "—";
+  (byState[k] ||= []).push(a);
+}
+const states = Object.keys(byState).sort((x, y) => stateName(x).localeCompare(stateName(y)));
+for (const k of states) byState[k].sort((x, y) => y.total_upt - x.total_upt);
+
+const totalTrips = agencies.reduce((s, a) => s + a.total_upt, 0);
+const totalOpex = agencies.reduce((s, a) => s + a.total_opex, 0);
+
+const title = `US Transit Agency Profiles — Ridership & Cost Data | Transit411`;
+const description =
+  `Ridership, operating cost and cost-per-rider figures for ${agencies.length} US transit agencies ` +
+  `across ${states.length} states, from ${NTD_YEAR} National Transit Database reporting.`;
+---
+<Base title={title} description={description} ogTitle="US transit agency profiles">
+  <div class="wrap section-page">
+    <nav class="ntd-crumbs"><a href="/data">Data</a> <span>/</span> <span>Agency profiles</span></nav>
+    <h1 class="section-title disp">Transit agency profiles</h1>
+    <p class="section-blurb">
+      {agencies.length} US transit agencies across {states.length} states &middot; {NTD_YEAR} report year
+    </p>
+
+    <p class="ntd-prose">
+      Every agency here reported at least a million passenger trips in {NTD_YEAR} and has at least
+      three years of history in the National Transit Database &mdash; enough to show a trend rather
+      than a snapshot. Together they carry {bigNum(totalTrips)} trips a year and spend
+      ${(totalOpex / 1e9).toFixed(1)} billion doing it. Smaller operators are left out deliberately:
+      a page built on two numbers is not worth reading.
+    </p>
+
+    <p class="ntd-prose">
+      Each profile gives ridership, operating expense and cost per rider by mode, how that agency
+      compares with the national median for each mode it runs, and a ten-year inflation-adjusted
+      trend. You can also <a href="/data/rankings/">compare systems side by side</a> or
+      <a href="/ask-ntd">ask the database directly</a>.
+    </p>
+
+    {states.map((st) => (
+      <>
+        <h2 class="ntd-h2 disp">{stateName(st)} <span class="ntd-count">{byState[st].length}</span></h2>
+        <div class="ntd-tablewrap">
+          <table class="ntd-table">
+            <thead><tr>
+              <th>Agency</th><th>Location</th><th class="r">Annual trips</th>
+              <th class="r">Cost per rider</th><th class="r">Modes</th>
+            </tr></thead>
+            <tbody>
+              {byState[st].map((a) => (
+                <tr>
+                  <td><a href={`/data/agency/${a.slug}/`}><strong>{a.agency}</strong></a></td>
+                  <td class="ntd-sub-cell">{a.city}</td>
+                  <td class="r">{int(a.total_upt)}</td>
+                  <td class="r">{usd(a.cost_per_rider)}</td>
+                  <td class="r ntd-sub-cell">{a.modes.length}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    ))}
+
+    <div class="ntd-cta">
+      <h2 class="disp">Compare instead of browse</h2>
+      <p>{rankings.length} ranked lists put these agencies against each other by mode and metric.</p>
+      <a class="ntd-btn" href="/data/rankings/">See the rankings &rarr;</a>
+    </div>
+
+    <p class="ntd-source"><strong>Source &amp; method.</strong> {SOURCE_NOTE}</p>
+  </div>
+</Base>

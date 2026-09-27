@@ -1,0 +1,66 @@
+---
+import Base from "../../../layouts/Base.astro";
+import { rankings, agencies, NTD_YEAR, SOURCE_NOTE, usd, pct, bigNum, int } from "../../../lib/ntd.js";
+
+// Grouped by mode, because that is how the question arrives: somebody wants to know about light
+// rail, not about cost-per-rider in the abstract.
+const byMode = {};
+for (const r of rankings) (byMode[r.mode] ||= []).push(r);
+const modes = Object.keys(byMode).sort((a, b) => byMode[b].length - byMode[a].length || a.localeCompare(b));
+
+const lead = (r) => {
+  const row = r.rows[0];
+  if (r.metric === "cost_per_rider") return `${row.agency} — ${usd(row.cost_per_rider)}`;
+  if (r.metric === "fare_recovery") return `${row.agency} — ${pct(row.fare_recovery, 0)}`;
+  return `${row.agency} — ${bigNum(row.upt)} trips`;
+};
+
+const title = `Transit System Rankings — Cost, Ridership & Farebox | Transit411`;
+const description =
+  `${rankings.length} ranked lists of US transit systems by cost per rider, ridership and farebox ` +
+  `recovery, from ${NTD_YEAR} National Transit Database reporting.`;
+---
+<Base title={title} description={description} ogTitle="US transit system rankings">
+  <div class="wrap section-page">
+    <nav class="ntd-crumbs"><a href="/data">Data</a> <span>/</span> <span>Rankings</span></nav>
+    <h1 class="section-title disp">Transit system rankings</h1>
+    <p class="section-blurb">{rankings.length} ranked lists &middot; {NTD_YEAR} report year</p>
+
+    <p class="ntd-prose">
+      The same questions come up over and over: which subway runs cheapest per rider, which bus
+      system carries the most people, which commuter railroad covers most of its cost at the
+      farebox. Each list below answers one of them from {NTD_YEAR} National Transit Database
+      reporting, and links through to a
+      <a href="/data/agency/">full profile</a> for every agency that has one.
+    </p>
+
+    <p class="ntd-prose">
+      Lists of the cheapest and most expensive systems carry a ridership floor, so a two-vehicle
+      operation cannot top a national ranking on a rounding error. And cost per rider is a
+      starting point, not a verdict: a system covering long distances or running below the demand
+      it was built for will look expensive without anybody having wasted anything.
+    </p>
+
+    {modes.map((m) => (
+      <>
+        <h2 class="ntd-h2 disp">{m} <span class="ntd-count">{byMode[m].length}</span></h2>
+        <ul class="ntd-links">
+          {byMode[m].map((r) => (
+            <li>
+              <a href={`/data/rankings/${r.slug}/`}>{r.title}</a>
+              <span class="ntd-sub">{r.rows.length} systems &middot; leader: {lead(r)}</span>
+            </li>
+          ))}
+        </ul>
+      </>
+    ))}
+
+    <div class="ntd-cta">
+      <h2 class="disp">Look up one agency</h2>
+      <p>{agencies.length} agency profiles with ridership, cost and a ten-year trend for each.</p>
+      <a class="ntd-btn" href="/data/agency/">Browse agency profiles &rarr;</a>
+    </div>
+
+    <p class="ntd-source"><strong>Source &amp; method.</strong> {SOURCE_NOTE}</p>
+  </div>
+</Base>

@@ -158,32 +158,85 @@ def agency_page(con, ntd_id, year, ctx, national_rank):
 
 # The ranked lists people actually search for: mode x metric, curated, not every permutation.
 # `floor` keeps a two-bus operator out of a "cheapest" list, where it would win on noise.
+def R(slug, mode, metric, order, floor, title, lede):
+    """One ranked list. `floor` keeps a tiny operator from topping a "cheapest" list on noise."""
+    return {"slug": slug, "mode": mode, "metric": metric, "order": order, "floor": floor,
+            "title": title, "lede": lede}
+
+
 RANKINGS = [
-    {"slug": "cheapest-heavy-rail-cost-per-rider", "mode": "Heavy Rail", "metric": "cost_per_rider",
-     "order": "asc", "floor": 1_000_000,
-     "title": "Cheapest Heavy Rail Systems by Cost per Rider",
-     "lede": "US heavy rail (subway and metro) systems ranked by operating cost per passenger trip, cheapest first."},
-    {"slug": "most-expensive-light-rail-cost-per-rider", "mode": "Light Rail", "metric": "cost_per_rider",
-     "order": "desc", "floor": 500_000,
-     "title": "Most Expensive Light Rail Systems by Cost per Rider",
-     "lede": "US light rail systems ranked by operating cost per passenger trip, most expensive first."},
-    {"slug": "cheapest-bus-systems-cost-per-rider", "mode": "Bus", "metric": "cost_per_rider",
-     "order": "asc", "floor": 5_000_000,
-     "title": "Cheapest Bus Systems by Cost per Rider",
-     "lede": "Large US bus operators ranked by operating cost per passenger trip, cheapest first."},
-    {"slug": "highest-ridership-bus-agencies", "mode": "Bus", "metric": "upt",
-     "order": "desc", "floor": 0,
-     "title": "Highest-Ridership Bus Agencies",
-     "lede": "US bus operators ranked by annual unlinked passenger trips."},
-    {"slug": "highest-ridership-commuter-rail", "mode": "Commuter Rail", "metric": "upt",
-     "order": "desc", "floor": 0,
-     "title": "Highest-Ridership Commuter Rail Systems",
-     "lede": "US commuter rail operators ranked by annual unlinked passenger trips."},
-    {"slug": "best-farebox-recovery-heavy-rail", "mode": "Heavy Rail", "metric": "fare_recovery",
-     "order": "desc", "floor": 1_000_000,
-     "title": "Best Farebox Recovery Among Heavy Rail Systems",
-     "lede": "US heavy rail systems ranked by the share of operating cost covered by fares."},
+    # Heavy rail (16 systems) - the subway comparisons people search by name.
+    R("cheapest-heavy-rail-cost-per-rider", "Heavy Rail", "cost_per_rider", "asc", 1_000_000,
+      "Cheapest Heavy Rail Systems by Cost per Rider",
+      "US heavy rail (subway and metro) systems ranked by operating cost per passenger trip, cheapest first."),
+    R("most-expensive-heavy-rail-cost-per-rider", "Heavy Rail", "cost_per_rider", "desc", 1_000_000,
+      "Most Expensive Heavy Rail Systems by Cost per Rider",
+      "US heavy rail systems ranked by operating cost per passenger trip, most expensive first."),
+    R("highest-ridership-heavy-rail", "Heavy Rail", "upt", "desc", 0,
+      "Highest-Ridership Heavy Rail Systems",
+      "US subway and metro systems ranked by annual unlinked passenger trips."),
+    R("best-farebox-recovery-heavy-rail", "Heavy Rail", "fare_recovery", "desc", 1_000_000,
+      "Best Farebox Recovery Among Heavy Rail Systems",
+      "US heavy rail systems ranked by the share of operating cost covered by fares."),
+
+    # Light rail (22 systems).
+    R("cheapest-light-rail-cost-per-rider", "Light Rail", "cost_per_rider", "asc", 500_000,
+      "Cheapest Light Rail Systems by Cost per Rider",
+      "US light rail systems ranked by operating cost per passenger trip, cheapest first."),
+    R("most-expensive-light-rail-cost-per-rider", "Light Rail", "cost_per_rider", "desc", 500_000,
+      "Most Expensive Light Rail Systems by Cost per Rider",
+      "US light rail systems ranked by operating cost per passenger trip, most expensive first."),
+    R("highest-ridership-light-rail", "Light Rail", "upt", "desc", 0,
+      "Highest-Ridership Light Rail Systems",
+      "US light rail systems ranked by annual unlinked passenger trips."),
+
+    # Commuter rail (27 systems).
+    R("cheapest-commuter-rail-cost-per-rider", "Commuter Rail", "cost_per_rider", "asc", 500_000,
+      "Cheapest Commuter Rail Systems by Cost per Rider",
+      "US commuter rail operators ranked by operating cost per passenger trip, cheapest first."),
+    R("most-expensive-commuter-rail-cost-per-rider", "Commuter Rail", "cost_per_rider", "desc", 500_000,
+      "Most Expensive Commuter Rail Systems by Cost per Rider",
+      "US commuter rail operators ranked by operating cost per passenger trip, most expensive first."),
+    R("highest-ridership-commuter-rail", "Commuter Rail", "upt", "desc", 0,
+      "Highest-Ridership Commuter Rail Systems",
+      "US commuter rail operators ranked by annual unlinked passenger trips."),
+    R("best-farebox-recovery-commuter-rail", "Commuter Rail", "fare_recovery", "desc", 500_000,
+      "Best Farebox Recovery Among Commuter Rail Systems",
+      "US commuter rail operators ranked by the share of operating cost covered by fares."),
+
+    # Bus - 1,162 reporters, so every bus list carries a floor or it becomes a list of village
+    # minibuses with three riders and a rounding error.
+    R("cheapest-bus-systems-cost-per-rider", "Bus", "cost_per_rider", "asc", 5_000_000,
+      "Cheapest Bus Systems by Cost per Rider",
+      "Large US bus operators ranked by operating cost per passenger trip, cheapest first."),
+    R("most-expensive-bus-systems-cost-per-rider", "Bus", "cost_per_rider", "desc", 5_000_000,
+      "Most Expensive Bus Systems by Cost per Rider",
+      "Large US bus operators ranked by operating cost per passenger trip, most expensive first."),
+    R("highest-ridership-bus-agencies", "Bus", "upt", "desc", 0,
+      "Highest-Ridership Bus Agencies",
+      "US bus operators ranked by annual unlinked passenger trips."),
+    R("best-farebox-recovery-bus", "Bus", "fare_recovery", "desc", 5_000_000,
+      "Best Farebox Recovery Among Large Bus Systems",
+      "Large US bus operators ranked by the share of operating cost covered by fares."),
+
+    # The smaller modes, where a ranked list is genuinely hard to find anywhere else.
+    R("highest-ridership-bus-rapid-transit", "Bus Rapid Transit", "upt", "desc", 0,
+      "Highest-Ridership Bus Rapid Transit Systems",
+      "US BRT systems ranked by annual unlinked passenger trips."),
+    R("highest-ridership-streetcar", "Streetcar", "upt", "desc", 0,
+      "Highest-Ridership Streetcar Systems",
+      "US streetcar systems ranked by annual unlinked passenger trips."),
+    R("highest-ridership-ferry", "Ferryboat", "upt", "desc", 0,
+      "Highest-Ridership Ferry Systems",
+      "US passenger ferry operators ranked by annual unlinked passenger trips."),
+    R("most-expensive-demand-response-cost-per-rider", "Demand Response", "cost_per_rider", "desc", 500_000,
+      "Most Expensive Demand-Response (Paratransit) Services by Cost per Rider",
+      "Large US demand-response and paratransit operations ranked by operating cost per passenger trip."),
+    R("highest-ridership-demand-response", "Demand Response", "upt", "desc", 0,
+      "Highest-Ridership Demand-Response (Paratransit) Services",
+      "US demand-response and paratransit operations ranked by annual unlinked passenger trips."),
 ]
+
 
 METRIC_LABEL = {
     "cost_per_rider": "Cost per rider",
