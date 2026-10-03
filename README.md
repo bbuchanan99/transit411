@@ -10,7 +10,7 @@ Runs anywhere Python runs (your laptop today, your NAS later). No server require
 - Normalizes it to one row per **agency + mode**, with modes kept distinct
   (Heavy Rail = subway, Light Rail, Commuter Rail, Bus, …).
 - Computes `cost_per_rider = operating_expense / unlinked_passenger_trips`.
-- Builds three tables:
+- Builds four tables:
   - `ntd_service` — latest report year only (the table the examples below use).
   - `ntd_history` — every report year, for trends: trips, expenses (total and by function),
     fares, passenger miles, revenue miles/hours, peak vehicles, plus derived ratios.
@@ -18,6 +18,8 @@ Runs anywhere Python runs (your laptop today, your NAS later). No server require
     (`*_real`, in latest-year dollars using CPI-U).
   - `cpi` — the CPI-U factors behind the `*_real` columns. Add a year to `CPI_U` in
     `build_db.py` when NTD publishes a new one.
+  - `build_meta` — one row: `cpi_base_year` (which dollars `*_real` is in),
+    `latest_report_year`, `latest_cpi_year`, `cpi_stale`.
 - NTD report years follow each agency's fiscal year, so CPI adjustment by calendar
   year is a close approximation, not exact.
 - Answers questions — either raw read-only SQL, or plain English via a model.
@@ -36,6 +38,25 @@ python build_db.py --file service.csv
 # quick test with a partial fetch:
 python build_db.py --sample 5000
 ```
+
+### If the build fails on a stale CPI-U table
+`*_real` columns are expressed in dollars of the newest year `CPI_U` covers. If NTD has
+published a report year that `CPI_U` does not, the build **stops** rather than adjusting
+every dollar figure to an out-of-date base year with nothing saying so:
+
+```
+ERROR: CPI-U table is stale: the data goes through report year 2026, but CPI_U stops at 2024.
+```
+
+Add the annual-average CPI-U for the named years to `CPI_U` in `build_db.py`
+([BLS series CUUR0000SA0](https://data.bls.gov/timeseries/CUUR0000SA0)) and re-run. To build
+anyway — a loud warning, and `build_meta.cpi_stale = true` for anything downstream to check:
+
+```bash
+python build_db.py --allow-stale-cpi
+```
+
+Check the guard with `python test_build_db.py` (no network needed; uses `sample_ntd.csv`).
 
 ## 2. Ask questions
 ```bash
