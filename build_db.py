@@ -8,11 +8,16 @@ Run where the DOT domain is reachable (your laptop or NAS). Produces ntd.duckdb 
   ntd_service  - latest report year, one row per agency+mode (the original table, unchanged)
   ntd_history  - every report year, one row per agency+mode+year, raw and inflation-adjusted
   cpi          - the CPI-U inflation factors used for the adjusted columns
+  build_meta   - one row: which dollar year the *_real columns are in, and whether CPI_U is stale
 
   python build_db.py                      # fetch every year from data.transportation.gov
   python build_db.py --since 2019         # only report years 2019 onward
   python build_db.py --file service.csv   # or load a file you downloaded yourself
   python build_db.py --sample 5000        # small fetch for a quick test
+
+If NTD has published a report year that CPI_U below does not cover, the build FAILS rather
+than quietly adjusting dollars to a stale base year. Add the year to CPI_U, or pass
+--allow-stale-cpi to force the build (loudly, and recorded in build_meta).
 """
 import argparse
 import duckdb
@@ -49,7 +54,8 @@ MEASURES = {
 }
 
 # CPI-U, U.S. city average, all items, not seasonally adjusted (BLS series CUUR0000SA0):
-# annual average of the 12 monthly values. Add the new year here when NTD publishes one.
+# annual average of the 12 monthly values. Add the new year here when NTD publishes one —
+# check_cpi_currency() below fails the build if you forget.
 CPI_U = {
     2015: 237.017, 2016: 240.007, 2017: 245.120, 2018: 251.107, 2019: 255.657,
     2020: 258.811, 2021: 270.970, 2022: 292.655, 2023: 304.702, 2024: 313.689,
@@ -166,6 +172,36 @@ def cpi_table(years):
                           "factor_to_base": round(CPI_U[base] / CPI_U[y], 6)} for y in sorted(CPI_U)])
 
 
+def check_cpi_currency(years, allow_stale=False):
+    """Refuse to build when CPI_U is behind the data. Returns True if a stale build was forced.
+
+    Every *_real column is in dollars of the newest year CPI_U knows about. When NTD publishes a
+    report year we have no CPI-U for, those columns are computed against an out-of-date base year
+    (or left empty) and nothing in the output says so — a wrong number with no error. Fail loudly
+    instead, and name the exact fix."""
+    if not years:
+        return False
+    latest_data, latest_cpi = max(years), max(CPI_U)
+    if latest_data <= latest_cpi:
+        return False
+
+    wanted = ", ".join(str(y) for y in range(latest_cpi + 1, latest_data + 1))
+    msg = (f"CPI-U table is stale: the data goes through report year {latest_data}, but CPI_U stops "
+           f"at {latest_cpi}.\n"
+           f"  Every inflation-adjusted (*_real) column would be in {latest_cpi} dollars, and "
+           f"{latest_data} rows would have none at all.\n"
+           f"  Fix: add the annual-average CPI-U for {wanted} to the CPI_U dict in build_db.py\n"
+           "       (BLS series CUUR0000SA0: https://data.bls.gov/timeseries/CUUR0000SA0).\n"
+           "  Or re-run with --allow-stale-cpi to build anyway against the stale base year.")
+    if not allow_stale:
+        raise SystemExit("ERROR: " + msg)
+    bar = "!" * 88
+    print(f"\n{bar}\n!! FORCED BUILD (--allow-stale-cpi). " + msg +
+          "\n!! build_meta.cpi_stale is recorded as true in the database; downstream answers must "
+          f"not present {latest_cpi}-dollar figures as current.\n{bar}\n")
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", help="local NTD CSV/XLSX; omit to fetch from data.transportation.gov")
@@ -173,6 +209,8 @@ def main():
     ap.add_argument("--sample", type=int, help="cap fetched rows (quick test)")
     ap.add_argument("--since", type=int, help="first report year to fetch (default: all)")
     ap.add_argument("--year", type=int, help="report year of a flat --file that has no year column")
+    ap.add_argument("--allow-stale-cpi", action="store_true",
+                    help="build even when CPI_U is behind the data (loud warning, recorded in build_meta)")
     a = ap.parse_args()
 
     df = load_local(a.file) if a.file else fetch_socrata(a.sample, a.since)
@@ -181,10 +219,12 @@ def main():
     years = sorted(int(y) for y in hist["report_year"].dropna().unique())
     print(f"Normalized to {len(hist):,} agency-mode-year rows across {hist['mode'].nunique()} modes, "
           f"report years: {', '.join(map(str, years)) or 'unknown'}")
+    # Before anything is written: a CPI_U table behind the data makes every *_real column wrong.
+    stale = check_cpi_currency(years, a.allow_stale_cpi)
     cpi = cpi_table(years)
 
     con = duckdb.connect(a.db)
-    for t in ("ntd_service", "ntd_history", "cpi"):
+    for t in ("ntd_service", "ntd_history", "cpi", "build_meta"):
         con.execute(f"DROP TABLE IF EXISTS {t}")
     con.register("h", hist)
     con.register("c", cpi)
@@ -217,6 +257,13 @@ def main():
         FROM ntd_history
         WHERE report_year IS NOT DISTINCT FROM (SELECT MAX(report_year) FROM ntd_history)
           AND upt > 0 AND operating_expense IS NOT NULL""")
+    # One row saying which dollars the *_real columns are in, and whether that base year is behind
+    # the data. Any answer can read it without re-deriving the base year from the cpi table.
+    base_year = int(cpi["base_year"].iloc[0]) if len(cpi) else None
+    con.execute("CREATE TABLE build_meta (cpi_base_year INTEGER, latest_report_year INTEGER, "
+                "latest_cpi_year INTEGER, cpi_stale BOOLEAN)")
+    con.execute("INSERT INTO build_meta VALUES (?, ?, ?, ?)",
+                [base_year, max(years) if years else None, max(CPI_U), stale])
     con.unregister("h")
     con.unregister("c")
 
@@ -236,12 +283,16 @@ def main():
     con.close()
 
     print(f"\nWrote {a.db}: ntd_service ({n_service:,} rows, latest year), "
-          f"ntd_history ({len(hist):,} rows), cpi ({len(cpi)} rows)\n")
+          f"ntd_history ({len(hist):,} rows), cpi ({len(cpi)} rows), build_meta (1 row)\n")
     print("Latest year by mode:")
     print(latest.to_string(index=False))
-    if len(cpi):
-        print(f"\nNational totals by year (real = {int(cpi['base_year'].iloc[0])} dollars, CPI-U):")
+    if base_year:
+        print(f"\nNational totals by year (real = {base_year} dollars, CPI-U"
+              + (", STALE" if stale else "") + "):")
     print(trend.to_string(index=False))
+    if stale:
+        print(f"\n!! Built with --allow-stale-cpi: *_real columns are in {base_year} dollars while "
+              f"the data runs through {max(years)}. build_meta.cpi_stale = true.")
 
 
 if __name__ == "__main__":

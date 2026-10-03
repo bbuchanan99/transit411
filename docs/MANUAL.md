@@ -354,7 +354,7 @@ captured from now.
 - `subscribers` — newsletter list (schema present).
 - `app_settings` — small key/values (the auto-collect toggle, the scheduler's next/last run).
 
-**DuckDB** — `ntd.duckdb` (file on a NAS volume): `ntd_service` (latest year), `ntd_history` (2015 onward, raw and inflation-adjusted), and `cpi`, behind Ask NTD.
+**DuckDB** — `ntd.duckdb` (file on a NAS volume): `ntd_service` (latest year), `ntd_history` (2015 onward, raw and inflation-adjusted), `cpi`, and `build_meta` (the dollar year `*_real` is in, plus a `cpi_stale` flag), behind Ask NTD.
 
 **Files** — kept CIG dashboard PDFs in `DATA_DIR/cig`.
 
